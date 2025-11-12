@@ -15,7 +15,7 @@
   "lr": 0.0003,
   "wd": 0.1,
   "warmup_steps": 10,
-  "max_steps": 50,
+  "max_steps": 1000,
   "batch_size": 8,
   "num_workers": 2,
   "drop_last": true,
