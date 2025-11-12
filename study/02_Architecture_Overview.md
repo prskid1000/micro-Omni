@@ -332,7 +332,7 @@ graph LR
     CB0 --> Residual[Residual<br/>Error]
     Residual --> CB1[Codebook 1<br/>128 codes]
     CB1 --> Code1[Code 1]
-    Code0 --> Codes[Output Codes<br/>[code0, code1]]
+    Code0 --> Codes[Output Codes<br/>(code0, code1)]
     Code1 --> Codes
     
     Codes -.->|Decode| Decode[Decode]

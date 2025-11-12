@@ -288,7 +288,7 @@ graph LR
     QRot --> Attn[Attention<br/>Q_rot @ K_rot^T]
     KRot --> Attn
     
-    Pos[Position] --> Theta[Compute θ<br/>θ = pos / 10000^(2i/d)]
+    Pos[Position] --> Theta[Compute θ<br/>θ based on position]
     Theta --> RotQ
     Theta --> RotK
     
@@ -438,11 +438,11 @@ Predict: `"on"` (next token)
 ```mermaid
 graph TD
     Text[Training Text] --> Tokenize[Tokenize]
-    Tokenize --> Input[Input Tokens<br/>[BOS, The, cat, sat]]
+    Tokenize --> Input[Input Tokens<br/>(BOS, The, cat, sat)]
     Input --> Thinker[Thinker Forward]
     Thinker --> Logits[Logits<br/>vocab_size]
     Logits --> Loss[Cross-Entropy Loss]
-    Target[Target Tokens<br/>[The, cat, sat, on]] --> Loss
+    Target[Target Tokens<br/>(The, cat, sat, on)] --> Loss
     Loss --> Backward[Backward Pass]
     Backward --> Update[Update Weights]
     Update --> Next[Next Batch]

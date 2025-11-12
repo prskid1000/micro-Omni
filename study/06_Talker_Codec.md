@@ -88,7 +88,7 @@ graph TD
     Residual --> CB1[Codebook 1<br/>128 codes]
     CB1 --> Find1[Find Nearest<br/>Code 1]
     Find1 --> Code1[Code 1]
-    Code0 --> Output[Codes<br/>[code0, code1]]
+    Code0 --> Output[Codes<br/>(code0, code1)]
     Code1 --> Output
     
     style Mel fill:#e74c3c
