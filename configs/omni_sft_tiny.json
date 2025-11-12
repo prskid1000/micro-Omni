@@ -1,0 +1,35 @@
+{
+  "thinker_ckpt": "checkpoints/thinker_tiny",
+  "audio_ckpt": "checkpoints/audio_enc_tiny",
+  "vision_ckpt": "checkpoints/vision_tiny",
+  "talker_ckpt": "checkpoints/talker_tiny",
+  "ctx_len": 512,
+  "lr": 5e-05,
+  "wd": 0.01,
+  "warmup_steps": 200,
+  "max_steps": 2000,
+  "batch_size": 2,
+  "num_workers": 2,
+  "drop_last": true,
+  "print_freq": 20,
+  "max_epochs": 1,
+  "thinker": {
+    "vocab_size": 5000,
+    "n_layers": 4,
+    "d_model": 256,
+    "n_heads": 4,
+    "d_ff": 1024,
+    "dropout": 0.1,
+    "rope_theta": 10000
+  },
+  "proj_audio_dim": 384,
+  "proj_vision_dim": 192,
+  "prompt": "You are an omni assistant.",
+  "sft_mix": {
+    "text_path": "data/text/tiny_corpus.txt",
+    "image_manifest": "data/images/annotations.json",
+    "image_root": "data/images/images",
+    "asr_csv": "data/audio/asr.csv"
+  },
+  "save_dir": "checkpoints/omni_sft_tiny"
+}

@@ -1,0 +1,22 @@
+{
+  "img_size": 224,
+  "patch": 16,
+  "d_model": 128,
+  "n_layers": 4,
+  "n_heads": 2,
+  "d_ff": 512,
+  "dropout": 0.1,
+  "lr": 0.0003,
+  "wd": 0.05,
+  "warmup_steps": 500,
+  "max_steps": 5000,
+  "batch_size": 8,
+  "num_workers": 2,
+  "drop_last": true,
+  "print_freq": 100,
+  "max_epochs": 1,
+  "head_output_size": 64,
+  "train_manifest": "data/images/annotations.json",
+  "image_root": "data/images/images",
+  "save_dir": "checkpoints/vision_tiny"
+}
