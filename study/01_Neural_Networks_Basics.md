@@ -14,6 +14,28 @@ Input → Worker 1 → Worker 2 → Worker 3 → Output
 
 Each "worker" (called a **layer**) does a small transformation, and together they produce the final result.
 
+### Diagram 1: Neural Network as Assembly Line
+
+```mermaid
+graph LR
+    Input[Raw Input] --> L1[Layer 1<br/>Worker 1]
+    L1 --> L2[Layer 2<br/>Worker 2]
+    L2 --> L3[Layer 3<br/>Worker 3]
+    L3 --> Output[Final Output]
+    
+    L1 -.->|Transform| T1[Feature Extraction]
+    L2 -.->|Transform| T2[Pattern Recognition]
+    L3 -.->|Transform| T3[Decision Making]
+    
+    style Input fill:#e74c3c
+    style Output fill:#27ae60
+    style L1 fill:#3498db
+    style L2 fill:#3498db
+    style L3 fill:#3498db
+```
+
+**Explanation**: Each layer transforms the data slightly, building up from raw input to meaningful output. Like an assembly line where each worker adds value.
+
 ## Basic Building Blocks
 
 ### 1. Neurons (Nodes)
@@ -44,6 +66,35 @@ layer = [
 ]
 ```
 
+### Diagram 2: Layer Structure
+
+```mermaid
+graph TD
+    Input[Input Vector<br/>x1, x2, x3] --> N1[Neuron 1]
+    Input --> N2[Neuron 2]
+    Input --> N3[Neuron 3]
+    
+    N1 --> O1[Output 1]
+    N2 --> O2[Output 2]
+    N3 --> O3[Output 3]
+    
+    O1 --> Output[Output Vector]
+    O2 --> Output
+    O3 --> Output
+    
+    N1 -.->|w1, b1| W1[Weights & Bias]
+    N2 -.->|w2, b2| W2[Weights & Bias]
+    N3 -.->|w3, b3| W3[Weights & Bias]
+    
+    style Input fill:#e74c3c
+    style Output fill:#27ae60
+    style N1 fill:#3498db
+    style N2 fill:#3498db
+    style N3 fill:#3498db
+```
+
+**Explanation**: A layer contains multiple neurons, each processing the same input with different weights. All neurons work in parallel to produce the layer's output.
+
 ### 3. Activation Functions
 
 These add non-linearity (curves) to make the network learn complex patterns.
@@ -61,6 +112,31 @@ Common ones:
 2. **Calculate Loss**: Compare output to correct answer
 3. **Backward Pass**: Adjust weights to reduce error
 4. **Repeat**: Do this many times with many examples
+
+### Diagram 3: Training Loop Flow
+
+```mermaid
+graph TD
+    Start[Start Training] --> LoadData[Load Training Data]
+    LoadData --> Forward[Forward Pass<br/>Input → Network → Output]
+    Forward --> Loss[Calculate Loss<br/>Compare Output vs Target]
+    Loss --> Backward[Backward Pass<br/>Compute Gradients]
+    Backward --> Update[Update Weights<br/>Optimizer Step]
+    Update --> Check{More Data?}
+    Check -->|Yes| Forward
+    Check -->|No| Done[Training Complete]
+    
+    Forward -.->|Prediction| Loss
+    Loss -.->|Error Signal| Backward
+    Backward -.->|Gradients| Update
+    
+    style Forward fill:#3498db
+    style Loss fill:#e74c3c
+    style Backward fill:#9b59b6
+    style Update fill:#27ae60
+```
+
+**Explanation**: The training loop continuously processes data, measures error, and adjusts weights to improve predictions. This cycle repeats until the model learns the patterns.
 
 ```python
 # Simplified training loop
@@ -90,6 +166,26 @@ Simplest type - data flows in one direction:
 Input → Hidden Layer → Output
 ```
 
+### Diagram 4: Feedforward Network Architecture
+
+```mermaid
+graph LR
+    Input[Input Layer<br/>3 neurons] --> Hidden1[Hidden Layer 1<br/>4 neurons]
+    Hidden1 --> Hidden2[Hidden Layer 2<br/>3 neurons]
+    Hidden2 --> Output[Output Layer<br/>2 neurons]
+    
+    Input -.->|Fully Connected| Hidden1
+    Hidden1 -.->|Fully Connected| Hidden2
+    Hidden2 -.->|Fully Connected| Output
+    
+    style Input fill:#e74c3c
+    style Hidden1 fill:#3498db
+    style Hidden2 fill:#3498db
+    style Output fill:#27ae60
+```
+
+**Explanation**: Feedforward networks process information in one direction only - from input through hidden layers to output. No loops or feedback.
+
 ### 2. Convolutional Neural Networks (CNNs)
 
 Good for images - uses "filters" to detect patterns:
@@ -116,6 +212,30 @@ Most powerful - uses "attention" to focus on important parts:
 Input → Attention → Feedforward → Output
 ```
 
+### Diagram 6: Transformer Architecture
+
+```mermaid
+graph TD
+    Input[Input Tokens] --> Embed[Embedding Layer]
+    Embed --> PosEnc[Position Encoding]
+    PosEnc --> Attn[Multi-Head Attention]
+    Attn --> AddNorm1[Add & Norm]
+    Embed --> AddNorm1
+    AddNorm1 --> FFN[Feedforward Network]
+    FFN --> AddNorm2[Add & Norm]
+    AddNorm1 --> AddNorm2
+    AddNorm2 --> Output[Output]
+    
+    Attn -.->|Self-Attention| Attn
+    
+    style Embed fill:#3498db
+    style Attn fill:#e74c3c
+    style FFN fill:#9b59b6
+    style Output fill:#27ae60
+```
+
+**Explanation**: Transformers use attention to process all tokens simultaneously, allowing direct relationships between any positions. The feedforward network processes each position independently.
+
 ## Key Concepts in μOmni
 
 ### Embeddings
@@ -139,6 +259,33 @@ Question: "What color is the cat?"
           ↓
 Model focuses on: "cat" and "color"
 ```
+
+### Diagram 7: Attention Visualization
+
+```mermaid
+graph TD
+    Query[Query: 'color'] --> Attn[Attention Mechanism]
+    Key1[Key: 'cat'] --> Attn
+    Key2[Key: 'color'] --> Attn
+    Key3[Key: 'is'] --> Attn
+    Key4[Key: 'the'] --> Attn
+    
+    Attn --> W1[Weight: 0.1<br/>'cat']
+    Attn --> W2[Weight: 0.8<br/>'color']
+    Attn --> W3[Weight: 0.05<br/>'is']
+    Attn --> W4[Weight: 0.05<br/>'the']
+    
+    W1 --> Output[Weighted Sum]
+    W2 --> Output
+    W3 --> Output
+    W4 --> Output
+    
+    style Query fill:#e74c3c
+    style W2 fill:#27ae60
+    style Attn fill:#3498db
+```
+
+**Explanation**: Attention computes weights for each word based on relevance to the query. "color" gets high weight (0.8) because it directly matches the query, while other words get lower weights.
 
 ### Self-Attention
 

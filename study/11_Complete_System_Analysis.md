@@ -2,7 +2,43 @@
 
 ## Overview
 
-This document provides a **comprehensive theoretical analysis** of how all μOmni components work together, explaining the **design philosophy**, **information flow**, and **value** of each integration point.
+This document provides a **comprehensive theoretical analysis** of how all μOmni components work together, explaining the **design philosophy**, **information flow**, and **value** of each integration point. All analysis is **strictly based on our actual implementation** in `omni/`, `train_*.py`, `sft_omni.py`, and `infer_chat.py`.
+
+### Diagram 1: Complete System Integration
+
+```mermaid
+graph TB
+    subgraph Input["Input Processing"]
+        Text[Text] --> TextEnc[Text Encoder]
+        Image[Image] --> VisionEnc[Vision Encoder]
+        Audio[Audio] --> AudioEnc[Audio Encoder]
+    end
+    
+    subgraph Fusion["Multimodal Fusion"]
+        TextEnc --> Proj[Projectors]
+        VisionEnc --> Proj
+        AudioEnc --> Proj
+        Proj --> Unified[Unified Embeddings<br/>256 dim]
+    end
+    
+    subgraph Core["Core Processing"]
+        Unified --> Thinker[Thinker<br/>LLM]
+        Thinker --> TextOut[Text Output]
+        Thinker --> Talker[Talker]
+    end
+    
+    subgraph Output["Output Generation"]
+        Talker --> RVQ[RVQ Codec]
+        RVQ --> Vocoder[Vocoder]
+        Vocoder --> AudioOut[Audio Output]
+    end
+    
+    style Thinker fill:#4a90e2
+    style Proj fill:#9b59b6
+    style Talker fill:#50c878
+```
+
+**Explanation**: Complete system showing how inputs from different modalities are encoded, projected to unified space, processed by Thinker, and generated as text or audio outputs through Talker and codec.
 
 ## System Architecture Philosophy
 
@@ -336,6 +372,6 @@ Instead of making Thinker handle raw images/audio, we:
 
 **Next:**
 - [10_Transformer_Deep_Dive.md](10_Transformer_Deep_Dive.md) - Transformer theory
-- [11_Thinker_Layer_By_Layer.md](11_Thinker_Layer_By_Layer.md) - Thinker details
+- [03_Thinker_Deep_Dive.md](03_Thinker_Deep_Dive.md) - Thinker details (includes layer-by-layer breakdown)
 - [02_Architecture_Overview.md](02_Architecture_Overview.md) - System overview
 

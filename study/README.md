@@ -22,11 +22,9 @@ Start here and follow the links in order:
 9. **[08_Inference_Guide.md](08_Inference_Guide.md)** - Using trained models
 10. **[09_Hands_On_Exercises.md](09_Hands_On_Exercises.md)** - Practice exercises
 11. **[10_Transformer_Deep_Dive.md](10_Transformer_Deep_Dive.md)** - Complete transformer theory
-12. **[11_Thinker_Layer_By_Layer.md](11_Thinker_Layer_By_Layer.md)** - Thinker: every layer explained
-13. **[12_Audio_Encoder_Layer_By_Layer.md](12_Audio_Encoder_Layer_By_Layer.md)** - Audio encoder: every layer
-14. **[13_Vision_Encoder_Layer_By_Layer.md](13_Vision_Encoder_Layer_By_Layer.md)** - Vision encoder: every layer
-15. **[14_Talker_Codec_Layer_By_Layer.md](14_Talker_Codec_Layer_By_Layer.md)** - Talker & Codec: every layer
-16. **[15_Complete_System_Analysis.md](15_Complete_System_Analysis.md)** - How everything works together
+12. **[11_Complete_System_Analysis.md](11_Complete_System_Analysis.md)** - How everything works together
+
+**Note**: Each component guide (03-06) contains both overview and detailed layer-by-layer breakdown in a single comprehensive file.
 
 ## Quick Reference
 

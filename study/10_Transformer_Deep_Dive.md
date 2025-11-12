@@ -4,6 +4,32 @@
 
 This guide explains **every single layer** in a transformer, combining **theoretical understanding** with **practical implementation**. We'll cover both the "why" (theory) and "how" (code) for each component.
 
+### Diagram 1: Complete Transformer Architecture
+
+```mermaid
+graph TD
+    Input[Input Tokens] --> Embed[Token Embedding]
+    Embed --> PosEnc[Position Encoding<br/>RoPE]
+    PosEnc --> Block1[Transformer Block 1]
+    Block1 --> Block2[Transformer Block 2]
+    Block2 --> Dots[...]
+    Dots --> BlockN[Transformer Block N]
+    BlockN --> Norm[Final Norm]
+    Norm --> Head[Output Head]
+    Head --> Output[Output]
+    
+    Block1 -.->|Attention + MLP| Block1
+    Block2 -.->|Attention + MLP| Block2
+    BlockN -.->|Attention + MLP| BlockN
+    
+    style Embed fill:#3498db
+    style PosEnc fill:#9b59b6
+    style Block1 fill:#e74c3c
+    style Head fill:#27ae60
+```
+
+**Explanation**: Complete transformer architecture showing token embedding, position encoding, stacked transformer blocks (each with attention and MLP), final normalization, and output head for predictions.
+
 ## Why Transformers?
 
 ### The Problem They Solve
@@ -37,6 +63,8 @@ From an information theory standpoint, transformers maximize the mutual informat
 ### Mathematical Foundation
 
 Transformers are based on the concept of **set-to-set functions**. Given a set of input tokens, they produce a set of output representations where each output can depend on all inputs. This is fundamentally different from sequence-to-sequence models where outputs depend only on previous inputs.
+
+**Note**: All theory in this document applies to **μOmni's specific implementation** in `omni/thinker.py`, `omni/audio_encoder.py`, `omni/vision_encoder.py`, and `omni/talker.py`. We reference actual code from our codebase throughout.
 
 #### Set-to-Set Transformation
 

@@ -9,6 +9,33 @@
 
 Think of it like a human brain that can process multiple types of information at once!
 
+### Diagram 1: μOmni Capabilities Overview
+
+```mermaid
+graph TB
+    Input[Input Modalities] --> TextIn[📝 Text]
+    Input --> ImageIn[🖼️ Image]
+    Input --> AudioIn[🎤 Audio]
+    
+    TextIn --> Thinker[Thinker<br/>Core LLM]
+    ImageIn --> VisionEnc[Vision Encoder]
+    AudioIn --> AudioEnc[Audio Encoder]
+    
+    VisionEnc --> Thinker
+    AudioEnc --> Thinker
+    
+    Thinker --> TextOut[📝 Text Output]
+    Thinker --> Talker[Talker<br/>Speech Generator]
+    Talker --> AudioOut[🔊 Audio Output]
+    
+    style Thinker fill:#4a90e2
+    style VisionEnc fill:#7b68ee
+    style AudioEnc fill:#7b68ee
+    style Talker fill:#50c878
+```
+
+**Explanation**: This diagram shows how μOmni accepts multiple input types (text, image, audio), processes them through specialized encoders, combines them in the Thinker, and produces both text and speech outputs.
+
 ## Why "Tiny"?
 
 The "tiny" in μOmni means it's designed to:
@@ -29,6 +56,36 @@ Imagine you're learning a new language:
 
 μOmni works similarly - it has separate "senses" that feed into a central "brain."
 
+### Diagram 2: Human Brain Analogy
+
+```mermaid
+graph LR
+    subgraph Human["🧠 Human Brain"]
+        Eyes[👁️ Eyes] --> Brain[Brain]
+        Ears[👂 Ears] --> Brain
+        Text[📖 Reading] --> Brain
+        Brain --> Mouth[👄 Mouth]
+    end
+    
+    subgraph AI["🤖 μOmni AI"]
+        VisionEnc[Vision Encoder] --> Thinker[Thinker]
+        AudioEnc[Audio Encoder] --> Thinker
+        TextTok[Text Tokenizer] --> Thinker
+        Thinker --> Talker[Talker]
+    end
+    
+    Eyes -.->|Analogous| VisionEnc
+    Ears -.->|Analogous| AudioEnc
+    Text -.->|Analogous| TextTok
+    Brain -.->|Analogous| Thinker
+    Mouth -.->|Analogous| Talker
+    
+    style Brain fill:#ff6b6b
+    style Thinker fill:#4a90e2
+```
+
+**Explanation**: This diagram illustrates how μOmni's architecture mirrors human sensory processing - separate input channels (eyes/ears) feed into a central processor (brain), which then generates output (speech).
+
 ## What Can μOmni Do?
 
 ### Input Modes:
@@ -45,6 +102,44 @@ Imagine you're learning a new language:
 - See an image + hear audio → Generate text response
 - Read text → Generate spoken audio
 - And more combinations!
+
+### Diagram 3: Input-Output Combinations
+
+```mermaid
+graph TD
+    subgraph Inputs["Input Combinations"]
+        I1[Image + Text]
+        I2[Audio + Text]
+        I3[Text Only]
+        I4[Image + Audio + Text]
+    end
+    
+    subgraph Process["Processing"]
+        Fusion[Multimodal Fusion]
+        Thinker[Thinker Processing]
+    end
+    
+    subgraph Outputs["Output Options"]
+        TextOut[Text Response]
+        AudioOut[Audio Response]
+        BothOut[Text + Audio]
+    end
+    
+    I1 --> Fusion
+    I2 --> Fusion
+    I3 --> Fusion
+    I4 --> Fusion
+    
+    Fusion --> Thinker
+    Thinker --> TextOut
+    Thinker --> AudioOut
+    Thinker --> BothOut
+    
+    style Fusion fill:#9b59b6
+    style Thinker fill:#4a90e2
+```
+
+**Explanation**: μOmni supports flexible input combinations (any mix of text, image, audio) and can produce text responses, audio responses, or both simultaneously.
 
 ## Key Concepts You'll Learn
 
@@ -68,6 +163,47 @@ Imagine you're learning a new language:
 ├── configs/           # Configuration files
 └── study/             # This guide!
 ```
+
+### Diagram 4: Project File Organization
+
+```mermaid
+graph TD
+    Root[μOmni/] --> Omni[omni/]
+    Root --> Train[train_*.py]
+    Root --> Infer[infer_chat.py]
+    Root --> Configs[configs/]
+    Root --> Study[study/]
+    
+    Omni --> ThinkerPy[thinker.py]
+    Omni --> AudioPy[audio_encoder.py]
+    Omni --> VisionPy[vision_encoder.py]
+    Omni --> TalkerPy[talker.py]
+    Omni --> CodecPy[codec.py]
+    
+    Train --> TrainText[train_text.py]
+    Train --> TrainAudio[train_audio_enc.py]
+    Train --> TrainVision[train_vision.py]
+    Train --> TrainTalker[train_talker.py]
+    Train --> SFT[sft_omni.py]
+    
+    Configs --> ThinkerCfg[thinker_tiny.json]
+    Configs --> AudioCfg[audio_enc_tiny.json]
+    Configs --> VisionCfg[vision_tiny.json]
+    Configs --> TalkerCfg[talker_tiny.json]
+    Configs --> OmniCfg[omni_sft_tiny.json]
+    
+    Study --> Intro[00_Introduction.md]
+    Study --> Basics[01_Neural_Networks_Basics.md]
+    Study --> Arch[02_Architecture_Overview.md]
+    Study --> More[More study files...]
+    
+    style Root fill:#2c3e50
+    style Omni fill:#3498db
+    style Train fill:#e74c3c
+    style Study fill:#27ae60
+```
+
+**Explanation**: This diagram shows the complete file structure of the μOmni project, organized into core model code (`omni/`), training scripts, inference interface, configuration files, and study materials.
 
 ## What Makes This Special?
 
