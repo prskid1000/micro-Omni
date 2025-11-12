@@ -177,15 +177,52 @@ class Attention(nn.Module):
         # Create mask if needed
         if mask is None and is_incremental:
             # For incremental, only attend to all previous tokens (causal)
-            mask = torch.ones(1, T_total, device=x.device).tril().unsqueeze(0).unsqueeze(0)
+            mask = torch.ones(1, T_total, device=x.device).tril().unsqueeze(0).unsqueeze(0)  # (1, 1, 1, T_total)
         elif mask is not None:
             # Extend mask if needed
+            # mask can be (B, T, T) or (B, 1, T, T) or (1, 1, T, T)
+            if len(mask.shape) == 2:
+                # (T, T) -> expand to (1, 1, T, T)
+                mask = mask.unsqueeze(0).unsqueeze(0)
+            elif len(mask.shape) == 3:
+                # (B, T, T) -> (B, 1, T, T)
+                mask = mask.unsqueeze(1)
+            
+            # Now mask is (B, 1, T_old, T_old) or (1, 1, T_old, T_old)
             if mask.shape[-1] < T_total:
-                # Pad mask for cached tokens
+                # Pad mask for cached tokens - pad on both dimensions
                 pad_size = T_total - mask.shape[-1]
-                mask = torch.cat([torch.ones(mask.shape[0], mask.shape[1], pad_size, device=mask.device), mask], dim=-1)
+                # Pad rows: (B, 1, pad_size, T_old)
+                row_pad = torch.ones(mask.shape[0], mask.shape[1], pad_size, mask.shape[-1], device=mask.device)
+                mask = torch.cat([row_pad, mask], dim=2)  # (B, 1, T_total, T_old)
+                # Pad columns: (B, 1, T_total, pad_size)
+                col_pad = torch.ones(mask.shape[0], mask.shape[1], mask.shape[2], pad_size, device=mask.device)
+                mask = torch.cat([col_pad, mask], dim=3)  # (B, 1, T_total, T_total)
         
         if mask is not None:
+            # att is (B, H, T, T_total), mask should be (B, 1, T, T_total) or broadcastable
+            # Ensure mask matches att shape
+            if len(mask.shape) == 4:
+                # mask is (B, 1, T_mask, T_mask) - need to expand to (B, 1, T, T_total)
+                if mask.shape[2] != T or mask.shape[3] != T_total:
+                    # Reshape mask to match attention
+                    # For causal mask, we want to allow attention to all previous tokens
+                    if mask.shape[2] == T and mask.shape[3] < T_total:
+                        # Pad mask columns
+                        pad_cols = T_total - mask.shape[3]
+                        col_pad = torch.ones(mask.shape[0], mask.shape[1], mask.shape[2], pad_cols, device=mask.device)
+                        mask = torch.cat([col_pad, mask], dim=3)
+                    elif mask.shape[2] < T:
+                        # Need to pad rows and columns
+                        pad_rows = T - mask.shape[2]
+                        pad_cols = T_total - mask.shape[3] if mask.shape[3] < T_total else 0
+                        row_pad = torch.ones(mask.shape[0], mask.shape[1], pad_rows, mask.shape[3], device=mask.device)
+                        mask = torch.cat([row_pad, mask], dim=2)
+                        if pad_cols > 0:
+                            col_pad = torch.ones(mask.shape[0], mask.shape[1], mask.shape[2], pad_cols, device=mask.device)
+                            mask = torch.cat([col_pad, mask], dim=3)
+                # Expand mask to match attention heads: (B, 1, T, T_total) -> (B, H, T, T_total)
+                mask = mask.expand(B, self.h, -1, -1)
             att = att.masked_fill(mask==0, float("-inf"))
         
         att = att.softmax(dim=-1)
@@ -347,26 +384,46 @@ class ThinkerLM(nn.Module):
         else:
             raise ValueError("Either idx or embeddings must be provided")
         
-        if pos is None:
-            pos = make_positions(T, x.device)
-        
-        # Create causal mask
-        mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # causal
-        if attn_mask is not None:
-            mask = mask * attn_mask
-        
         # Handle KV caching
-        use_cache = self.use_kv_cache and (self.kv_cache is not None or idx is not None)
+        use_cache = self.use_kv_cache and (self.kv_cache is not None or (idx is not None and T == 1))
         
         if use_cache:
             # Initialize cache if first call
             if self.kv_cache is None:
                 self.kv_cache = [None] * len(self.blocks)
+                # First call with full prompt - create causal mask
+                mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+                if attn_mask is not None:
+                    if len(attn_mask.shape) == 3:
+                        attn_mask = attn_mask.unsqueeze(1)  # (B, 1, T, T)
+                    mask = mask * attn_mask
+            else:
+                # Incremental call - don't pass mask, let Attention create it
+                mask = None
+            
+            if pos is None:
+                if self.kv_cache[0] is not None and 'pos' in self.kv_cache[0]:
+                    # Incremental: use cached position
+                    pos = torch.tensor([self.kv_cache[0]['pos']], device=x.device, dtype=torch.long)
+                else:
+                    # First call: generate positions
+                    pos = make_positions(T, x.device)
             
             # Process through blocks with caching
             for i, blk in enumerate(self.blocks):
                 x, self.kv_cache[i] = blk(x, mask=mask, pos=pos, cache=self.kv_cache[i])
         else:
+            # No caching - standard forward
+            if pos is None:
+                pos = make_positions(T, x.device)
+            
+            # Create causal mask
+            mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+            if attn_mask is not None:
+                if len(attn_mask.shape) == 3:
+                    attn_mask = attn_mask.unsqueeze(1)  # (B, 1, T, T)
+                mask = mask * attn_mask
+            
             # Standard forward pass
             for blk in self.blocks:
                 x, _ = blk(x, mask=mask, pos=pos, cache=None)

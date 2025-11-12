@@ -1,12 +1,28 @@
-
+# Core PyTorch
 torch>=2.1
 torchaudio>=2.1
 torchvision>=0.16
+
+# Data processing
 numpy
-tqdm
-einops
-sentencepiece
-soundfile
 scipy
-Pillow
-librosa
+Pillow>=9.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# NLP & Tokenization
+sentencepiece>=0.1.99
+
+# Utilities
+tqdm>=4.64.0
+einops>=0.6.0
+
+# Video processing
+# Note: PyAV requires ffmpeg to be installed on the system
+# Install ffmpeg separately:
+#   Windows: Download from https://ffmpeg.org/download.html or use: choco install ffmpeg
+#   Linux: sudo apt-get install ffmpeg (Ubuntu/Debian) or sudo yum install ffmpeg (CentOS/RHEL)
+#   Mac: brew install ffmpeg
+av>=10.0.0  # PyAV - Python bindings for ffmpeg (for video encoding/decoding)

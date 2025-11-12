@@ -199,7 +199,8 @@ def main(cfg):
                     
                     # Store embeddings for valid indices
                     for idx, emb in zip(valid_indices, img_emb_batch):
-                        img_embeddings.append((idx, emb))
+                        # emb is (1, thinker_d_model), need to add batch dimension: (1, 1, thinker_d_model)
+                        img_embeddings.append((idx, emb.unsqueeze(0)))
         
         # Batch process audio
         audio_embeddings = []
@@ -244,7 +245,6 @@ def main(cfg):
         
         # Process text for all samples
         text_embeddings = []
-        y_targets = []
         for b in range(B):
             ans = data["text"][b]
             x_ids, y_ids = pack_text(prompt, ans, cfg["ctx_len"])
@@ -273,8 +273,8 @@ def main(cfg):
             y_ids = None
             for idx, emb, y in text_embeddings:
                 if idx == b:
-                    text_emb = emb
-                    y_ids = y
+                    text_emb = emb  # (1, T_text, d_thinker)
+                    y_ids = y  # (T_text,)
                     break
             
             # Calculate remaining context for text
@@ -283,16 +283,17 @@ def main(cfg):
             if max_text_len < 1:
                 max_text_len = 1
             
-            text_emb = text_emb[:, :max_text_len, :]
-            y_ids = y_ids[:max_text_len]
+            text_emb = text_emb[:, :max_text_len, :]  # (1, T_text, d_thinker)
+            y_ids = y_ids[:max_text_len]  # (T_text,)
             
             # Combine all embeddings
             if multimodal_emb_list:
+                # All embeddings should be (1, T, d_thinker)
                 combined_emb = torch.cat(multimodal_emb_list + [text_emb], dim=1)  # (1, T_total, thinker_d_model)
                 multimodal_padding = torch.zeros(multimodal_len, dtype=y_ids.dtype, device=device)
                 y_ids = torch.cat([multimodal_padding, y_ids], dim=0)
             else:
-                combined_emb = text_emb
+                combined_emb = text_emb  # (1, T_text, d_thinker)
             
             batch_embeddings.append(combined_emb)
             batch_targets.append(y_ids)

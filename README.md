@@ -469,7 +469,24 @@ Generated Text
    - Faster training compared to one-by-one processing
 
 ## Environment
+
+### Setup Virtual Environment (Recommended)
+```bash
+# Create virtual environment
+python -m venv .venv
+
+# Activate virtual environment
+# On Windows:
+.venv\Scripts\activate
+# On Linux/Mac:
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
+
+### Direct Installation (Alternative)
+```bash
 pip install -r requirements.txt
 ```
 
