@@ -110,12 +110,8 @@ def main(cfg):
     for epoch in range(max_epochs):
         for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
             mel = mel.to(device)  # (B,T,128)
-            B,T,_ = mel.shape
-            idxs = []
-            for t in range(T):
-                idx = rvq.encode(mel[:,t,:])  # (B,2)
-                idxs.append(idx)
-            idxs = torch.stack(idxs, dim=1)  # (B,T,2)
+            # Batch encode all frames at once (optimized)
+            idxs = rvq.encode(mel)  # (B,T,2) - encodes all frames in batch
             # AR training: predict current codes from previous codes
             prev = torch.roll(idxs, 1, dims=1); prev[:,0,:]=0
             base_logit, res_logit = talker(prev)
@@ -150,12 +146,8 @@ def main(cfg):
                 with torch.no_grad():
                     for val_mel in val_dl:
                         val_mel = val_mel.to(device)
-                        B_val, T_val, _ = val_mel.shape
-                        val_idxs = []
-                        for t in range(T_val):
-                            idx = rvq.encode(val_mel[:,t,:])
-                            val_idxs.append(idx)
-                        val_idxs = torch.stack(val_idxs, dim=1)
+                        # Batch encode all frames at once (optimized)
+                        val_idxs = rvq.encode(val_mel)  # (B,T,2)
                         val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
                         val_base_logit, val_res_logit = talker(val_prev)
                         val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
@@ -192,12 +184,8 @@ def main(cfg):
         with torch.no_grad():
             for val_mel in val_dl:
                 val_mel = val_mel.to(device)
-                B_val, T_val, _ = val_mel.shape
-                val_idxs = []
-                for t in range(T_val):
-                    idx = rvq.encode(val_mel[:,t,:])
-                    val_idxs.append(idx)
-                val_idxs = torch.stack(val_idxs, dim=1)
+                # Batch encode all frames at once (optimized)
+                val_idxs = rvq.encode(val_mel)  # (B,T,2)
                 val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
                 val_base_logit, val_res_logit = talker(val_prev)
                 val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \

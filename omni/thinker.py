@@ -20,19 +20,33 @@ class SwiGLU(nn.Module):
         return self.down_proj(swish * up)
 
 class MLP(nn.Module):
+    """
+    Multi-Layer Perceptron with optional SwiGLU activation.
+    
+    SwiGLU (Swish-Gated Linear Unit) uses three projections:
+    - gate_proj: projects input to gate dimension
+    - up_proj: projects input to up dimension  
+    - down_proj: projects combined gate*up back to model dimension
+    
+    Formula: output = down_proj(swish(gate_proj(x)) * up_proj(x))
+    where swish(x) = x * sigmoid(x)
+    
+    Args:
+        d: model dimension (input/output size)
+        ff: feedforward dimension (gate/up projection size)
+        use_swiglu: if True, use SwiGLU; if False, use standard GELU MLP
+    """
     def __init__(self, d, ff, use_swiglu=True):
         super().__init__()
         if use_swiglu:
-            # SwiGLU: ff should be 2/3 of original for same parameter count
-            # But we keep ff as-is and use SwiGLU which internally handles the split
-            self.swiglu = SwiGLU(d)
-            # For SwiGLU, we need to adjust: gate + up = ff, so each gets ff/2
-            # But SwiGLU uses 3 projections, so we scale differently
-            # Standard: SwiGLU uses 2/3 * ff for gate/up, then projects back
+            # SwiGLU implementation: gate + up projections, then down projection
+            # Note: Standard SwiGLU uses 2/3 * ff for gate/up, but we use full ff
+            # for each to match the specified feedforward dimension
             self.gate_proj = nn.Linear(d, ff, bias=False)
             self.up_proj = nn.Linear(d, ff, bias=False)
             self.down_proj = nn.Linear(ff, d, bias=False)
         else:
+            # Standard MLP: two linear layers with GELU activation
             self.fc1 = nn.Linear(d, ff)
             self.act = nn.GELU()
             self.fc2 = nn.Linear(ff, d)

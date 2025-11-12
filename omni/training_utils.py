@@ -8,6 +8,7 @@ Training utilities for standard ML practices:
 """
 
 import random
+import math
 import torch
 import torch.nn as nn
 from datetime import datetime
@@ -41,7 +42,7 @@ def get_lr_scheduler(optimizer, warmup_steps, max_steps, min_lr_ratio=0.1):
         else:
             # Cosine decay: lr = base_lr * (min_ratio + (1-min_ratio) * 0.5 * (1 + cos(progress * pi)))
             progress = (step - warmup_steps) / max((max_steps - warmup_steps), 1)
-            return min_lr_ratio + (1 - min_lr_ratio) * 0.5 * (1 + torch.cos(torch.tensor(progress * 3.14159)))
+            return min_lr_ratio + (1 - min_lr_ratio) * 0.5 * (1 + torch.cos(torch.tensor(progress * math.pi)))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 def clip_gradients(model, max_norm=1.0):

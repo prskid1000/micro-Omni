@@ -343,13 +343,14 @@ def main(cfg):
     
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
+    step = 0  # Global step counter (not per-epoch)
     for epoch in range(max_epochs):
         logger.epoch_start(epoch)
         think.train()
         proj_a.train()
         proj_v.train()
         
-        for step, data in enumerate(train_dl):
+        for batch_idx, data in enumerate(train_dl):
             batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True)
             
             # Forward pass
@@ -368,6 +369,7 @@ def main(cfg):
             
             opt.step()
             scheduler.step()
+            step += 1  # Increment global step counter
             
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
