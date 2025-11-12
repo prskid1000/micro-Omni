@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchaudio
 from omni.codec import RVQ
 from omni.talker import TalkerTiny
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger
 from tqdm import tqdm
 
 def collate_mel_fn(batch):
@@ -47,6 +48,10 @@ class TTSDataset(Dataset):
         return mel
 
 def main(cfg):
+    # Set random seed for reproducibility
+    seed = cfg.get("seed", 42)
+    set_seed(seed)
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(cfg["save_dir"], exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
@@ -56,17 +61,54 @@ def main(cfg):
     # Use module-level collate function for Windows multiprocessing compatibility
     dl = DataLoader(ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_mel_fn)
     rvq = RVQ(cfg["codebooks"], cfg["codebook_size"], d=64).to(device)
-    talker = TalkerTiny(cfg["d_model"], cfg["n_layers"], cfg["n_heads"], cfg["d_ff"], cfg["codebooks"], cfg["codebook_size"], cfg["dropout"]).to(device)
+    talker = TalkerTiny(
+        cfg["d_model"], 
+        cfg["n_layers"], 
+        cfg["n_heads"], 
+        cfg["d_ff"], 
+        cfg["codebooks"], 
+        cfg["codebook_size"], 
+        cfg["dropout"],
+        use_gqa=cfg.get("use_gqa", False),
+        use_swiglu=cfg.get("use_swiglu", True),
+        rope_theta=cfg.get("rope_theta", 10000.0)
+    ).to(device)
     opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
     loss_fn = nn.CrossEntropyLoss()
+    
+    # Learning rate scheduler with warmup
+    warmup_steps = cfg.get("warmup_steps", 500)
+    max_steps = cfg.get("max_steps", 5000)
+    scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
+    
+    # Gradient clipping
+    max_grad_norm = cfg.get("max_grad_norm", 1.0)
 
+    # Split dataset for validation
+    val_split = cfg.get("val_split", 0.1)  # 10% for validation
+    total_size = len(ds)
+    val_size = int(total_size * val_split)
+    train_size = total_size - val_size
+    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(seed))
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_mel_fn)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=collate_mel_fn)
+    
+    # Initialize logger
+    logger = SimpleLogger("Talker")
+    
     step=0
     rvq.train()
     talker.train()
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 50)
+    checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
+    val_freq = cfg.get("val_freq", 200)  # Validate every N steps
+    best_val_loss = float('inf')
+    
+    logger.training_start(cfg["max_steps"], train_size, val_size)
+    
     for epoch in range(max_epochs):
-        for mel in tqdm(dl, desc=f"epoch{epoch}"):
+        for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
             mel = mel.to(device)  # (B,T,128)
             B,T,_ = mel.shape
             idxs = []
@@ -79,17 +121,100 @@ def main(cfg):
             base_logit, res_logit = talker(prev)
             loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:,:,0].reshape(-1)) + \
                    loss_fn(res_logit.reshape(-1, res_logit.size(-1)),  idxs[:,:,1].reshape(-1))
-            opt.zero_grad(); loss.backward(); opt.step()
+            opt.zero_grad()
+            loss.backward()
+            
+            # Gradient clipping
+            clip_gradients(rvq, max_grad_norm)
+            clip_gradients(talker, max_grad_norm)
+            
+            opt.step()
+            scheduler.step()
             step+=1
             if step % print_freq == 0:
-                print("step", step, "loss", float(loss))
+                current_lr = scheduler.get_last_lr()[0]
+                logger.train_step(step, float(loss), current_lr, epoch)
+            
+            # Periodic checkpointing
+            if step % checkpoint_freq == 0 and step > 0:
+                checkpoint_path = os.path.join(cfg["save_dir"], f"talker_step_{step}.pt")
+                torch.save({"rvq": rvq.state_dict(), "talker": talker.state_dict()}, checkpoint_path)
+                logger.checkpoint(step, checkpoint_path)
+            
+            # Validation
+            if step % val_freq == 0 and step > 0:
+                rvq.eval()
+                talker.eval()
+                val_loss_sum = 0.0
+                val_count = 0
+                with torch.no_grad():
+                    for val_mel in val_dl:
+                        val_mel = val_mel.to(device)
+                        B_val, T_val, _ = val_mel.shape
+                        val_idxs = []
+                        for t in range(T_val):
+                            idx = rvq.encode(val_mel[:,t,:])
+                            val_idxs.append(idx)
+                        val_idxs = torch.stack(val_idxs, dim=1)
+                        val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
+                        val_base_logit, val_res_logit = talker(val_prev)
+                        val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
+                                   loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                        val_loss_sum += float(val_loss)
+                        val_count += 1
+                        if val_count >= 10:  # Limit validation batches
+                            break
+                
+                avg_val_loss = val_loss_sum / val_count
+                logger.val_step(step, avg_val_loss, epoch)
+                
+                # Save best model
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    best_path = os.path.join(cfg["save_dir"], "talker_best.pt")
+                    torch.save({"rvq": rvq.state_dict(), "talker": talker.state_dict()}, best_path)
+                    logger.checkpoint(step, best_path, is_best=True)
+                
+                rvq.train()
+                talker.train()
+            
             if step >= cfg["max_steps"]:
                 torch.save({"rvq": rvq.state_dict(), "talker": talker.state_dict()}, os.path.join(cfg["save_dir"], "talker.pt"))
-                print("Saved to", cfg["save_dir"]); return
+                logger.info(f"Final model saved to {cfg['save_dir']}")
+                logger.training_end(step)
+                return
+        
+        # Final validation at end of epoch
+        rvq.eval()
+        talker.eval()
+        val_loss_sum = 0.0
+        val_count = 0
+        with torch.no_grad():
+            for val_mel in val_dl:
+                val_mel = val_mel.to(device)
+                B_val, T_val, _ = val_mel.shape
+                val_idxs = []
+                for t in range(T_val):
+                    idx = rvq.encode(val_mel[:,t,:])
+                    val_idxs.append(idx)
+                val_idxs = torch.stack(val_idxs, dim=1)
+                val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
+                val_base_logit, val_res_logit = talker(val_prev)
+                val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
+                           loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                val_loss_sum += float(val_loss)
+                val_count += 1
+        
+        avg_val_loss = val_loss_sum / max(val_count, 1)
+        logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
+        rvq.train()
+        talker.train()
+        
         # Save at end of epoch if max_steps not reached
         if step < cfg["max_steps"]:
             torch.save({"rvq": rvq.state_dict(), "talker": talker.state_dict()}, os.path.join(cfg["save_dir"], "talker.pt"))
-            print("Saved to", cfg["save_dir"], "at end of epoch", epoch, "step", step); return
+            logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+            return
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--config", required=True)

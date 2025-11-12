@@ -24,17 +24,74 @@ def extract_video_frames(video_path, num_frames=4):
         print(f"Warning: Could not extract frames from video: {e}")
         return []
 
-def generate(model, tok, prompt, max_new=64, ctx=512):
+def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_cache=True):
+    """
+    Generate text from prompt, optionally with multimodal embeddings prepended.
+    Uses KV caching for faster autoregressive generation.
+    
+    Args:
+        model: ThinkerLM model
+        tok: Tokenizer
+        prompt: Text prompt
+        max_new: Maximum new tokens to generate
+        ctx: Context length
+        multimodal_emb: Optional (1, T_mm, D) multimodal embeddings to prepend
+        use_cache: Enable KV caching for faster generation (default: True)
+    """
     device = next(model.parameters()).device
+    
+    # Enable KV caching if supported
+    if use_cache and hasattr(model, 'enable_kv_cache'):
+        model.enable_kv_cache(True)
+        model.reset_kv_cache()
+    
     ids = [1] + tok.encode(prompt)
-    ids = ids[-(ctx-1):]
-    x = torch.tensor(ids, dtype=torch.long, device=device)[None, :]
-    for _ in range(max_new):
+    
+    # Calculate available context for text tokens
+    if multimodal_emb is not None:
+        mm_len = multimodal_emb.shape[1]
+        max_text_len = ctx - mm_len - max_new - 1
+        ids = ids[:max_text_len]
+        text_emb = model.tok_emb(torch.tensor(ids, dtype=torch.long, device=device)[None, :])
+        # Combine multimodal + text embeddings
+        combined_emb = torch.cat([multimodal_emb, text_emb], dim=1)
+        
+        # First forward pass with full prompt
+        logits = model(embeddings=combined_emb)
+        next_id = int(torch.argmax(logits[0, -1]))
+        generated_ids = ids + [next_id]
+        
+        # Continue with incremental generation using cache
+        for _ in range(max_new - 1):
+            # Only process new token
+            next_emb = model.tok_emb(torch.tensor([[next_id]], dtype=torch.long, device=device))
+            logits = model(embeddings=next_emb)
+            next_id = int(torch.argmax(logits[0, -1]))
+            generated_ids.append(next_id)
+            if next_id == 2: break  # EOS
+    else:
+        ids = ids[-(ctx-max_new-1):]
+        x = torch.tensor(ids, dtype=torch.long, device=device)[None, :]
+        
+        # First forward pass with full prompt
         logits = model(x)
-        next_id = int(torch.argmax(logits[0,-1]))
-        x = torch.cat([x, torch.tensor([[next_id]], device=device)], dim=1)
-        if next_id == 2: break  # EOS if defined
-    return tok.decode(list(x[0].tolist()))
+        next_id = int(torch.argmax(logits[0, -1]))
+        generated_ids = ids + [next_id]
+        
+        # Continue with incremental generation using cache
+        for _ in range(max_new - 1):
+            # Only process new token
+            x = torch.tensor([[next_id]], dtype=torch.long, device=device)
+            logits = model(x)
+            next_id = int(torch.argmax(logits[0, -1]))
+            generated_ids.append(next_id)
+            if next_id == 2: break  # EOS
+    
+    # Reset cache after generation
+    if use_cache and hasattr(model, 'reset_kv_cache'):
+        model.reset_kv_cache()
+    
+    return tok.decode(generated_ids)
 
 def generate_audio(talker, rvq, voc, text_tokens, device, max_frames=None):
     """Generate audio from text tokens using Talker model"""
@@ -58,18 +115,34 @@ def generate_audio(talker, rvq, voc, text_tokens, device, max_frames=None):
     talker.eval()
     rvq.eval()
     
+    # Enable KV caching for faster generation
+    if hasattr(talker, 'enable_kv_cache'):
+        talker.enable_kv_cache(True)
+        talker.reset_kv_cache()
+    
     with torch.no_grad():
         # Start with zero codes
         codes = torch.zeros(1, 1, 2, dtype=torch.long, device=device)
         
-        # Autoregressively generate codes
-        for _ in range(max_frames):
-            base_logit, res_logit = talker(codes)
-            # Get next frame codes
+        # First forward pass
+        base_logit, res_logit = talker(codes, use_cache=True)
+        base_code = torch.argmax(base_logit[0, -1, :])
+        res_code = torch.argmax(res_logit[0, -1, :])
+        next_codes = torch.tensor([[[base_code, res_code]]], device=device)
+        codes = torch.cat([codes, next_codes], dim=1)
+        
+        # Continue with incremental generation using KV cache
+        for _ in range(max_frames - 1):
+            # Only process new frame (KV cache handles the rest)
+            base_logit, res_logit = talker(next_codes, use_cache=True)
             base_code = torch.argmax(base_logit[0, -1, :])
             res_code = torch.argmax(res_logit[0, -1, :])
             next_codes = torch.tensor([[[base_code, res_code]]], device=device)
             codes = torch.cat([codes, next_codes], dim=1)
+        
+        # Reset cache after generation
+        if hasattr(talker, 'reset_kv_cache'):
+            talker.reset_kv_cache()
         
         # Decode codes to mel spectrogram
         mel_frames = []
@@ -258,7 +331,12 @@ def main():
         thinker_cfg.get("d_ff", 1024),
         thinker_cfg.get("dropout", 0.1),
         thinker_cfg.get("rope_theta", 10000),
-        ctx_len
+        ctx_len,
+        use_gqa=thinker_cfg.get("use_gqa", False),
+        use_swiglu=thinker_cfg.get("use_swiglu", True),
+        use_moe=thinker_cfg.get("use_moe", False),
+        num_experts=thinker_cfg.get("num_experts", 8),
+        num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2)
     ).to(device)
     tpath = os.path.join(args.ckpt_dir, "thinker.pt")
     if not os.path.exists(tpath):
@@ -272,6 +350,7 @@ def main():
         print("Loaded Thinker model")
     else:
         print("Warning: Thinker checkpoint not found, using untrained model")
+    think.eval()  # Set to evaluation mode
 
     # Load Vision encoder from config
     vis = ViTTiny(
@@ -291,14 +370,17 @@ def main():
         print("Loaded Vision encoder")
     else:
         print("Warning: Vision checkpoint not found, using untrained model")
+    vis.eval()  # Set to evaluation mode
 
     # Load Audio encoder from config
+    downsample_factor = audio_cfg.get("downsample_time", 8)
     aud = AudioEncoderTiny(
         audio_cfg.get("d_model", 192),
         audio_cfg.get("n_heads", 3),
         audio_cfg.get("d_ff", 768),
         audio_cfg.get("n_layers", 4),
-        audio_cfg.get("dropout", 0.1)
+        audio_cfg.get("dropout", 0.1),
+        downsample_factor=downsample_factor
     ).to(device)
     apath = os.path.join(args.ckpt_dir, "audio_enc.pt")
     if not os.path.exists(apath) and "audio_ckpt" in main_cfg:
@@ -308,6 +390,7 @@ def main():
         print("Loaded Audio encoder")
     else:
         print("Warning: Audio encoder checkpoint not found, using untrained model")
+    aud.eval()  # Set to evaluation mode
 
     # Load Talker from config
     codebooks = talker_cfg.get("codebooks", 2)
@@ -320,7 +403,10 @@ def main():
         talker_cfg.get("d_ff", 768),
         codebooks,
         codebook_size,
-        talker_cfg.get("dropout", 0.1)
+        talker_cfg.get("dropout", 0.1),
+        use_gqa=talker_cfg.get("use_gqa", False),
+        use_swiglu=talker_cfg.get("use_swiglu", True),
+        rope_theta=talker_cfg.get("rope_theta", 10000.0)
     ).to(device)
     tpath = os.path.join(args.ckpt_dir, "talker.pt")
     if not os.path.exists(tpath) and "talker_ckpt" in main_cfg:
@@ -332,8 +418,37 @@ def main():
     else:
         print("Warning: Talker checkpoint not found, using untrained model")
     
+    # Load projectors if omni checkpoint exists
+    proj_a, proj_v = None, None
+    omni_path = os.path.join(args.ckpt_dir, "omni.pt")
+    if os.path.exists(omni_path):
+        omni_ckpt = torch.load(omni_path, map_location=device)
+        if "proj_a" in omni_ckpt and "proj_v" in omni_ckpt:
+            audio_dim = audio_cfg.get("d_model", 192)
+            vision_dim = vision_cfg.get("d_model", 128)
+            thinker_d_model = thinker_cfg.get("d_model", 256)
+            proj_a = torch.nn.Linear(audio_dim, thinker_d_model).to(device)
+            proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
+            proj_a.load_state_dict(omni_ckpt["proj_a"])
+            proj_v.load_state_dict(omni_ckpt["proj_v"])
+            print("Loaded multimodal projectors from omni checkpoint")
+        # Also try to load thinker from omni checkpoint if not already loaded
+        if "thinker" in omni_ckpt and not os.path.exists(tpath):
+            think.load_state_dict(omni_ckpt["thinker"])
+            print("Loaded Thinker from omni checkpoint")
+    else:
+        print("Warning: omni.pt not found, multimodal features will not be used")
+
     # Image transform
     tf = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
+    
+    # Audio processing setup
+    mel_spec = None
+    if hasattr(torchaudio.transforms, 'MelSpectrogram'):
+        mel_spec = torchaudio.transforms.MelSpectrogram(
+            sample_rate=16000, n_fft=1024, hop_length=160, 
+            win_length=400, n_mels=128
+        ).to(device)
 
     # Multimodal processing
     has_image = args.image is not None
@@ -351,8 +466,8 @@ def main():
             print("Warning: librosa not available, audio output disabled")
 
     if has_image or has_video or has_audio or has_text:
-        # Build multimodal prompt
-        prompt_parts = []
+        # Collect multimodal embeddings
+        multimodal_embeddings = []
         
         if has_video:
             print(f"Processing video: {args.video}")
@@ -365,39 +480,58 @@ def main():
                 img = Image.fromarray(frame).convert("RGB")
                 img_tensor = tf(img).unsqueeze(0).to(device)
                 cls, _ = vis(img_tensor)
-                prompt_parts.append("Based on the video frames")
-            else:
-                print("Warning: Could not extract frames from video")
+                if proj_v is not None:
+                    img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+                    multimodal_embeddings.append(img_emb)
+                    print("Integrated video frame features")
         
         if has_image:
             print(f"Processing image: {args.image}")
             img = Image.open(args.image).convert("RGB")
             img_tensor = tf(img).unsqueeze(0).to(device)
             cls, _ = vis(img_tensor)
-            if not has_video:
-                prompt_parts.append("Based on the image")
+            if proj_v is not None:
+                img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+                multimodal_embeddings.append(img_emb)
+                print("Integrated image features")
         
-        if has_audio:
+        if has_audio and mel_spec is not None:
             print(f"Processing audio: {args.audio_in}")
             wav, sr = torchaudio.load(args.audio_in)
+            wav = wav.to(device)
+            if sr != 16000:
+                wav = torchaudio.functional.resample(wav, sr, 16000)
             print(f"Audio loaded: {wav.shape}, sample rate: {sr}")
-            # For demo: acknowledge audio was processed
-            prompt_parts.append("with audio input")
+            mel = mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
+            audio_emb = aud(mel)  # (1, T', audio_dim)
+            if proj_a is not None:
+                audio_emb = proj_a(audio_emb)  # (1, T', thinker_d_model)
+                # Limit audio length
+                max_audio_tokens = min(audio_emb.shape[1], ctx_len // 4)
+                audio_emb = audio_emb[:, :max_audio_tokens, :]
+                multimodal_embeddings.append(audio_emb)
+                print(f"Integrated audio features ({audio_emb.shape[1]} tokens)")
         
+        # Build text prompt
         if has_text:
-            prompt_parts.append(args.text)
+            prompt = args.text
         elif args.prompt:
-            prompt_parts.append(args.prompt)
+            prompt = args.prompt
         elif has_image or has_video:
-            prompt_parts.append("Describe what you see concisely.")
+            prompt = "Describe what you see concisely."
         elif has_audio:
-            prompt_parts.append("What did you hear?")
+            prompt = "What did you hear?"
         else:
-            prompt_parts.append("Respond to the multimodal input.")
+            prompt = "Respond to the multimodal input."
         
-        prompt = " ".join(prompt_parts)
+        # Combine multimodal embeddings if any
+        multimodal_emb = None
+        if multimodal_embeddings:
+            multimodal_emb = torch.cat(multimodal_embeddings, dim=1)  # (1, T_mm, thinker_d_model)
+            print(f"Combined multimodal features: {multimodal_emb.shape[1]} tokens")
+        
         print(f"Prompt: {prompt}")
-        out = generate(think, tok, prompt)
+        out = generate(think, tok, prompt, ctx=ctx_len, multimodal_emb=multimodal_emb)
         print(f"\nμOmni (text): {out}\n")
         
         # Generate audio output if requested

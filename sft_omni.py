@@ -9,6 +9,7 @@ import torchaudio
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger
 
 class MixDataset(Dataset):
     def __init__(self, text_path, image_manifest, image_root, asr_csv, ctx=1024):
@@ -54,6 +55,10 @@ def mix_collate_fn(batch):
     return result
 
 def main(cfg):
+    # Set random seed for reproducibility
+    seed = cfg.get("seed", 42)
+    set_seed(seed)
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(cfg["save_dir"], exist_ok=True)
     ds = MixDataset(cfg["sft_mix"]["text_path"], cfg["sft_mix"]["image_manifest"], cfg["sft_mix"]["image_root"], cfg["sft_mix"]["asr_csv"], cfg["ctx_len"])
@@ -71,7 +76,12 @@ def main(cfg):
         thinker_cfg.get("d_ff", 1024),
         thinker_cfg.get("dropout", 0.1),
         thinker_cfg.get("rope_theta", 10000),
-        cfg["ctx_len"]
+        cfg["ctx_len"],
+        use_gqa=thinker_cfg.get("use_gqa", False),
+        use_swiglu=thinker_cfg.get("use_swiglu", True),
+        use_moe=thinker_cfg.get("use_moe", False),
+        num_experts=thinker_cfg.get("num_experts", 8),
+        num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2)
     ).to(device)
     if os.path.exists(os.path.join(cfg["thinker_ckpt"], "thinker.pt")):
         think.load_state_dict(torch.load(os.path.join(cfg["thinker_ckpt"], "thinker.pt"), map_location=device))
@@ -80,12 +90,14 @@ def main(cfg):
     audio_cfg_path = "configs/audio_enc_tiny.json"
     if os.path.exists(audio_cfg_path):
         audio_cfg = json.load(open(audio_cfg_path))
+        downsample_factor = audio_cfg.get("downsample_time", 8)
         aud = AudioEncoderTiny(
             d=audio_cfg.get("d_model", 192),
             heads=audio_cfg.get("n_heads", 3),
             ff=audio_cfg.get("d_ff", 768),
             layers=audio_cfg.get("n_layers", 4),
-            dropout=audio_cfg.get("dropout", 0.1)
+            dropout=audio_cfg.get("dropout", 0.1),
+            downsample_factor=downsample_factor
         ).to(device)
     else:
         aud = AudioEncoderTiny().to(device)
@@ -118,6 +130,14 @@ def main(cfg):
     proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
     opt = torch.optim.AdamW(list(think.parameters())+list(proj_a.parameters())+list(proj_v.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
+    
+    # Learning rate scheduler with warmup
+    warmup_steps = cfg.get("warmup_steps", 200)
+    max_steps = cfg.get("max_steps", 2000)
+    scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
+    
+    # Gradient clipping
+    max_grad_norm = cfg.get("max_grad_norm", 1.0)
 
     mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=160, win_length=400, n_mels=128).to(device)
     tok_model = os.path.join(cfg["thinker_ckpt"], "tokenizer.model")
@@ -135,53 +155,296 @@ def main(cfg):
     print_freq = cfg.get("print_freq", 20)
     prompt = cfg.get("prompt", "You are an omni assistant.")
     
+    # Split dataset for validation
+    val_split = cfg.get("val_split", 0.1)  # 10% for validation
+    total_size = len(ds)
+    val_size = int(total_size * val_split)
+    train_size = total_size - val_size
+    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(seed))
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=mix_collate_fn)
+    
     print(f"Starting training: max_epochs={max_epochs}, max_steps={cfg['max_steps']}, batch_size={cfg.get('batch_size', 2)}")
-    for epoch in range(max_epochs):
-        print(f"Epoch {epoch}")
-        for step,data in enumerate(dl):
-            # build a simple batch mixing modalities by concatenating features into the text stream (conceptual)
-            B = len(data["text"])
-            loss_acc = 0.0
+    print(f"Train samples: {train_size}, Val samples: {val_size}")
+    
+    def process_batch(data, is_training=True):
+        """Process a batch of multimodal data efficiently"""
+        B = len(data["text"])
+        
+        # Batch process images
+        img_embeddings = []
+        img_indices = []
+        if "image" in data and isinstance(data["image"], list):
+            valid_images = []
+            valid_indices = []
             for b in range(B):
-                parts = []
-                # image
-                if "image" in data and isinstance(data["image"], list) and data["image"][b] is not None:
-                    img_path = data["image"][b]
-                    if img_path and os.path.exists(img_path):
-                        img = Image.open(img_path).convert("RGB")
-                        img = transforms.Resize((224,224))(img); img = transforms.ToTensor()(img).to(device).unsqueeze(0)
-                        cls,_ = vis(img)
-                        a = proj_v(cls)  # (1,1,256)
-                        # project to fake tokens (repeat)
-                        # (for simplicity we ignore true fusion and just supervise caption generation)
-                # audio
-                if "audio" in data and isinstance(data["audio"], list) and data["audio"][b] is not None:
-                    audio_path = data["audio"][b]
-                    if audio_path and os.path.exists(audio_path):
-                        wav,_ = torchaudio.load(audio_path); wav = wav.to(device)
-                        mel = mel_spec(wav)[0].T.unsqueeze(0)
-                        a_feat = proj_a(aud(mel))  # (1,T,256)
-
-                ans = data["text"][b]
-                x,y = pack_text(prompt, ans, cfg["ctx_len"])
-                x,y = x.unsqueeze(0).to(device), y.unsqueeze(0).to(device)
-                logits = think(x)
-                loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
-                opt.zero_grad(); loss.backward(); opt.step()
-                loss_acc += float(loss)
-
+                if data["image"][b] is not None and os.path.exists(data["image"][b]):
+                    valid_images.append(data["image"][b])
+                    valid_indices.append(b)
+            
+            if valid_images:
+                # Load and process all images at once
+                img_tensors = []
+                for img_path in valid_images:
+                    img = Image.open(img_path).convert("RGB")
+                    img = transforms.Resize((224,224))(img)
+                    img = transforms.ToTensor()(img)
+                    img_tensors.append(img)
+                
+                if img_tensors:
+                    img_batch = torch.stack(img_tensors).to(device)  # (N, 3, 224, 224)
+                    with torch.set_grad_enabled(is_training):
+                        cls_batch, _ = vis(img_batch)  # (N, 1, d_vision)
+                        img_emb_batch = proj_v(cls_batch)  # (N, 1, thinker_d_model)
+                    
+                    # Store embeddings for valid indices
+                    for idx, emb in zip(valid_indices, img_emb_batch):
+                        img_embeddings.append((idx, emb))
+        
+        # Batch process audio
+        audio_embeddings = []
+        audio_indices = []
+        if "audio" in data and isinstance(data["audio"], list):
+            valid_audios = []
+            valid_indices = []
+            for b in range(B):
+                if data["audio"][b] is not None and os.path.exists(data["audio"][b]):
+                    valid_audios.append(data["audio"][b])
+                    valid_indices.append(b)
+            
+            if valid_audios:
+                # Process audio files
+                mel_list = []
+                for audio_path in valid_audios:
+                    wav, _ = torchaudio.load(audio_path)
+                    wav = wav.to(device)
+                    mel = mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
+                    mel_list.append(mel)
+                
+                if mel_list:
+                    # Pad mels to same length for batching
+                    max_mel_len = max(m.shape[1] for m in mel_list)
+                    mel_batch = []
+                    for m in mel_list:
+                        pad_len = max_mel_len - m.shape[1]
+                        if pad_len > 0:
+                            m = torch.cat([m, torch.zeros(1, pad_len, m.shape[2], device=device)], dim=1)
+                        mel_batch.append(m.squeeze(0))
+                    mel_batch = torch.stack(mel_batch)  # (N, T, 128)
+                    
+                    with torch.set_grad_enabled(is_training):
+                        audio_emb_batch = aud(mel_batch)  # (N, T', d_audio)
+                        audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
+                    
+                    # Limit audio length and store
+                    max_audio_tokens = cfg["ctx_len"] // 4
+                    for idx, emb in zip(valid_indices, audio_emb_batch):
+                        emb_trimmed = emb[:max_audio_tokens, :].unsqueeze(0)  # (1, T_trimmed, thinker_d_model)
+                        audio_embeddings.append((idx, emb_trimmed))
+        
+        # Process text for all samples
+        text_embeddings = []
+        y_targets = []
+        for b in range(B):
+            ans = data["text"][b]
+            x_ids, y_ids = pack_text(prompt, ans, cfg["ctx_len"])
+            x_ids, y_ids = x_ids.to(device), y_ids.to(device)
+            text_emb = think.tok_emb(x_ids.unsqueeze(0))  # (1, T_text, thinker_d_model)
+            text_embeddings.append((b, text_emb, y_ids))
+        
+        # Combine embeddings for each sample
+        batch_embeddings = []
+        batch_targets = []
+        for b in range(B):
+            multimodal_emb_list = []
+            
+            # Add image if present
+            for idx, emb in img_embeddings:
+                if idx == b:
+                    multimodal_emb_list.append(emb)
+            
+            # Add audio if present
+            for idx, emb in audio_embeddings:
+                if idx == b:
+                    multimodal_emb_list.append(emb)
+            
+            # Get text embedding
+            text_emb = None
+            y_ids = None
+            for idx, emb, y in text_embeddings:
+                if idx == b:
+                    text_emb = emb
+                    y_ids = y
+                    break
+            
+            # Calculate remaining context for text
+            multimodal_len = sum(emb.shape[1] for emb in multimodal_emb_list)
+            max_text_len = cfg["ctx_len"] - multimodal_len - 1
+            if max_text_len < 1:
+                max_text_len = 1
+            
+            text_emb = text_emb[:, :max_text_len, :]
+            y_ids = y_ids[:max_text_len]
+            
+            # Combine all embeddings
+            if multimodal_emb_list:
+                combined_emb = torch.cat(multimodal_emb_list + [text_emb], dim=1)  # (1, T_total, thinker_d_model)
+                multimodal_padding = torch.zeros(multimodal_len, dtype=y_ids.dtype, device=device)
+                y_ids = torch.cat([multimodal_padding, y_ids], dim=0)
+            else:
+                combined_emb = text_emb
+            
+            batch_embeddings.append(combined_emb)
+            batch_targets.append(y_ids)
+        
+        # Pad sequences to same length for batching
+        max_len = max(emb.shape[1] for emb in batch_embeddings)
+        padded_embeddings = []
+        padded_targets = []
+        attention_masks = []
+        
+        for emb, y in zip(batch_embeddings, batch_targets):
+            seq_len = emb.shape[1]
+            pad_len = max_len - seq_len
+            
+            # Pad embeddings
+            if pad_len > 0:
+                pad_emb = torch.zeros(1, pad_len, emb.shape[2], device=device)
+                emb = torch.cat([emb, pad_emb], dim=1)
+            
+            # Pad targets
+            if pad_len > 0:
+                pad_target = torch.zeros(pad_len, dtype=y.dtype, device=device)
+                y = torch.cat([y, pad_target], dim=0)
+            
+            # Create attention mask (1 for real tokens, 0 for padding)
+            mask = torch.ones(seq_len, dtype=torch.float, device=device)
+            if pad_len > 0:
+                mask = torch.cat([mask, torch.zeros(pad_len, device=device)], dim=0)
+            
+            padded_embeddings.append(emb)
+            padded_targets.append(y)
+            attention_masks.append(mask)
+        
+        # Stack into batch
+        batch_emb = torch.cat(padded_embeddings, dim=0)  # (B, T_max, thinker_d_model)
+        batch_targets = torch.stack(padded_targets)  # (B, T_max)
+        batch_mask = torch.stack(attention_masks)  # (B, T_max)
+        
+        return batch_emb, batch_targets, batch_mask
+    
+    # Initialize logger
+    logger = SimpleLogger("OmniSFT")
+    
+    best_val_loss = float('inf')
+    val_freq = cfg.get("val_freq", 100)  # Validate every N steps
+    checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
+    
+    logger.training_start(cfg["max_steps"], train_size, val_size)
+    
+    for epoch in range(max_epochs):
+        logger.epoch_start(epoch)
+        think.train()
+        proj_a.train()
+        proj_v.train()
+        
+        for step, data in enumerate(train_dl):
+            batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True)
+            
+            # Forward pass
+            logits = think(embeddings=batch_emb)  # (B, T, vocab)
+            
+            # Calculate loss (mask out padding)
+            loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
+            
+            opt.zero_grad()
+            loss.backward()
+            
+            # Gradient clipping
+            clip_gradients(think, max_grad_norm)
+            clip_gradients(proj_a, max_grad_norm)
+            clip_gradients(proj_v, max_grad_norm)
+            
+            opt.step()
+            scheduler.step()
+            
             if step % print_freq == 0:
-                print("step", step, "loss", loss_acc/B)
+                current_lr = scheduler.get_last_lr()[0]
+                logger.train_step(step, float(loss), current_lr, epoch)
+            
+            # Validation
+            if step % val_freq == 0 and step > 0:
+                think.eval()
+                proj_a.eval()
+                proj_v.eval()
+                val_loss_sum = 0.0
+                val_count = 0
+                
+                with torch.no_grad():
+                    for val_data in val_dl:
+                        val_emb, val_targets, val_mask = process_batch(val_data, is_training=False)
+                        val_logits = think(embeddings=val_emb)
+                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                        val_loss_sum += float(val_loss)
+                        val_count += 1
+                        if val_count >= 10:  # Limit validation batches
+                            break
+                
+                avg_val_loss = val_loss_sum / val_count
+                logger.val_step(step, avg_val_loss, epoch)
+                
+                # Save best model
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    best_path = os.path.join(cfg["save_dir"], "omni_best.pt")
+                    os.makedirs(cfg["save_dir"], exist_ok=True)
+                    torch.save({
+                        "thinker": think.state_dict(), 
+                        "proj_a": proj_a.state_dict(), 
+                        "proj_v": proj_v.state_dict()
+                    }, best_path)
+                    logger.checkpoint(step, best_path, is_best=True)
+                
+                think.train()
+                proj_a.train()
+                proj_v.train()
+            
+            # Periodic checkpointing
+            if step % checkpoint_freq == 0 and step > 0:
+                checkpoint_path = os.path.join(cfg["save_dir"], f"omni_step_{step}.pt")
+                os.makedirs(cfg["save_dir"], exist_ok=True)
+                torch.save({"thinker": think.state_dict(), "proj_a": proj_a.state_dict(), "proj_v": proj_v.state_dict()}, checkpoint_path)
+                logger.checkpoint(step, checkpoint_path)
+            
             if step >= cfg["max_steps"]:
                 os.makedirs(cfg["save_dir"], exist_ok=True)
                 torch.save({"thinker": think.state_dict(), "proj_a": proj_a.state_dict(), "proj_v": proj_v.state_dict()}, os.path.join(cfg["save_dir"], "omni.pt"))
-                print("Saved", cfg["save_dir"])
+                logger.info(f"Final model saved to {cfg['save_dir']}")
+                logger.training_end(step)
                 return
+        
+        # Final validation at end of epoch
+        think.eval()
+        proj_a.eval()
+        proj_v.eval()
+        val_loss_sum = 0.0
+        val_count = 0
+        with torch.no_grad():
+            for val_data in val_dl:
+                val_emb, val_targets, val_mask = process_batch(val_data, is_training=False)
+                val_logits = think(embeddings=val_emb)
+                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                val_loss_sum += float(val_loss)
+                val_count += 1
+        
+        avg_val_loss = val_loss_sum / max(val_count, 1)
+        logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
+        
         # Save at end of epoch if max_steps not reached
         if step < cfg["max_steps"]:
             os.makedirs(cfg["save_dir"], exist_ok=True)
             torch.save({"thinker": think.state_dict(), "proj_a": proj_a.state_dict(), "proj_v": proj_v.state_dict()}, os.path.join(cfg["save_dir"], "omni.pt"))
-            print("Saved", cfg["save_dir"], "at end of epoch", epoch, "step", step)
+            logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
             return
 
 if __name__ == "__main__":
