@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
 from omni.vision_encoder import ViTTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
 from tqdm import tqdm
 
 class ImgCapDataset(Dataset):
@@ -78,8 +78,30 @@ def main(cfg):
             # make a toy label: predict 'red'(0) if 'red' in caption else 'blue'(1)
             labels = torch.tensor([0 if "red" in c else 1 for c in cap], dtype=torch.long, device=device)
             loss = loss_fn(logit, labels)
+            
+            # Validate loss value
+            try:
+                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                logger.error("Skipping this batch due to invalid loss")
+                continue
+            
             opt.zero_grad()
             loss.backward()
+            
+            # Check for gradient explosion before clipping
+            try:
+                grad_norm_vit, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=100.0, raise_on_error=False)
+                grad_norm_head, is_exploded_head = check_gradient_explosion(head, max_grad_norm=100.0, raise_on_error=False)
+                if is_exploded_vit or is_exploded_head:
+                    logger.error(f"Step {step}: Gradient explosion detected (vit={grad_norm_vit:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
+                    opt.zero_grad()  # Clear gradients
+                    continue
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                opt.zero_grad()  # Clear gradients
+                continue
             
             # Gradient clipping
             clip_gradients(vit, max_grad_norm)
@@ -111,8 +133,15 @@ def main(cfg):
                         val_logit = head(val_cls.squeeze(1))
                         val_labels = torch.tensor([0 if "red" in c else 1 for c in val_cap], dtype=torch.long, device=device)
                         val_loss = loss_fn(val_logit, val_labels)
-                        val_loss_sum += float(val_loss)
-                        val_count += 1
+                        
+                        # Validate validation loss
+                        try:
+                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                            val_loss_sum += float(val_loss)
+                            val_count += 1
+                        except RuntimeError as e:
+                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                            # Continue with other validation batches
                         if val_count >= 10:  # Limit validation batches
                             break
                 
@@ -147,8 +176,15 @@ def main(cfg):
                 val_logit = head(val_cls.squeeze(1))
                 val_labels = torch.tensor([0 if "red" in c else 1 for c in val_cap], dtype=torch.long, device=device)
                 val_loss = loss_fn(val_logit, val_labels)
-                val_loss_sum += float(val_loss)
-                val_count += 1
+                
+                # Validate validation loss
+                try:
+                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                    val_loss_sum += float(val_loss)
+                    val_count += 1
+                except RuntimeError as e:
+                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                    # Continue with other validation batches
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

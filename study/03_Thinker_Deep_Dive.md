@@ -888,10 +888,42 @@ When training fails, check these in order:
 
 Common issues:
 
-1. **NaN values**: Check learning rate, gradient clipping
-2. **Slow training**: Check batch size, use GPU
-3. **Poor quality**: More training steps, better data
-4. **OOM errors**: Reduce batch size, use gradient checkpointing
+1. **NaN values**: 
+   - **Automatic detection**: ThinkerLM now checks logits for NaN/Inf automatically
+   - **Error message**: Raises RuntimeError with detailed NaN/Inf counts
+   - **Solutions**: Check learning rate, gradient clipping, data preprocessing
+   - **Training scripts**: Automatically validate losses and skip invalid batches
+
+2. **Gradient explosion**:
+   - **Automatic detection**: Training scripts check gradient norms before clipping
+   - **Recovery**: Exploded batches are automatically skipped
+   - **Solutions**: Reduce learning rate, increase gradient clipping threshold
+
+3. **Slow training**: Check batch size, use GPU
+4. **Poor quality**: More training steps, better data
+5. **OOM errors**: Reduce batch size, use gradient checkpointing
+
+## 🔒 Numerical Stability in ThinkerLM
+
+ThinkerLM now includes automatic numerical stability checks:
+
+```python
+# In ThinkerLM.forward():
+logits = self.lm_head(x)  # (B, T, vocab_size)
+
+# Automatic NaN/Inf detection:
+if torch.isnan(logits).any() or torch.isinf(logits).any():
+    nan_count = torch.isnan(logits).sum().item()
+    inf_count = torch.isinf(logits).sum().item()
+    raise RuntimeError(f"Numerical instability in ThinkerLM forward pass: NaN={nan_count}, Inf={inf_count}")
+
+return logits
+```
+
+**Benefits**:
+- **Early detection**: Catches numerical issues immediately in forward pass
+- **Clear errors**: Detailed error messages with NaN/Inf counts
+- **Prevents corruption**: Stops training before weights are corrupted
 
 ---
 

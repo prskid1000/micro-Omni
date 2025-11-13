@@ -31,4 +31,16 @@ class ViTTiny(nn.Module):
         x = self.norm(x)
         cls = x[:, :1, :]  # (B,1,d)
         grid = x[:, 1:, :] # (B,N,d)
+        
+        # Check for numerical stability (NaN/Inf detection)
+        if torch.isnan(cls).any() or torch.isinf(cls).any():
+            nan_count = torch.isnan(cls).sum().item()
+            inf_count = torch.isinf(cls).sum().item()
+            raise RuntimeError(f"Numerical instability in ViTTiny CLS token: NaN={nan_count}, Inf={inf_count}")
+        
+        if torch.isnan(grid).any() or torch.isinf(grid).any():
+            nan_count = torch.isnan(grid).sum().item()
+            inf_count = torch.isinf(grid).sum().item()
+            raise RuntimeError(f"Numerical instability in ViTTiny grid tokens: NaN={nan_count}, Inf={inf_count}")
+        
         return cls, grid

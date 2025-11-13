@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchaudio
 from omni.codec import RVQ
 from omni.talker import TalkerTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
 from tqdm import tqdm
 
 def collate_mel_fn(batch):
@@ -117,8 +117,30 @@ def main(cfg):
             base_logit, res_logit = talker(prev)
             loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:,:,0].reshape(-1)) + \
                    loss_fn(res_logit.reshape(-1, res_logit.size(-1)),  idxs[:,:,1].reshape(-1))
+            
+            # Validate loss value
+            try:
+                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                logger.error("Skipping this batch due to invalid loss")
+                continue
+            
             opt.zero_grad()
             loss.backward()
+            
+            # Check for gradient explosion before clipping
+            try:
+                grad_norm_rvq, is_exploded_rvq = check_gradient_explosion(rvq, max_grad_norm=100.0, raise_on_error=False)
+                grad_norm_talker, is_exploded_talker = check_gradient_explosion(talker, max_grad_norm=100.0, raise_on_error=False)
+                if is_exploded_rvq or is_exploded_talker:
+                    logger.error(f"Step {step}: Gradient explosion detected (rvq={grad_norm_rvq:.2f}, talker={grad_norm_talker:.2f}). Skipping this batch.")
+                    opt.zero_grad()  # Clear gradients
+                    continue
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                opt.zero_grad()  # Clear gradients
+                continue
             
             # Gradient clipping
             clip_gradients(rvq, max_grad_norm)
@@ -152,8 +174,15 @@ def main(cfg):
                         val_base_logit, val_res_logit = talker(val_prev)
                         val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
                                    loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
-                        val_loss_sum += float(val_loss)
-                        val_count += 1
+                        
+                        # Validate validation loss
+                        try:
+                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                            val_loss_sum += float(val_loss)
+                            val_count += 1
+                        except RuntimeError as e:
+                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                            # Continue with other validation batches
                         if val_count >= 10:  # Limit validation batches
                             break
                 
@@ -190,8 +219,15 @@ def main(cfg):
                 val_base_logit, val_res_logit = talker(val_prev)
                 val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
                            loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
-                val_loss_sum += float(val_loss)
-                val_count += 1
+                
+                # Validate validation loss
+                try:
+                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                    val_loss_sum += float(val_loss)
+                    val_count += 1
+                except RuntimeError as e:
+                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                    # Continue with other validation batches
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

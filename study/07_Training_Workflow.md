@@ -354,7 +354,7 @@ python train_talker.py --config configs/talker_tiny.json
 ### Training Loop (From `train_talker.py`)
 
 ```python
-# Actual code from train_talker.py
+# Actual code from train_talker.py (with safety checks)
 for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
     mel = mel.to(device)  # (B, T, 128)
     
@@ -366,13 +366,36 @@ for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
     prev[:, 0, :] = 0  # First frame is zero
     
     base_logit, res_logit = talker(prev)
+    # Note: Talker automatically checks for NaN/Inf in logits
     
     # Loss on both codebooks
     loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:, :, 0].reshape(-1)) + \
            loss_fn(res_logit.reshape(-1, res_logit.size(-1)), idxs[:, :, 1].reshape(-1))
     
+    # 🔒 Loss Validation (NEW)
+    try:
+        validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+    except RuntimeError as e:
+        logger.error(f"Step {step}: {e}")
+        continue  # Skip this batch
+    
     opt.zero_grad()
     loss.backward()
+    
+    # 🔒 Gradient Explosion Detection (NEW)
+    try:
+        grad_norm_rvq, is_exploded_rvq = check_gradient_explosion(rvq, max_grad_norm=100.0, raise_on_error=False)
+        grad_norm_talker, is_exploded_talker = check_gradient_explosion(talker, max_grad_norm=100.0, raise_on_error=False)
+        if is_exploded_rvq or is_exploded_talker:
+            logger.error(f"Gradient explosion detected. Skipping batch.")
+            opt.zero_grad()
+            continue
+    except RuntimeError as e:
+        logger.error(f"Step {step}: {e}")
+        opt.zero_grad()
+        continue
+    
+    # Gradient clipping
     clip_gradients(rvq, max_grad_norm)
     clip_gradients(talker, max_grad_norm)
     opt.step()
@@ -773,7 +796,24 @@ if step % val_freq == 0 and step > 0:
 
 5. **Gradient Issues**: Use gradient clipping for stability
    ```python
+   # Check for gradient explosion first
+   grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0)
+   if is_exploded:
+       logger.error(f"Gradient explosion: {grad_norm:.2f}")
+       opt.zero_grad()
+       continue
+   
+   # Then clip gradients
    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+   ```
+
+6. **Numerical Stability**: All models now check for NaN/Inf automatically
+   ```python
+   # Automatic in model forward passes:
+   logits = model(x)  # Raises RuntimeError if NaN/Inf detected
+   
+   # Manual loss validation:
+   validate_loss(loss, min_loss=-1e6, max_loss=1e6)
    ```
 
 ## 🔍 Debugging Checklist: Training Issues
@@ -789,11 +829,15 @@ When training fails, check these:
 - [ ] **Memory**: Are you running out of VRAM? Reduce batch size
 - [ ] **Validation**: Is validation loss decreasing?
 - [ ] **Device**: CPU vs GPU? `print(next(model.parameters()).device)`
+- [ ] **Numerical Stability**: Check logs for NaN/Inf errors (automatic detection)
+- [ ] **Gradient Explosion**: Check logs for gradient explosion warnings (automatic detection)
 
 ### Common Issues
 
 1. **Loss not decreasing**:
    - Check learning rate
+   - Check for NaN/Inf in loss (automatic validation will catch this)
+   - Verify loss validation is passing
    - Verify data loading
    - Check model initialization
 
@@ -823,7 +867,10 @@ Before moving on, can you answer:
 4. **What happens if you skip a stage?**
    - Answer: Later stages may fail or perform poorly (missing prerequisites)
 
-5. **How do you know when a stage is done?**
+5. **How are numerical issues handled during training?**
+   - Answer: Automatic NaN/Inf detection in forward passes, loss validation, and gradient explosion detection - invalid batches are automatically skipped
+
+6. **How do you know when a stage is done?**
    - Answer: Loss plateaus, validation loss stops improving, or max steps reached
 
 ## Training Time Estimates

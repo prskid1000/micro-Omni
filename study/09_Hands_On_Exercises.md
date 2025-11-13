@@ -358,18 +358,33 @@ def debug_training(model, dataloader, loss_fn, optimizer):
         print(f"  Output shape: {pred.shape}")
         print(f"  Loss: {loss.item():.4f}")
         
-        # Check for NaN
+        # Check for NaN (now automatic in training scripts)
         if torch.isnan(loss):
             print("  WARNING: NaN loss!")
+            break
+        
+        # Better: Use validate_loss utility (used in actual training)
+        from omni.training_utils import validate_loss
+        try:
+            validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+        except RuntimeError as e:
+            print(f"  ERROR: {e}")
             break
         
         # Backward
         optimizer.zero_grad()
         loss.backward()
         
-        # Check gradients
+        # Check gradients (now automatic in training scripts)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float('inf'))
         print(f"  Gradient norm: {grad_norm:.4f}")
+        
+        # Better: Use check_gradient_explosion utility (used in actual training)
+        from omni.training_utils import check_gradient_explosion
+        grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
+        if is_exploded:
+            print(f"  WARNING: Gradient explosion detected! grad_norm={grad_norm:.2f}")
+            break
         
         optimizer.step()
         

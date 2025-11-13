@@ -58,6 +58,95 @@ def clip_gradients(model, max_norm=1.0):
     """
     return torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
+def check_numerical_stability(tensor, name="tensor", raise_on_error=True):
+    """
+    Check for NaN and Inf values in a tensor.
+    
+    Args:
+        tensor: PyTorch tensor to check
+        name: Name of tensor for error messages
+        raise_on_error: If True, raise exception on NaN/Inf; if False, return bool
+    
+    Returns:
+        bool: True if stable (no NaN/Inf), False otherwise
+    
+    Raises:
+        RuntimeError: If raise_on_error=True and NaN/Inf detected
+    """
+    has_nan = torch.isnan(tensor).any().item()
+    has_inf = torch.isinf(tensor).any().item()
+    
+    if has_nan or has_inf:
+        nan_count = torch.isnan(tensor).sum().item() if has_nan else 0
+        inf_count = torch.isinf(tensor).sum().item() if has_inf else 0
+        error_msg = f"Numerical instability detected in {name}: NaN={nan_count}, Inf={inf_count}"
+        
+        if raise_on_error:
+            raise RuntimeError(error_msg)
+        return False
+    
+    return True
+
+def validate_loss(loss, min_loss=-1e6, max_loss=1e6, raise_on_error=True):
+    """
+    Validate loss value is within reasonable bounds and not NaN/Inf.
+    
+    Args:
+        loss: Loss tensor or scalar
+        min_loss: Minimum acceptable loss value (default: -1e6)
+        max_loss: Maximum acceptable loss value (default: 1e6)
+        raise_on_error: If True, raise exception on invalid loss; if False, return bool
+    
+    Returns:
+        bool: True if valid, False otherwise
+    
+    Raises:
+        RuntimeError: If raise_on_error=True and loss is invalid
+    """
+    if isinstance(loss, torch.Tensor):
+        loss_val = loss.item()
+    else:
+        loss_val = float(loss)
+    
+    # Check for NaN/Inf
+    if not (min_loss <= loss_val <= max_loss) or not (loss_val == loss_val):  # NaN check
+        error_msg = f"Invalid loss value: {loss_val} (expected range: [{min_loss}, {max_loss}])"
+        if raise_on_error:
+            raise RuntimeError(error_msg)
+        return False
+    
+    return True
+
+def check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=True):
+    """
+    Check for gradient explosion by computing gradient norm.
+    
+    Args:
+        model: PyTorch model
+        max_grad_norm: Maximum acceptable gradient norm (default: 100.0)
+        raise_on_error: If True, raise exception on explosion; if False, return bool
+    
+    Returns:
+        tuple: (grad_norm, is_exploded) where grad_norm is the gradient norm and 
+               is_exploded is True if gradient norm exceeds max_grad_norm
+    
+    Raises:
+        RuntimeError: If raise_on_error=True and gradient explosion detected
+    """
+    # Compute gradient norm
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float('inf'))
+    grad_norm_val = grad_norm.item()
+    
+    is_exploded = grad_norm_val > max_grad_norm or not (grad_norm_val == grad_norm_val)  # NaN check
+    
+    if is_exploded:
+        error_msg = f"Gradient explosion detected: grad_norm={grad_norm_val:.2f} (max={max_grad_norm})"
+        if raise_on_error:
+            raise RuntimeError(error_msg)
+        return grad_norm_val, True
+    
+    return grad_norm_val, False
+
 class SimpleLogger:
     """Simple terminal logger for training metrics"""
     

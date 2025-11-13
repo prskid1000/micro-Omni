@@ -4,7 +4,7 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
 from tqdm import tqdm
 
 class TextDataset(Dataset):
@@ -88,8 +88,29 @@ def main(cfg):
             x,y = x.to(device), y.to(device)
             logits = model(x)  # (B,T,V)
             loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+            
+            # Validate loss value
+            try:
+                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                logger.error("Skipping this batch due to invalid loss")
+                continue
+            
             opt.zero_grad()
             loss.backward()
+            
+            # Check for gradient explosion before clipping
+            try:
+                grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
+                if is_exploded:
+                    logger.error(f"Step {step}: Gradient explosion detected (grad_norm={grad_norm:.2f}). Skipping this batch.")
+                    opt.zero_grad()  # Clear gradients
+                    continue
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                opt.zero_grad()  # Clear gradients
+                continue
             
             # Gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -118,8 +139,16 @@ def main(cfg):
                         val_x, val_y = val_x.to(device), val_y.to(device)
                         val_logits = model(val_x)
                         val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                        val_loss_sum += float(val_loss)
-                        val_count += 1
+                        
+                        # Validate validation loss
+                        try:
+                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                            val_loss_sum += float(val_loss)
+                            val_count += 1
+                        except RuntimeError as e:
+                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                            # Continue with other validation batches
+                        
                         if val_count >= 20:  # Limit validation batches
                             break
                 
@@ -150,8 +179,15 @@ def main(cfg):
                 val_x, val_y = val_x.to(device), val_y.to(device)
                 val_logits = model(val_x)
                 val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                val_loss_sum += float(val_loss)
-                val_count += 1
+                
+                # Validate validation loss
+                try:
+                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                    val_loss_sum += float(val_loss)
+                    val_count += 1
+                except RuntimeError as e:
+                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                    # Continue with other validation batches
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

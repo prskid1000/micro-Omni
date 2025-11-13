@@ -75,5 +75,18 @@ class TalkerTiny(nn.Module):
                 x, _ = blk(x, mask=None, pos=None, cache=None)
         
         x = self.norm(x)
-        logits = (self.base_head(x[:,1:,:]), self.res_head(x[:,1:,:]))
-        return logits
+        base_logits = self.base_head(x[:,1:,:])
+        res_logits = self.res_head(x[:,1:,:])
+        
+        # Check for numerical stability (NaN/Inf detection)
+        if torch.isnan(base_logits).any() or torch.isinf(base_logits).any():
+            nan_count = torch.isnan(base_logits).sum().item()
+            inf_count = torch.isinf(base_logits).sum().item()
+            raise RuntimeError(f"Numerical instability in TalkerTiny base_head: NaN={nan_count}, Inf={inf_count}")
+        
+        if torch.isnan(res_logits).any() or torch.isinf(res_logits).any():
+            nan_count = torch.isnan(res_logits).sum().item()
+            inf_count = torch.isinf(res_logits).sum().item()
+            raise RuntimeError(f"Numerical instability in TalkerTiny res_head: NaN={nan_count}, Inf={inf_count}")
+        
+        return (base_logits, res_logits)

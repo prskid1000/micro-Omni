@@ -64,4 +64,12 @@ class AudioEncoderTiny(nn.Module):
         x = self.proj(x)  # (B, T/downsample_factor, d)
         for blk in self.blocks:
             x = blk(x)
-        return self.norm(x)  # (B, T/downsample_factor, d)
+        x = self.norm(x)  # (B, T/downsample_factor, d)
+        
+        # Check for numerical stability (NaN/Inf detection)
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            nan_count = torch.isnan(x).sum().item()
+            inf_count = torch.isinf(x).sum().item()
+            raise RuntimeError(f"Numerical instability in AudioEncoderTiny forward pass: NaN={nan_count}, Inf={inf_count}")
+        
+        return x

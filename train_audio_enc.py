@@ -3,7 +3,7 @@ import argparse, json, os, torch, torchaudio, csv
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
 from tqdm import tqdm
 
 def collate_fn(batch):
@@ -107,8 +107,30 @@ def main(cfg):
             log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
             inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
             loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+            
+            # Validate loss value
+            try:
+                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                logger.error("Skipping this batch due to invalid loss")
+                continue
+            
             opt.zero_grad()
             loss.backward()
+            
+            # Check for gradient explosion before clipping
+            try:
+                grad_norm_model, is_exploded_model = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
+                grad_norm_head, is_exploded_head = check_gradient_explosion(head, max_grad_norm=100.0, raise_on_error=False)
+                if is_exploded_model or is_exploded_head:
+                    logger.error(f"Step {step}: Gradient explosion detected (model={grad_norm_model:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
+                    opt.zero_grad()  # Clear gradients
+                    continue
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                opt.zero_grad()  # Clear gradients
+                continue
             
             # Gradient clipping
             clip_gradients(model, max_grad_norm)
@@ -147,8 +169,15 @@ def main(cfg):
                         val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
                         val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
                         val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
-                        val_loss_sum += float(val_loss)
-                        val_count += 1
+                        
+                        # Validate validation loss
+                        try:
+                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                            val_loss_sum += float(val_loss)
+                            val_count += 1
+                        except RuntimeError as e:
+                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                            # Continue with other validation batches
                         if val_count >= 10:  # Limit validation batches
                             break
                 
@@ -190,8 +219,15 @@ def main(cfg):
                 val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
                 val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
                 val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
-                val_loss_sum += float(val_loss)
-                val_count += 1
+                
+                # Validate validation loss
+                try:
+                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                    val_loss_sum += float(val_loss)
+                    val_count += 1
+                except RuntimeError as e:
+                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                    # Continue with other validation batches
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

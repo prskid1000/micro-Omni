@@ -179,6 +179,9 @@ x = think.norm(x)  # (1, 6, 256) [final normalization]
 logits = think.lm_head(x)  # (1, 6, 5000)
 #                          ↑  ↑  ↑
 #                         batch tokens vocab_size
+
+# Numerical Stability Check (automatic)
+# Checks for NaN/Inf in logits and raises RuntimeError if detected
 ```
 
 **Transformation**:
@@ -186,6 +189,7 @@ logits = think.lm_head(x)  # (1, 6, 5000)
 - Output: `(1, 6, 5000)` logits
 - **6 input tokens → 6 sets of vocabulary logits**
 - Each position predicts probability distribution over 5000 tokens
+- **Safety**: Automatic NaN/Inf detection raises error if numerical instability detected
 
 ### Step 6: Next Token Prediction
 **What it does**: Samples next token from last position's logits
@@ -1000,6 +1004,74 @@ Audio Pipeline:
 Multimodal:
   (1, 1, 256) img + (1, 25, 256) aud + (1, 9, 256) text → (1, 35, 256) combined
 ```
+
+## 🔒 Numerical Stability & Safety Checks
+
+All model forward passes now include automatic numerical stability checks:
+
+### NaN/Inf Detection in Forward Passes
+
+**Automatic checks in all models**:
+- **ThinkerLM**: Checks logits for NaN/Inf before returning
+- **TalkerTiny**: Checks base and residual logits separately
+- **AudioEncoderTiny**: Checks encoder output embeddings
+- **ViTTiny**: Checks CLS and grid tokens separately
+
+**What happens**:
+```python
+# In ThinkerLM.forward():
+logits = self.lm_head(x)  # (1, 6, 5000)
+
+# Automatic check:
+if torch.isnan(logits).any() or torch.isinf(logits).any():
+    nan_count = torch.isnan(logits).sum().item()
+    inf_count = torch.isinf(logits).sum().item()
+    raise RuntimeError(f"Numerical instability in ThinkerLM: NaN={nan_count}, Inf={inf_count}")
+```
+
+**Benefits**:
+- **Early detection**: Catches numerical issues immediately
+- **Clear errors**: Detailed error messages with counts
+- **Prevents corruption**: Stops training before weights are corrupted
+
+### Loss Validation in Training
+
+**All training scripts validate losses**:
+```python
+# In training loops:
+loss = loss_fn(logits, targets)
+
+# Automatic validation:
+validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+# Raises RuntimeError if loss is NaN/Inf or out of bounds
+```
+
+**What it checks**:
+- Loss is not NaN or Inf
+- Loss is within reasonable bounds (default: -1e6 to 1e6)
+- Skips batch if invalid (prevents training corruption)
+
+### Gradient Explosion Detection
+
+**All training scripts check gradients**:
+```python
+# After backward(), before clipping:
+grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0)
+if is_exploded:
+    logger.error(f"Gradient explosion: grad_norm={grad_norm:.2f}")
+    opt.zero_grad()  # Clear gradients
+    continue  # Skip this batch
+```
+
+**What it checks**:
+- Gradient norm exceeds threshold (default: 100.0)
+- Gradient norm is NaN
+- Automatically skips problematic batches
+
+**Benefits**:
+- **Prevents training collapse**: Catches exploding gradients early
+- **Automatic recovery**: Skips bad batches, continues training
+- **Detailed logging**: Reports gradient norms for debugging
 
 ## ⚠️ Common Pitfalls
 

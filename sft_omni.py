@@ -9,7 +9,7 @@ import torchaudio
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
 
 class MixDataset(Dataset):
     def __init__(self, text_path, image_manifest, image_root, asr_csv, ctx=1024):
@@ -359,8 +359,30 @@ def main(cfg):
             # Calculate loss (mask out padding)
             loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
             
+            # Validate loss value
+            try:
+                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                logger.error("Skipping this batch due to invalid loss")
+                continue
+            
             opt.zero_grad()
             loss.backward()
+            
+            # Check for gradient explosion before clipping
+            try:
+                grad_norm_think, is_exploded_think = check_gradient_explosion(think, max_grad_norm=100.0, raise_on_error=False)
+                grad_norm_proj_a, is_exploded_proj_a = check_gradient_explosion(proj_a, max_grad_norm=100.0, raise_on_error=False)
+                grad_norm_proj_v, is_exploded_proj_v = check_gradient_explosion(proj_v, max_grad_norm=100.0, raise_on_error=False)
+                if is_exploded_think or is_exploded_proj_a or is_exploded_proj_v:
+                    logger.error(f"Step {step}: Gradient explosion detected (think={grad_norm_think:.2f}, proj_a={grad_norm_proj_a:.2f}, proj_v={grad_norm_proj_v:.2f}). Skipping this batch.")
+                    opt.zero_grad()  # Clear gradients
+                    continue
+            except RuntimeError as e:
+                logger.error(f"Step {step}: {e}")
+                opt.zero_grad()  # Clear gradients
+                continue
             
             # Gradient clipping
             clip_gradients(think, max_grad_norm)
@@ -388,8 +410,15 @@ def main(cfg):
                         val_emb, val_targets, val_mask = process_batch(val_data, is_training=False)
                         val_logits = think(embeddings=val_emb)
                         val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                        val_loss_sum += float(val_loss)
-                        val_count += 1
+                        
+                        # Validate validation loss
+                        try:
+                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                            val_loss_sum += float(val_loss)
+                            val_count += 1
+                        except RuntimeError as e:
+                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                            # Continue with other validation batches
                         if val_count >= 10:  # Limit validation batches
                             break
                 
@@ -437,8 +466,15 @@ def main(cfg):
                 val_emb, val_targets, val_mask = process_batch(val_data, is_training=False)
                 val_logits = think(embeddings=val_emb)
                 val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                val_loss_sum += float(val_loss)
-                val_count += 1
+                
+                # Validate validation loss
+                try:
+                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                    val_loss_sum += float(val_loss)
+                    val_count += 1
+                except RuntimeError as e:
+                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                    # Continue with other validation batches
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

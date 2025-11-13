@@ -444,4 +444,11 @@ class ThinkerLM(nn.Module):
         
         x = self.norm(x)
         logits = self.lm_head(x)
+        
+        # Check for numerical stability (NaN/Inf detection)
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            nan_count = torch.isnan(logits).sum().item()
+            inf_count = torch.isinf(logits).sum().item()
+            raise RuntimeError(f"Numerical instability in ThinkerLM forward pass: NaN={nan_count}, Inf={inf_count}")
+        
         return logits

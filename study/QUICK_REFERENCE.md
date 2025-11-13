@@ -132,12 +132,37 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 - Location: `data/audio/wav/`
 - Metadata: `data/audio/asr.csv`, `data/audio/tts.csv`
 
+## 🔒 Numerical Stability & Safety Features
+
+### Automatic Checks
+- **Model Forward Passes**: All models check for NaN/Inf automatically
+  - ThinkerLM, TalkerTiny, AudioEncoderTiny, ViTTiny
+  - Raises RuntimeError with detailed counts if detected
+- **Loss Validation**: Training scripts validate all losses
+  - Checks for NaN/Inf and out-of-bounds values
+  - Automatically skips invalid batches
+- **Gradient Explosion Detection**: Checks gradient norms before clipping
+  - Default threshold: 100.0 (configurable)
+  - Automatically skips exploded batches
+
+### Utilities
+- `validate_loss(loss, min_loss=-1e6, max_loss=1e6)` - Validate loss values
+- `check_gradient_explosion(model, max_grad_norm=100.0)` - Check gradients
+- `check_numerical_stability(tensor, name="tensor")` - Check tensors
+
 ## Common Issues
 
 ### Training
 - **Loss not decreasing**: Check learning rate, data loading
 - **Out of memory**: Reduce batch size
-- **NaN values**: Check gradients, reduce LR
+- **NaN values**: 
+  - **Automatic detection**: Models check for NaN/Inf automatically
+  - **Loss validation**: Training scripts validate losses
+  - **Solutions**: Check learning rate, gradient clipping, data preprocessing
+- **Gradient explosion**: 
+  - **Automatic detection**: Training scripts check gradient norms
+  - **Recovery**: Exploded batches are automatically skipped
+  - **Solutions**: Reduce learning rate, increase gradient clipping threshold
 
 ### Inference
 - **Model not found**: Check checkpoint path
