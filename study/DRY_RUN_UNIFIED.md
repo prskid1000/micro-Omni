@@ -1,24 +1,71 @@
-# Unified Dry Run Computation - μOmni Pipeline
+# Unified Dry Run Computation: μOmni Pipeline
 
-This document traces the complete computation pipeline from initial input tokens through all transformations to final output, explaining what each step does with respect to the input.
+## 🎯 Key Takeaways (TL;DR)
 
----
+- **What**: Step-by-step trace of data flow through entire μOmni pipeline
+- **Why**: Understand exactly how inputs transform at each stage (crucial for debugging)
+- **How**: All modalities → unified tokens → Thinker → output generation
+- **Key Insight**: Everything becomes tokens in 256-dim space - image (1 token), audio (25 tokens), text (variable)
+- **Common Mistake**: Not tracking token counts or shape mismatches between stages
+- **Shape Tracking**: Always verify `(batch, tokens, dim)` format matches expected
+
+**📖 Reading Guide**:
+- **Quick Read**: 20 minutes (overview + one pipeline example)
+- **Standard Read**: 60 minutes (all pipelines)
+- **Deep Dive**: 2 hours (read + trace through code with debugger)
 
 ## Overview: Token-Based Processing Pipeline
 
-The μOmni system processes multimodal inputs by converting everything to a unified token representation:
-- **Text**: Direct tokenization → token IDs
-- **Image**: Image → ViT patches → CLS token → projected to token space
-- **Audio**: Audio → Mel → AudioEncoder → projected to token space
-- **All modalities**: Combined into a single sequence of "tokens" (embeddings) → Thinker processes → generates text tokens
+The μOmni system processes multimodal inputs by converting everything to a **unified token representation**:
+
+```
+Text:   Direct tokenization → token IDs
+Image:  Image → ViT patches → CLS token → projected to token space
+Audio:  Audio → Mel → AudioEncoder → projected to token space
+All:    Combined into single sequence → Thinker processes → generates output
+```
+
+### Core Principle: Unified Token Space
+
+All modalities are converted to **256-dimensional embeddings** that Thinker can process uniformly:
+
+| Modality | Input | Processing | Output Tokens | Dimension |
+|----------|-------|------------|---------------|-----------|
+| **Text** | String | Tokenize → Embed | Variable (e.g., 6) | 256 |
+| **Image** | (224×224×3) | ViT → CLS → Project | 1 | 256 |
+| **Audio** | (16k samples) | Mel → Encoder → Project | ~25 | 256 |
+
+**Key Point**: Once in token space, Thinker treats all modalities the same!
 
 ---
 
 ## Part 1: Text-Only Pipeline
 
+**Use Case**: Simple text generation (chat, completion)
+
 ### Input: Text String
 ```
 Input: "Hello, how are you?"
+```
+
+### Shape Flow Diagram
+
+```
+Text: "Hello, how are you?"
+  ↓
+Tokenize: [1, 234, 567, 890, 123, 456]  (6 tokens)
+  ↓
+Embed: (1, 6, 256)  [batch=1, tokens=6, dim=256]
+  ↓
+Transformer Blocks (4 layers): (1, 6, 256) → (1, 6, 256)
+  ↓
+LM Head: (1, 6, 256) → (1, 6, 5000)
+  ↓
+Generate: Extract last position → 1 new token
+  ↓
+Autoregressive: 6 → 7 → 8 → ... → 70 tokens
+  ↓
+Decode: Text string output
 ```
 
 ### Step 1: Tokenization (Text → Token IDs)
@@ -35,9 +82,23 @@ ids = [1] + tok.encode("Hello, how are you?")
 ```
 
 **Transformation**: 
-- Input: String (variable length)
-- Output: List of integers `[1, 234, 567, 890, 123, 456]` (6 tokens)
-- BOS token (1) prepended for sequence start
+- **Input**: String `"Hello, how are you?"` (variable length)
+- **Output**: List of integers `[1, 234, 567, 890, 123, 456]` (6 tokens)
+- **BOS token** (1) prepended for sequence start
+- **Shape**: `(6,)` - 1D list of token IDs
+
+**Try It Yourself**:
+```python
+from omni.tokenizer import BPETokenizer
+tok = BPETokenizer("checkpoints/thinker_tiny/tokenizer.model")
+text = "Hello, how are you?"
+ids = tok.encode(text)
+print(f"Text: {text}")
+print(f"Token IDs: {ids}")
+print(f"Number of tokens: {len(ids)}")
+# Expected: Token IDs: [234, 567, 890, 123, 456] (example)
+# Expected: Number of tokens: 5 (plus BOS = 6 total)
+```
 
 ### Step 2: Token Embedding (Token IDs → Embeddings)
 **What it does**: Maps each token ID to a dense vector representation
@@ -52,10 +113,12 @@ x = think.tok_emb(torch.tensor([[1, 234, 567, 890, 123, 456]]))
 ```
 
 **Transformation**:
-- Input: `(1, 6)` token IDs
-- Output: `(1, 6, 256)` embeddings
-- Each token ID → 256-dimensional vector
-- **6 input tokens → 6 embedding vectors**
+- **Input**: `(1, 6)` token IDs - batch of 1, 6 tokens
+- **Output**: `(1, 6, 256)` embeddings - same batch, same tokens, now 256-dim vectors
+- Each token ID → 256-dimensional vector (learned embedding)
+- **6 input tokens → 6 embedding vectors** (count preserved, dimension added)
+
+**Key Point**: Token count stays the same (6), we just add the embedding dimension (256)
 
 ### Step 3: Position Embeddings (RoPE)
 **What it does**: Adds positional information to embeddings using Rotary Position Embedding
@@ -187,10 +250,42 @@ output_text = tok.decode([1, 234, 567, 890, 123, 456, 789, 101, 202, ...])
 
 ## Part 2: Image + Text Pipeline
 
+**Use Case**: Visual question answering, image captioning
+
 ### Input: Image + Text String
 ```
 Image: RGB image (224×224 pixels)
 Text: "What do you see in this image?"
+```
+
+### Shape Flow Diagram
+
+```
+Image (224×224×3 = 150,528 pixels)
+  ↓
+Patches: (1, 196, 128)  [196 patches]
+  ↓
+Add CLS: (1, 197, 128)  [1 CLS + 196 patches]
+  ↓
+ViT Transformer: (1, 197, 128) → (1, 197, 128)
+  ↓
+Extract CLS: (1, 1, 128)  [Only CLS token]
+  ↓
+Project: (1, 1, 128) → (1, 1, 256)  [Image token]
+
+Text: "What do you see?"
+  ↓
+Tokenize: [1, 123, 456, 789, 234, 567, 890, 345]  (8 tokens)
+  ↓
+Embed: (1, 8, 256)  [8 text tokens]
+
+Combined:
+  ↓
+Concat: (1, 1, 256) + (1, 8, 256) → (1, 9, 256)  [1 img + 8 text]
+  ↓
+Thinker: (1, 9, 256) → (1, 9, 5000)
+  ↓
+Generate: Text response
 ```
 
 ### Step 1: Image Processing (Image → Token Embedding)
@@ -349,10 +444,42 @@ next_token = logits[0, -1].argmax()  # e.g., 678
 
 ## Part 3: Audio + Text Pipeline
 
+**Use Case**: Speech recognition, audio question answering
+
 ### Input: Audio + Text String
 ```
 Audio: Waveform (1 second @ 16kHz = 16,000 samples)
 Text: "What did you hear?"
+```
+
+### Shape Flow Diagram
+
+```
+Audio (16,000 samples @ 16kHz)
+  ↓
+Mel Spectrogram: (1, 100, 128)  [100 frames @ 100Hz]
+  ↓
+Downsample 4x: (1, 100, 128) → (1, 25, 32)  [25 frames @ 25Hz]
+  ↓
+Reshape & Project: (1, 25, 192)  [25 audio embeddings]
+  ↓
+Audio Encoder: (1, 25, 192) → (1, 25, 192)
+  ↓
+Project: (1, 25, 192) → (1, 25, 256)  [25 audio tokens]
+
+Text: "What did you hear?"
+  ↓
+Tokenize: [1, 234, 567, 890, 123]  (5 tokens)
+  ↓
+Embed: (1, 5, 256)  [5 text tokens]
+
+Combined:
+  ↓
+Concat: (1, 25, 256) + (1, 5, 256) → (1, 30, 256)  [25 aud + 5 text]
+  ↓
+Thinker: (1, 30, 256) → (1, 30, 5000)
+  ↓
+Generate: Text response
 ```
 
 ### Step 1: Audio Processing (Audio → Token Embeddings)
@@ -530,9 +657,34 @@ logits = think(embeddings=multimodal_emb)
 
 ## Part 5: Text-to-Speech (TTS) Pipeline
 
+**Use Case**: Converting text responses to speech
+
 ### Input: Text String
 ```
 Input: "This is a test of text to speech."
+```
+
+### Shape Flow Diagram
+
+```
+Text: "This is a test..."
+  ↓
+Tokenize: 10 token IDs
+  ↓
+Estimate Duration: 10 tokens → ~300 audio frames
+  ↓
+Talker (Autoregressive):
+  Start: (1, 1, 2)  [zero codes]
+  Frame 0: (1, 1, 2) → predict → (1, 2, 2)
+  Frame 1: (1, 2, 2) → predict → (1, 3, 2)
+  ...
+  Final: (1, 301, 2)  [300 frames + start]
+  ↓
+RVQ Decode: (1, 301, 2) → (301, 128)  [301 mel frames]
+  ↓
+Vocoder: (301, 128) → (385,280,)  [audio samples @ 16kHz]
+  ↓
+Audio: 24 seconds of speech
 ```
 
 ### Step 1: Text Generation (Same as Part 1)
@@ -645,9 +797,27 @@ Text: "This is a test..."
 
 ## Part 6: Training Pipeline (Talker)
 
+**Use Case**: Training Talker to generate audio codes from mel spectrograms
+
 ### Input: Mel Spectrogram Batch
 ```
 Input: (B=2, T=50, 128) - 2 samples, 50 frames, 128 mel bins
+```
+
+### Shape Flow Diagram
+
+```
+Mel Batch: (2, 50, 128)  [2 samples, 50 frames each]
+  ↓
+RVQ Encode: (2, 50, 128) → (2, 50, 2)  [ground truth codes]
+  ↓
+Shift for Training: (2, 50, 2) → (2, 50, 2)  [previous frames]
+  ↓
+Talker Forward: (2, 50, 2) → (2, 50, 128) × 2  [base + residual logits]
+  ↓
+Loss: Compare predictions vs targets
+  ↓
+Backward: Update Talker weights
 ```
 
 ### Step 1: RVQ Encoding (Batch)
@@ -803,6 +973,91 @@ Text: "This is a test..."
 
 ---
 
+## 📊 Summary: Token Flow Through All Pipelines
+
+### Quick Reference Table
+
+| Pipeline | Input | Token Count | Output |
+|----------|-------|------------|--------|
+| **Text-Only** | 6 text tokens | 6 → 6 → 6 → 1 new | Text response |
+| **Image + Text** | 1 image + 8 text | 1 + 8 = 9 → 9 → 1 new | Text response |
+| **Audio + Text** | 25 audio + 5 text | 25 + 5 = 30 → 30 → 1 new | Text response |
+| **Multimodal** | 1 img + 25 aud + 9 text | 1 + 25 + 9 = 35 → 35 → 1 new | Text response |
+| **TTS** | 10 text tokens | 10 → 300 codes → 301 mel → 385k samples | Audio waveform |
+
+### Shape Transformation Summary
+
+```
+Text Pipeline:
+  (1, 6) IDs → (1, 6, 256) emb → (1, 6, 256) blocks → (1, 6, 5000) logits
+
+Image Pipeline:
+  (1, 3, 224, 224) img → (1, 197, 128) patches → (1, 1, 128) CLS → (1, 1, 256) emb
+
+Audio Pipeline:
+  (1, 16000) wav → (1, 100, 128) mel → (1, 25, 192) enc → (1, 25, 256) emb
+
+Multimodal:
+  (1, 1, 256) img + (1, 25, 256) aud + (1, 9, 256) text → (1, 35, 256) combined
+```
+
+## ⚠️ Common Pitfalls
+
+1. **Shape Mismatches**: Always verify dimensions match
+   ```python
+   # WRONG: Mismatched dimensions
+   img_emb = (1, 1, 128)  # ViT output
+   thinker(img_emb)  # Expects (1, T, 256) - ERROR!
+   
+   # CORRECT: Project first
+   img_emb = proj_v(img_emb)  # (1, 1, 128) → (1, 1, 256)
+   thinker(img_emb)  # Now works!
+   ```
+
+2. **Token Count Overflow**: Total tokens must fit in context length
+   ```python
+   # Check total tokens
+   total_tokens = img_tokens + audio_tokens + text_tokens
+   assert total_tokens <= ctx_len, f"Too many tokens: {total_tokens} > {ctx_len}"
+   ```
+
+3. **Forgetting BOS Token**: Always prepend BOS for text
+   ```python
+   # WRONG: Missing BOS
+   ids = tok.encode(text)  # [234, 567, ...]
+   
+   # CORRECT: Include BOS
+   ids = [1] + tok.encode(text)  # [1, 234, 567, ...]
+   ```
+
+4. **Wrong Batch Dimension**: Ensure batch dimension is first
+   ```python
+   # WRONG: No batch dimension
+   x = torch.tensor([1, 234, 567])  # (3,)
+   
+   # CORRECT: Add batch dimension
+   x = torch.tensor([[1, 234, 567]])  # (1, 3)
+   ```
+
+## ✅ Understanding Checkpoint
+
+Before moving on, can you answer:
+
+1. **How many tokens does a 224×224 image become?**
+   - Answer: 1 token (CLS token after ViT processing)
+
+2. **How many tokens does 1 second of audio become?**
+   - Answer: ~25 tokens (after downsampling from 100 mel frames)
+
+3. **What's the maximum total tokens for multimodal input?**
+   - Answer: ctx_len (e.g., 512), with audio limited to ctx_len//4
+
+4. **Why do we preserve token count in transformer blocks?**
+   - Answer: Attention and MLP operate per-token, preserving sequence length
+
+5. **What happens to token count during generation?**
+   - Answer: Grows incrementally (6 → 7 → 8 → ...) as new tokens are generated
+
 ## Key Insights
 
 1. **Unified Token Representation**: All modalities (text, image, audio) are converted to token embeddings of the same dimension (256), allowing them to be processed together.
@@ -822,4 +1077,11 @@ Text: "This is a test..."
 5. **Batch Processing**: Training processes multiple samples in parallel, but token counts per sample are independent.
 
 **Conclusion**: The entire pipeline operates on a unified token-based representation, where each step transforms tokens while preserving or modifying their count based on the operation type.
+
+---
+
+**Next Steps**:
+- [Thinker Deep Dive](03_Thinker_Deep_Dive.md) - Understand transformer processing
+- [Architecture Overview](02_Architecture_Overview.md) - See how components connect
+- [Inference Guide](08_Inference_Guide.md) - Use these pipelines in practice
 
