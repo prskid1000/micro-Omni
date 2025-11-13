@@ -1,5 +1,19 @@
 # μOmni Architecture Overview
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: μOmni is a multimodal AI with Thinker-Talker architecture
+- **Why**: Enables understanding and generating text, images, and audio in one model
+- **How**: Separate encoders → projectors → Thinker → Talker → Codec → Vocoder
+- **Key Insight**: Projectors align different modalities to unified 256-dim space
+- **Common Mistake**: Forgetting to project modalities before feeding to Thinker
+- **Shape Flow**: Vision `(B,197,128)` → `(B,197,256)`, Audio `(B,T,192)` → `(B,T,256)`
+
+**📖 Reading Guide**:
+- **Quick Read**: 10 minutes (overview + diagrams)
+- **Standard Read**: 30 minutes (full document)
+- **Deep Dive**: 90 minutes (read + code + experiments)
+
 ## High-Level View
 
 μOmni follows a **Thinker-Talker** architecture, inspired by Qwen3 Omni:
@@ -414,6 +428,23 @@ graph LR
 - **Training Efficiency**: Can train separately
 - **Flexibility**: Can use Thinker without Talker
 
+## 📊 Component Comparison
+
+All "tiny" models are designed to fit in 12GB VRAM:
+
+| Component | Input Shape | Output Shape | Parameters | Purpose |
+|-----------|-------------|--------------|------------|---------|
+| Vision Encoder | (B, 3, 224, 224) | (B, 197, 128) | ~10M | Image → Embeddings |
+| Audio Encoder | (B, T, 1) | (B, T/8, 192) | ~20M | Audio → Embeddings |
+| Text Tokenizer | Text string | (B, T) | 0 | Text → Token IDs |
+| Vision Projector | (B, 197, 128) | (B, 197, 256) | ~0.3M | Align to Thinker |
+| Audio Projector | (B, T/8, 192) | (B, T/8, 256) | ~0.3M | Align to Thinker |
+| Thinker | (B, T, 256) | (B, T, 5000) | ~50M | Core LLM |
+| Talker | (B, T, 256) | (B, T, 2) | ~30M | Tokens → Audio Codes |
+| RVQ Codec | (B, T, 128) | (B, T, 2) | ~5M | Mel → Codes |
+| Vocoder | (B, T, 128) | (B, T, 16000) | 0 | Mel → Waveform |
+| **Total** | **Various** | **Various** | **~120M** | **Full System** |
+
 ## Model Sizes
 
 All "tiny" models are designed to fit in 12GB VRAM:
@@ -486,6 +517,71 @@ omni/
                   │ Vocoder  │
                   └──────────┘
 ```
+
+## ⚠️ Common Pitfalls
+
+1. **Forgetting Projectors**: Always project modalities before Thinker
+   ```python
+   # WRONG: Direct to Thinker
+   thinker(vision_emb)  # Shape mismatch!
+   
+   # CORRECT: Project first
+   vision_proj = vision_projector(vision_emb)  # (B, 197, 128) → (B, 197, 256)
+   thinker(vision_proj)  # Now works!
+   ```
+
+2. **Shape Mismatches**: Check dimensions match after projection
+   ```python
+   assert vision_proj.shape[-1] == 256  # Must match Thinker's d_model
+   assert audio_proj.shape[-1] == 256
+   ```
+
+3. **Modality Order**: Ensure consistent ordering when combining modalities
+   ```python
+   # Decide: [image, text] or [text, image]?
+   # Keep consistent across training and inference
+   ```
+
+## ✅ Understanding Checkpoint
+
+Before moving on, can you answer:
+
+1. **Why separate encoders instead of one unified encoder?**
+   - Answer: Each modality needs specialized processing (patches for images, mel for audio)
+
+2. **Why do we need projectors?**
+   - Answer: To align different embedding dimensions to Thinker's unified space (256 dims)
+
+3. **What's the difference between Thinker and Talker?**
+   - Answer: Thinker = understanding/reasoning (text output), Talker = speech generation (audio codes)
+
+4. **Why staged training instead of end-to-end?**
+   - Answer: Fits in 12GB VRAM, easier to debug, components can be pretrained separately
+
+## 🚀 Extension Ideas
+
+1. **Add Video Support**: Extend vision encoder to process video frames
+2. **Custom Modalities**: Add new encoders (e.g., depth maps, point clouds)
+3. **Unified Encoder**: Experiment with single encoder for all modalities
+4. **Better Codec**: Try different audio codecs (e.g., EnCodec, SoundStream)
+5. **Neural Vocoder**: Replace Griffin-Lim with neural vocoder (e.g., HiFi-GAN)
+
+## ❓ Frequently Asked Questions
+
+**Q: Why is the model called "tiny"?**
+A: It's designed to fit in 12GB VRAM, making it accessible for learning and experimentation.
+
+**Q: Can I use this for production?**
+A: It's designed for education. For production, consider larger models or fine-tune on your data.
+
+**Q: How do I add a new modality?**
+A: Add encoder → add projector → update Thinker input handling → retrain
+
+**Q: Why separate Thinker and Talker?**
+A: Separation of concerns - Thinker handles understanding, Talker handles speech generation. Can use Thinker without Talker.
+
+**Q: What's the difference between RVQ and other codecs?**
+A: RVQ uses residual quantization (multiple codebooks), simpler than neural codecs but effective.
 
 ---
 

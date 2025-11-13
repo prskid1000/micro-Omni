@@ -1,5 +1,19 @@
 # Introduction to μOmni
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: μOmni is a multimodal AI that understands text, images, and audio
+- **Why**: Learn AI with a complete, runnable system that fits on consumer GPUs
+- **How**: Thinker-Talker architecture with separate encoders for each modality
+- **Key Insight**: All modalities unified into 256-dim space for Thinker to process
+- **Common Mistake**: Trying to train everything at once (use staged training!)
+- **Time to First Model**: ~4 hours for basic training
+
+**📖 Reading Guide**:
+- **Quick Read**: 5 minutes (overview only)
+- **Standard Read**: 10 minutes (full document)
+- **Deep Dive**: 20 minutes (read + try examples)
+
 ## What is μOmni?
 
 μOmni (pronounced "micro-omni") is a **multimodal AI model** that can understand and generate:

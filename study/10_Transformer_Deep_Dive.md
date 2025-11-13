@@ -1,5 +1,19 @@
 # Transformer Deep Dive: Every Layer Explained
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Complete transformer architecture explained layer-by-layer
+- **Why**: Deep understanding enables modification and debugging
+- **How**: Embedding → Position → Attention → MLP → Output (repeated N times)
+- **Key Insight**: Attention mechanism enables parallel processing and long-range dependencies
+- **Common Mistake**: Confusing self-attention with cross-attention, or forgetting causal mask
+- **Core Innovation**: Attention allows direct modeling of relationships between any tokens
+
+**📖 Reading Guide**:
+- **Quick Read**: 20 minutes (overview + attention mechanism)
+- **Standard Read**: 90 minutes (full document)
+- **Deep Dive**: 3 hours (read + implement from scratch)
+
 ## Overview
 
 This guide explains **every single layer** in a transformer, combining **theoretical understanding** with **practical implementation**. We'll cover both the "why" (theory) and "how" (code) for each component.

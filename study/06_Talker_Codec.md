@@ -1,5 +1,19 @@
 # Talker & Codec: Generating Speech
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Talker generates speech codes, RVQ converts codes ↔ audio
+- **Why**: Discrete codes enable autoregressive generation (like text tokens)
+- **How**: Text → Thinker → Talker → RVQ Codes → Decode → Mel → Vocoder → Audio
+- **Key Insight**: RVQ uses residual quantization (2 codebooks) for quality + efficiency
+- **Common Mistake**: Wrong codebook size or forgetting residual quantization
+- **Shape Flow**: `(B, T, 256)` → `(B, T, 2)` → `(B, T, 128)` → `(B, T, 16000)`
+
+**📖 Reading Guide**:
+- **Quick Read**: 15 minutes (overview + RVQ basics)
+- **Standard Read**: 45 minutes (full document)
+- **Deep Dive**: 90 minutes (read + code + experiments)
+
 ## Overview
 
 **Talker** generates speech from text by predicting audio codes, which are then decoded into audio waveforms.

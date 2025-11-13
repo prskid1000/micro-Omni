@@ -1,5 +1,19 @@
 # Complete System Analysis: How Everything Works Together
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Complete integration of all μOmni components into unified system
+- **Why**: Understanding how components interact is crucial for modification/debugging
+- **How**: Encoders → Projectors → Thinker → Talker → Codec → Vocoder
+- **Key Insight**: Unified 256-dim space enables Thinker to process all modalities uniformly
+- **Common Mistake**: Not understanding data flow between components (shape mismatches)
+- **Integration Points**: Projectors (modality alignment), Thinker (unified processing), Talker (generation)
+
+**📖 Reading Guide**:
+- **Quick Read**: 20 minutes (overview + key integration points)
+- **Standard Read**: 60 minutes (full document)
+- **Deep Dive**: 2 hours (read + trace through code)
+
 ## Overview
 
 This document provides a **comprehensive theoretical analysis** of how all μOmni components work together, explaining the **design philosophy**, **information flow**, and **value** of each integration point. All analysis is **strictly based on our actual implementation** in `omni/`, `train_*.py`, `sft_omni.py`, and `infer_chat.py`.

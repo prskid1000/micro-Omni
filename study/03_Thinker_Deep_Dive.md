@@ -1,5 +1,19 @@
 # Thinker: The Core Language Model
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Thinker is a decoder-only transformer (like GPT)
+- **Why**: Enables autoregressive text generation and multimodal understanding
+- **How**: 4 transformer blocks with RoPE, SwiGLU, RMSNorm, and pre-norm architecture
+- **Key Insight**: Pre-norm architecture enables stable deep training (100+ layers possible)
+- **Common Mistake**: Forgetting causal mask in attention (allows seeing future tokens)
+- **Shape Flow**: `[B, T] → [B, T, 256] → ... → [B, T, 5000]` (batch, tokens, vocab)
+
+**📖 Reading Guide**:
+- **Quick Read**: 5 minutes (overview only)
+- **Standard Read**: 20 minutes (full document)
+- **Deep Dive**: 60 minutes (read + code + exercises)
+
 ## What is Thinker?
 
 **Thinker** is μOmni's core language model - a decoder-only transformer that processes unified multimodal embeddings.
@@ -68,6 +82,34 @@ graph TD
 
 **Explanation**: Thinker processes unified embeddings through N transformer blocks, each containing normalization, attention, and feedforward layers, producing token predictions via the output head.
 
+## Shape Flow Through Thinker
+
+Understanding tensor shapes is crucial for debugging. Here's how data flows:
+
+```
+Input:  [1, 10]           # (batch=1, tokens=10)
+  ↓
+Embed:  [1, 10, 256]      # (batch, tokens, d_model=256)
+  ↓
+Block1: [1, 10, 256]      # Same shape (residual connections)
+  ↓
+Block2: [1, 10, 256]
+  ↓
+Block3: [1, 10, 256]
+  ↓
+Block4: [1, 10, 256]
+  ↓
+Final Norm: [1, 10, 256]
+  ↓
+Head:   [1, 10, 5000]     # (batch, tokens, vocab_size=5000)
+```
+
+**Key Points**:
+- Batch dimension stays constant: `1`
+- Sequence length stays constant: `10`
+- Hidden dimension stays constant: `256` (until output head)
+- Only output head expands to vocab size: `5000`
+
 ## Key Components
 
 ### 1. Embedding Layer
@@ -85,6 +127,28 @@ self.tok_emb = nn.Embedding(vocab_size, d_model)
 ```python
 token_id = 1234
 embedding = tok_emb(token_id)  # Shape: (256,)
+```
+
+### Try It Yourself
+
+```python
+# Run this to see embeddings in action
+import torch
+import torch.nn as nn
+
+# Create embedding layer (like Thinker)
+vocab_size = 5000
+d_model = 256
+tok_emb = nn.Embedding(vocab_size, d_model)
+
+# Test with token IDs
+token_ids = torch.tensor([[1, 1234, 5678]])  # (batch=1, seq_len=3)
+embeddings = tok_emb(token_ids)
+
+print(f"Input shape: {token_ids.shape}")
+print(f"Output shape: {embeddings.shape}")
+# Expected: Input shape: torch.Size([1, 3])
+# Expected: Output shape: torch.Size([1, 3, 256])
 ```
 
 ### 2. Transformer Blocks
@@ -144,6 +208,48 @@ def attention(query, key, value):
     # Weighted sum
     output = weights @ value
     return output
+```
+
+### Progressive Example: Understanding Attention
+
+#### Level 1: Single Token (Simplest)
+```python
+# Just one token - no attention needed
+q = torch.randn(64)  # Single query vector
+k = torch.randn(64)  # Single key vector
+score = q @ k  # Scalar similarity
+# Output: Single number
+```
+
+#### Level 2: Sequence (Basic Attention)
+```python
+# Multiple tokens - attention between them
+seq_len = 10
+q = torch.randn(seq_len, 64)  # 10 queries
+k = torch.randn(seq_len, 64)  # 10 keys
+v = torch.randn(seq_len, 64)  # 10 values
+
+scores = q @ k.T / (64 ** 0.5)  # (10, 10) similarity matrix
+weights = torch.softmax(scores, dim=-1)  # (10, 10) attention weights
+output = weights @ v  # (10, 64) weighted values
+```
+
+#### Level 3: Batched (Real Usage)
+```python
+# With batch dimension (like in Thinker)
+batch_size = 8
+seq_len = 10
+d_model = 256
+n_heads = 4
+head_dim = 64
+
+q = torch.randn(batch_size, n_heads, seq_len, head_dim)  # (8, 4, 10, 64)
+k = torch.randn(batch_size, n_heads, seq_len, head_dim)  # (8, 4, 10, 64)
+v = torch.randn(batch_size, n_heads, seq_len, head_dim)  # (8, 4, 10, 64)
+
+scores = q @ k.transpose(-2, -1) / (head_dim ** 0.5)  # (8, 4, 10, 10)
+weights = torch.softmax(scores, dim=-1)  # (8, 4, 10, 10)
+output = weights @ v  # (8, 4, 10, 64)
 ```
 
 ### Diagram 3: Self-Attention Mechanism
@@ -305,6 +411,24 @@ graph LR
 - Better generalization to longer sequences
 - Relative position encoding
 - More efficient than absolute positions
+
+### Concept Map: Attention Mechanism
+
+```
+Attention
+├── Self-Attention (same sequence)
+│   ├── Query (Q) - "What am I looking for?"
+│   ├── Key (K) - "What do I have?"
+│   └── Value (V) - "What information do I provide?"
+├── Multi-Head (parallel attention)
+│   └── 4 heads × 64 dims = 256 total
+│   └── Each head learns different patterns
+├── Causal Mask (decoder-only)
+│   └── Hide future tokens (can't see what hasn't been generated)
+└── RoPE (position encoding)
+    └── Rotate Q/K by position angle
+    └── Encodes relative positions in attention scores
+```
 
 ### 4. Output Head
 
@@ -557,6 +681,51 @@ From `configs/thinker_tiny.json`:
 }
 ```
 
+## 🎬 Code Walkthrough: Attention Forward Pass
+
+Let's trace through one attention computation step-by-step:
+
+```python
+# Step 1: Input
+x = torch.randn(1, 10, 256)  # (batch=1, seq_len=10, dim=256)
+
+# Step 2: Project to Q, K, V
+qkv = self.qkv(x)  # (1, 10, 768) = 3 × 256
+q, k, v = qkv.chunk(3, dim=-1)  # Each: (1, 10, 256)
+
+# Step 3: Reshape for multi-head
+q = q.view(1, 10, 4, 64)  # (batch, seq, heads, head_dim)
+q = q.transpose(1, 2)     # (1, 4, 10, 64) - heads first
+k = k.view(1, 10, 4, 64).transpose(1, 2)  # Same for K
+v = v.view(1, 10, 4, 64).transpose(1, 2)  # Same for V
+
+# Step 4: Apply RoPE (only to Q and K!)
+q, k = self.rope(q, k, positions)  # Rotate by position
+
+# Step 5: Compute attention scores
+scores = q @ k.transpose(-2, -1) / math.sqrt(64)  # (1, 4, 10, 10)
+
+# Step 6: Apply causal mask
+mask = torch.triu(torch.ones(10, 10), diagonal=1).bool()
+scores = scores.masked_fill(mask, float('-inf'))  # Hide future
+
+# Step 7: Softmax to get attention weights
+attn_weights = torch.softmax(scores, dim=-1)  # (1, 4, 10, 10)
+
+# Step 8: Weighted sum of values
+attn_output = attn_weights @ v  # (1, 4, 10, 64)
+
+# Step 9: Concatenate heads and project
+attn_output = attn_output.transpose(1, 2).contiguous()  # (1, 10, 4, 64)
+attn_output = attn_output.view(1, 10, 256)  # (1, 10, 256)
+output = self.out_proj(attn_output)  # (1, 10, 256)
+```
+
+**See actual code**:
+- `omni/thinker.py:45-120` - Attention implementation
+- `omni/utils.py:200-250` - RoPE implementation
+- `omni/thinker.py:150-200` - Transformer block
+
 ## Code Walkthrough
 
 Let's look at the actual implementation:
@@ -626,12 +795,94 @@ Sometimes scale residual connections:
 x = x + alpha * attention(x)  # alpha < 1.0
 ```
 
+## ⚡ Performance Tips
+
+### Memory Optimization
+- **Gradient Checkpointing**: `torch.utils.checkpoint` saves memory
+- **Reduce Batch Size**: If OOM, reduce batch_size
+- **Mixed Precision**: Use `torch.cuda.amp` for float16 training
+- **Gradient Accumulation**: Simulate larger batches without memory cost
+
+### Speed Optimization
+- **KV Caching**: Enable during inference for 10x speedup
+- **torch.compile()**: Use PyTorch 2.0+ compilation for 20-30% speedup
+- **Batch Processing**: Process multiple sequences together
+- **GPU Utilization**: Ensure GPU is fully utilized (check `nvidia-smi`)
+
+### Example: Mixed Precision Training
+```python
+from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+for batch in dataloader:
+    with autocast():
+        logits = model(batch)
+        loss = criterion(logits, targets)
+    
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+```
+
 ## Performance Tips
 
 1. **Batch Processing**: Process multiple sequences together
 2. **KV Caching**: Cache attention states during generation
 3. **Mixed Precision**: Use float16 for faster training
 4. **Gradient Accumulation**: Simulate larger batches
+
+## ⚠️ Common Pitfalls
+
+Avoid these common mistakes:
+
+1. **Forgetting Causal Mask**: Always mask future tokens in decoder
+   ```python
+   # WRONG: Can see future tokens
+   scores = q @ k.T
+   
+   # CORRECT: Mask future tokens
+   mask = torch.triu(torch.ones(T, T), diagonal=1)
+   scores = scores.masked_fill(mask.bool(), float('-inf'))
+   ```
+
+2. **Wrong Shape Dimensions**: Check (B, T, D) format consistently
+   ```python
+   # Always verify shapes match
+   assert x.shape == (batch_size, seq_len, d_model)
+   ```
+
+3. **RoPE on Wrong Tensors**: Only apply to Q and K, not V
+   ```python
+   # CORRECT: RoPE on Q and K only
+   q, k = rope(q, k, positions)
+   # WRONG: Don't apply to V
+   # v = rope(v, positions)  # NO!
+   ```
+
+4. **Gradient Issues**: Use gradient clipping with RMSNorm
+   ```python
+   torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+   ```
+
+5. **Device Mismatch**: Ensure all tensors on same device
+   ```python
+   # Check device consistency
+   assert x.device == model.device
+   ```
+
+## 🔍 Debugging Checklist: Training Not Working
+
+When training fails, check these in order:
+
+- [ ] **Data Loading**: Are batches correct shape? `print(batch.shape)`
+- [ ] **Model Forward**: Does forward pass run without errors? `model(x)`
+- [ ] **Loss Computation**: Is loss decreasing? `print(loss.item())`
+- [ ] **Gradients**: Are gradients flowing? `print(param.grad is not None)`
+- [ ] **Learning Rate**: Too high = NaN, too low = no learning
+- [ ] **Optimizer State**: Are weights updating? `print(param.data)`
+- [ ] **Device Placement**: CPU vs GPU? `print(x.device)`
+- [ ] **Causal Mask**: Is mask applied correctly? Check attention scores
+- [ ] **Shape Consistency**: Do all shapes match? `print(x.shape)`
 
 ## Debugging
 
@@ -678,6 +929,25 @@ Thinker uses **pre-norm** (normalize before transformation), not post-norm:
 - Can have gradient problems in deep networks
 - Less stable training
 - Older architecture (original Transformer)
+
+### Why Pre-Norm Instead of Post-Norm?
+
+#### Post-Norm (Original Transformer)
+```python
+# Normalize AFTER transformation
+x = x + attention(x)
+x = norm(x)  # Normalize AFTER
+```
+**Problem**: Gradient issues in deep networks (gradients can explode/vanishing)
+
+#### Pre-Norm (μOmni)
+```python
+# Normalize BEFORE transformation
+x = x + attention(norm(x))  # Normalize BEFORE
+```
+**Benefit**: Stable gradients, enables 100+ layers without gradient problems
+
+**Key Insight**: Pre-norm normalizes the input to attention/MLP, making the transformation more stable. This is why modern models (LLaMA, GPT-3) use pre-norm.
 
 #### Why These Specific Dimensions?
 
@@ -1094,6 +1364,75 @@ logits = head(x)  # (1, 3, 5000)
 **Total Model**:
 - **Parameters**: ~4M (4 blocks) + embeddings + head
 - **Total**: ~50M parameters
+
+## 📊 Component Comparison
+
+| Component | Input Shape | Output Shape | Parameters | Purpose |
+|-----------|-------------|--------------|------------|---------|
+| Token Embedding | (B, T) | (B, T, 256) | ~1.3M | Token IDs → Embeddings |
+| Transformer Block | (B, T, 256) | (B, T, 256) | ~1M | Process embeddings |
+| Output Head | (B, T, 256) | (B, T, 5000) | ~1.3M | Embeddings → Token logits |
+| **Total Thinker** | **(B, T)** | **(B, T, 5000)** | **~50M** | **Complete LLM** |
+
+## ✅ Understanding Checkpoint
+
+Before moving on, can you answer:
+
+1. **Why does Thinker use causal masking?**
+   - Answer: To prevent seeing future tokens during training (realistic for generation)
+
+2. **What's the difference between RoPE and learned position embeddings?**
+   - Answer: RoPE rotates vectors by position angle (relative), learned embeddings add absolute position vectors
+
+3. **How does SwiGLU differ from GELU?**
+   - Answer: SwiGLU uses gate mechanism (two projections, multiplicative), GELU is single projection with activation
+
+4. **Why do we need projectors for different modalities?**
+   - Answer: To align different embedding dimensions (vision=128, audio=192) to Thinker's dimension (256)
+
+5. **What's the benefit of pre-norm over post-norm?**
+   - Answer: Stable gradients, enables training very deep networks (100+ layers)
+
+## 📖 Related Papers
+
+- **Attention Is All You Need** (Vaswani et al., 2017)
+  - Original transformer architecture
+  - See: Section on Multi-Head Attention
+  
+- **LLaMA** (Touvron et al., 2023)
+  - Pre-norm, RoPE, SwiGLU (same as μOmni)
+  - See: Architecture section
+  
+- **RoFormer** (Su et al., 2021)
+  - Rotary Position Embedding (RoPE)
+  - See: RoPE implementation details
+
+## 🚀 Extension Ideas
+
+Want to experiment? Try these:
+
+1. **Add MoE**: Implement mixture of experts for larger capacity
+2. **Custom Activation**: Try different activations (GELU, ReLU, etc.)
+3. **Layer Scaling**: Add learnable scaling factors to residual connections
+4. **Flash Attention**: Implement memory-efficient attention
+5. **Quantization**: Add INT8 quantization for faster inference
+
+## ❓ Frequently Asked Questions
+
+**Q: Why is Thinker decoder-only, not encoder-decoder?**
+A: Decoder-only enables autoregressive generation (like GPT). Encoder-decoder is for tasks like translation.
+
+**Q: Can I use Thinker without other components?**
+A: Yes! Thinker can work standalone for text-only tasks.
+
+**Q: Why 4 layers? Can I add more?**
+A: 4 layers fit in 12GB VRAM. You can add more, but need more memory.
+
+**Q: What's the difference between Thinker and GPT?**
+A: Thinker is designed for multimodal (text/image/audio), GPT is text-only. Architecture is similar.
+
+**Q: How do I modify Thinker for my task?**
+A: Change vocab_size, d_model, n_layers in config. For new tasks, modify output head.
 
 ---
 

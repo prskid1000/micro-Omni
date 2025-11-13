@@ -1,5 +1,19 @@
 # Neural Networks Basics
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Neural networks learn patterns from data (like our brains)
+- **Why**: Can learn complex relationships that are hard to program manually
+- **How**: Layers of neurons → Forward pass → Loss → Backward pass → Update weights
+- **Key Insight**: Deep networks (many layers) learn hierarchical features
+- **Common Mistake**: Wrong activation function or forgetting to normalize inputs
+- **Basic Flow**: Input → Layers → Output → Loss → Gradients → Update
+
+**📖 Reading Guide**:
+- **Quick Read**: 15 minutes (overview + basics)
+- **Standard Read**: 45 minutes (full document)
+- **Deep Dive**: 2 hours (read + code + exercises)
+
 ## What is a Neural Network?
 
 A **neural network** is a computer program that learns patterns from data, inspired by how our brains work.

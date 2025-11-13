@@ -1,5 +1,19 @@
 # Vision Encoder: Understanding Images
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Converts images to embeddings Thinker can understand
+- **Why**: Images need specialized processing (patches, CLS token)
+- **How**: Image → Patches → CLS Token → Transformer → Embeddings
+- **Key Insight**: ViT treats images as sequences of patches (like text tokens)
+- **Common Mistake**: Wrong image size (must be 224×224) or forgetting CLS token
+- **Shape Flow**: `(B, 3, 224, 224)` → `(B, 197, 128)` (196 patches + 1 CLS)
+
+**📖 Reading Guide**:
+- **Quick Read**: 10 minutes (overview + architecture)
+- **Standard Read**: 30 minutes (full document)
+- **Deep Dive**: 60 minutes (read + code + experiments)
+
 ## What is the Vision Encoder?
 
 The **Vision Encoder** converts images into embeddings that Thinker can understand.

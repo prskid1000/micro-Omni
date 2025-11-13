@@ -1,5 +1,19 @@
 # Audio Encoder: Understanding Speech
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Converts audio waveforms to embeddings Thinker can understand
+- **Why**: Audio needs specialized processing (mel spectrograms, downsampling)
+- **How**: Waveform → Mel → Downsample 8x → Transformer → Embeddings
+- **Key Insight**: 8x downsampling reduces 100Hz mel to 12.5Hz frames (matches speech rate)
+- **Common Mistake**: Wrong sample rate (must be 16kHz) or forgetting downsampling
+- **Shape Flow**: `(B, 16000)` → `(B, 100, 128)` → `(B, 12, 192)` (1 second audio)
+
+**📖 Reading Guide**:
+- **Quick Read**: 10 minutes (overview + architecture)
+- **Standard Read**: 30 minutes (full document)
+- **Deep Dive**: 60 minutes (read + code + experiments)
+
 ## What is the Audio Encoder?
 
 The **Audio Encoder** converts raw audio waveforms into embeddings that Thinker can understand.

@@ -1,5 +1,19 @@
 # Inference Guide: Using Trained Models
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Using trained models to make predictions (no training, just forward pass)
+- **Why**: Generate text/speech from inputs after model is trained
+- **How**: Load checkpoint → `model.eval()` → Forward pass → Decode output
+- **Key Insight**: Always use `model.eval()` for deterministic, reproducible results
+- **Common Mistake**: Forgetting `eval()` mode (uses dropout, non-deterministic)
+- **Speed Tip**: Enable KV caching for 10x faster generation
+
+**📖 Reading Guide**:
+- **Quick Read**: 10 minutes (basic usage)
+- **Standard Read**: 30 minutes (full document)
+- **Deep Dive**: 60 minutes (read + modify inference code)
+
 ## What is Inference?
 
 **Inference** is using a trained model to make predictions on new data.
@@ -81,6 +95,60 @@ aud.eval()
 - Can use larger batches
 - Can process longer sequences
 - More efficient GPU usage
+
+## ⚠️ Common Pitfalls
+
+1. **Forgetting `model.eval()`**: Always use eval mode for inference
+   ```python
+   # WRONG: Training mode (uses dropout, non-deterministic)
+   model.train()
+   output = model(input)  # Random dropout!
+   
+   # CORRECT: Evaluation mode (deterministic)
+   model.eval()
+   with torch.no_grad():
+       output = model(input)  # No dropout, deterministic
+   ```
+
+2. **Gradient Computation**: Don't compute gradients during inference
+   ```python
+   # WRONG: Computes gradients (wastes memory)
+   output = model(input)
+   
+   # CORRECT: No gradients
+   with torch.no_grad():
+       output = model(input)
+   ```
+
+3. **Wrong Checkpoint Path**: Verify checkpoint exists and is correct
+   ```python
+   # Check checkpoint
+   assert os.path.exists(checkpoint_path), "Checkpoint not found!"
+   ```
+
+4. **Device Mismatch**: Ensure model and input on same device
+   ```python
+   # Check device
+   assert next(model.parameters()).device == input.device
+   ```
+
+5. **KV Cache Not Enabled**: Enable for faster generation
+   ```python
+   # Enable KV cache for autoregressive generation
+   output, kv_cache = model.generate(input, use_cache=True)
+   ```
+
+## 🔍 Debugging Checklist: Inference Issues
+
+When inference fails, check these:
+
+- [ ] **Model Mode**: Is model in eval mode? `model.eval()`
+- [ ] **Gradients**: Are gradients disabled? `torch.no_grad()`
+- [ ] **Checkpoint**: Is checkpoint loaded correctly?
+- [ ] **Input Shape**: Does input match expected shape?
+- [ ] **Device**: Are model and input on same device?
+- [ ] **Tokenization**: Is input tokenized correctly?
+- [ ] **Output Decoding**: Is output decoded correctly?
 
 ## Basic Usage
 

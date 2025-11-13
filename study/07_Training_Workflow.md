@@ -1,5 +1,19 @@
 # Training Workflow
 
+## 🎯 Key Takeaways (TL;DR)
+
+- **What**: Staged training - train components separately, then combine
+- **Why**: Fits in 12GB VRAM, easier to debug, better specialization
+- **How**: 5 stages: Thinker → Audio → Vision → Talker → Multimodal SFT
+- **Key Insight**: Each stage builds on previous knowledge (curriculum learning)
+- **Common Mistake**: Skipping stages or training end-to-end (runs out of memory)
+- **Time Estimate**: Stage A: 2-4 hours, Full pipeline: 8-12 hours
+
+**📖 Reading Guide**:
+- **Quick Read**: 15 minutes (overview + stages)
+- **Standard Read**: 45 minutes (full document)
+- **Deep Dive**: 2 hours (read + run training scripts)
+
 ## Overview
 
 μOmni uses a **staged training approach** - train components separately, then combine them. This document explains the **theoretical foundations** behind our specific training implementation, based on the actual code in `train_*.py` files.
@@ -724,6 +738,58 @@ if step % val_freq == 0 and step > 0:
 3. **Gradient Norm**: Should be stable
 4. **Validation Loss**: Should track training loss
 
+## ⚠️ Common Pitfalls
+
+1. **Skipping Training Stages**: Don't skip stages - each builds on previous
+   ```python
+   # WRONG: Training everything at once
+   train_all_components()  # Runs out of memory!
+   
+   # CORRECT: Stage by stage
+   train_thinker()  # Stage A
+   train_audio_encoder()  # Stage B
+   # ... etc
+   ```
+
+2. **Wrong Learning Rate**: Too high = NaN, too low = no learning
+   ```python
+   # Check your learning rate
+   print(f"LR: {optimizer.param_groups[0]['lr']}")
+   # Typical: 1e-4 to 1e-3 for transformers
+   ```
+
+3. **Forgetting Validation**: Always validate to check overfitting
+   ```python
+   # Don't skip validation!
+   if step % val_freq == 0:
+       validate(model, val_loader)
+   ```
+
+4. **Device Mismatch**: Ensure model and data on same device
+   ```python
+   # Check device
+   assert next(model.parameters()).device == batch.device
+   ```
+
+5. **Gradient Issues**: Use gradient clipping for stability
+   ```python
+   torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+   ```
+
+## 🔍 Debugging Checklist: Training Issues
+
+When training fails, check these:
+
+- [ ] **Stage Order**: Are you training stages in correct order?
+- [ ] **Checkpoint Loading**: Are you loading previous stage's checkpoint?
+- [ ] **Data Loading**: Are batches correct shape? `print(batch.shape)`
+- [ ] **Loss Values**: Is loss reasonable? `print(loss.item())`
+- [ ] **Learning Rate**: Is LR appropriate? Check scheduler
+- [ ] **Gradients**: Are gradients flowing? `print(param.grad is not None)`
+- [ ] **Memory**: Are you running out of VRAM? Reduce batch size
+- [ ] **Validation**: Is validation loss decreasing?
+- [ ] **Device**: CPU vs GPU? `print(next(model.parameters()).device)`
+
 ### Common Issues
 
 1. **Loss not decreasing**:
@@ -740,6 +806,25 @@ if step % val_freq == 0 and step > 0:
    - More data augmentation
    - Increase dropout
    - Early stopping
+
+## ✅ Understanding Checkpoint
+
+Before moving on, can you answer:
+
+1. **Why staged training instead of end-to-end?**
+   - Answer: Fits in 12GB VRAM, easier to debug, better specialization
+
+2. **What's the order of training stages?**
+   - Answer: Thinker → Audio → Vision → Talker → Multimodal SFT
+
+3. **Why validate periodically?**
+   - Answer: Check overfitting, save best model, monitor generalization
+
+4. **What happens if you skip a stage?**
+   - Answer: Later stages may fail or perform poorly (missing prerequisites)
+
+5. **How do you know when a stage is done?**
+   - Answer: Loss plateaus, validation loss stops improving, or max steps reached
 
 ## Training Time Estimates
 
