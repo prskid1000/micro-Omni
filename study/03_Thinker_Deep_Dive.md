@@ -438,11 +438,11 @@ Predict: `"on"` (next token)
 ```mermaid
 graph TD
     Text[Training Text] --> Tokenize[Tokenize]
-    Tokenize --> Input[Input Tokens<br/>(BOS, The, cat, sat)]
+    Tokenize --> Input["Input Tokens<br/>BOS, The, cat, sat"]
     Input --> Thinker[Thinker Forward]
-    Thinker --> Logits[Logits<br/>vocab_size]
+    Thinker --> Logits["Logits<br/>vocab_size"]
     Logits --> Loss[Cross-Entropy Loss]
-    Target[Target Tokens<br/>(The, cat, sat, on)] --> Loss
+    Target["Target Tokens<br/>The, cat, sat, on"] --> Loss
     Loss --> Backward[Backward Pass]
     Backward --> Update[Update Weights]
     Update --> Next[Next Batch]
