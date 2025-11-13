@@ -121,7 +121,7 @@ def main(cfg):
             
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                logger.train_step(step, float(loss), current_lr, epoch)
+                logger.train_step(step, float(loss.detach()), current_lr, epoch)
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
@@ -143,7 +143,7 @@ def main(cfg):
                         # Validate validation loss
                         try:
                             validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                            val_loss_sum += float(val_loss)
+                            val_loss_sum += float(val_loss.detach())
                             val_count += 1
                         except RuntimeError as e:
                             logger.warning(f"Step {step}: Invalid validation loss: {e}")
@@ -183,7 +183,7 @@ def main(cfg):
                 # Validate validation loss
                 try:
                     validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                    val_loss_sum += float(val_loss)
+                    val_loss_sum += float(val_loss.detach())
                     val_count += 1
                 except RuntimeError as e:
                     logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")

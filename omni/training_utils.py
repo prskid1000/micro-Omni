@@ -104,7 +104,7 @@ def validate_loss(loss, min_loss=-1e6, max_loss=1e6, raise_on_error=True):
         RuntimeError: If raise_on_error=True and loss is invalid
     """
     if isinstance(loss, torch.Tensor):
-        loss_val = loss.item()
+        loss_val = loss.detach().item()
     else:
         loss_val = float(loss)
     
