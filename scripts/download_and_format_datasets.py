@@ -24,7 +24,7 @@ def load_state():
         with open(STATE_FILE, 'r') as f:
             return json.load(f)
     return {
-        "dialogstudio": {"downloaded": False, "converted": False},
+        "dialogstudio": {"downloaded": False, "converted": False, "sub_datasets_loaded": 0, "total_sub_datasets": 86, "conversations_count": 0},
         "coco": {"images_downloaded": False, "annotations_downloaded": False, "converted": False},
         "librispeech": {"downloaded": False, "converted": False}
     }
@@ -72,44 +72,35 @@ def download_file(url, output_path, resume=True):
         return False
 
 def download_dialogstudio(state):
-    """Download DialogStudio from HuggingFace"""
+    """Download DialogStudio from HuggingFace (mark as downloaded, actual conversion happens in convert)"""
     print("\n" + "="*60)
-    print("Downloading DialogStudio (Text Data)")
+    print("Preparing DialogStudio Download")
     print("="*60)
     
     if state["dialogstudio"]["downloaded"]:
-        print("DialogStudio already downloaded, skipping...")
+        print("DialogStudio download marked as complete, skipping...")
         return True
     
     try:
         from datasets import load_dataset
-        print("Loading DialogStudio from HuggingFace...")
+        print("Note: DialogStudio will be downloaded during conversion step")
+        print("This is because DialogStudio has a complex structure that's better handled directly")
         
-        output_dir = "data/dialogstudio_raw"
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Load dataset (this downloads it)
-        print("Downloading dataset (this may take a while)...")
-        ds = load_dataset('Salesforce/dialogstudio', trust_remote_code=True)
-        
-        # Save to disk for later use
-        ds.save_to_disk(output_dir)
-        
+        # Just mark as downloaded - actual download happens in convert step
         state["dialogstudio"]["downloaded"] = True
         save_state(state)
-        print("✓ DialogStudio downloaded successfully")
         return True
     except ImportError:
         print("ERROR: 'datasets' package not installed. Install with: pip install datasets")
         return False
     except Exception as e:
-        print(f"ERROR downloading DialogStudio: {e}")
+        print(f"ERROR: {e}")
         return False
 
-def convert_dialogstudio(state):
-    """Convert DialogStudio to text format"""
+def convert_dialogstudio(state, load_all_sub_datasets=True):
+    """Download and convert DialogStudio to text format"""
     print("\n" + "="*60)
-    print("Converting DialogStudio to Text Format")
+    print("Downloading and Converting DialogStudio to Text Format")
     print("="*60)
     
     if state["dialogstudio"]["converted"]:
@@ -117,58 +108,282 @@ def convert_dialogstudio(state):
         return True
     
     try:
-        from datasets import load_from_disk
-        
-        input_dir = "data/dialogstudio_raw"
-        if not os.path.exists(input_dir):
-            print(f"ERROR: DialogStudio not downloaded. Run download first.")
-            return False
-        
-        print("Loading DialogStudio from disk...")
-        ds = load_from_disk(input_dir)
+        from datasets import load_dataset
         
         output_file = "data/text/dialogstudio.txt"
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        print("Converting conversations to text format...")
+        print("Loading DialogStudio from HuggingFace (this downloads it)...")
+        print("This may take 10-30 minutes depending on your connection...")
+        print("\nNOTE: DialogStudio is a gated dataset.")
+        print("You need to:")
+        print("1. Accept the license at: https://huggingface.co/datasets/Salesforce/dialogstudio")
+        print("2. Login to HuggingFace: huggingface-cli login")
+        print("   Or set HF_TOKEN environment variable")
+        
+        # Check for authentication
+        try:
+            from huggingface_hub import whoami
+            user = whoami()
+            if user:
+                print(f"✓ Authenticated as: {user.get('name', 'unknown')}")
+        except Exception:
+            print("⚠ WARNING: Not authenticated with HuggingFace")
+            print("  Run: huggingface-cli login")
+            print("  Or set HF_TOKEN environment variable")
+        
+        # Load dataset directly (downloads if not cached)
+        # DialogStudio contains 86 sub-datasets
+        # Note: DialogStudio uses a loading script which requires datasets <3.0.0
+        # and trust_remote_code=True to execute the custom loading script
+        try:
+            if load_all_sub_datasets:
+                from datasets import get_dataset_config_names
+                
+                print("Getting list of DialogStudio sub-datasets...")
+                config_names = get_dataset_config_names('Salesforce/dialogstudio')
+                print(f"Found {len(config_names)} sub-datasets")
+                print("⚠ WARNING: Loading all sub-datasets will take 30-60 minutes and download ~10GB")
+                print("This will take a while - loading all sub-datasets...")
+                
+                # Load all sub-datasets and combine them
+                all_datasets = []
+                for i, config_name in enumerate(tqdm(config_names, desc="Loading sub-datasets")):
+                    try:
+                        ds_config = load_dataset('Salesforce/dialogstudio', config_name, trust_remote_code=True)
+                        all_datasets.append((config_name, ds_config))
+                    except Exception as e:
+                        print(f"  ⚠ Skipping {config_name}: {e}")
+                        continue
+                
+                if not all_datasets:
+                    raise RuntimeError("Failed to load any DialogStudio sub-datasets")
+                
+                print(f"\n✓ Loaded {len(all_datasets)} out of {len(config_names)} sub-datasets")
+                if len(all_datasets) < len(config_names):
+                    print(f"⚠ WARNING: {len(config_names) - len(all_datasets)} sub-datasets failed to load or were skipped")
+                
+                # Store metadata in state
+                state["dialogstudio"]["sub_datasets_loaded"] = len(all_datasets)
+                state["dialogstudio"]["total_sub_datasets"] = len(config_names)
+                save_state(state)
+                
+                # Store as a list of (name, dataset) tuples for processing
+                ds = all_datasets
+            else:
+                # Load combined dataset (faster, but may be a sample)
+                # The "combined" dataset is HuggingFace's default view, which typically contains
+                # only a subset or sample of the full 86 sub-datasets, not all of them.
+                # This is why it's smaller - it doesn't include all the individual dialog datasets.
+                print("Loading DialogStudio (combined dataset)...")
+                print("Note: The combined dataset is smaller because it only includes a subset")
+                print("      of the 86 sub-datasets, not all of them. For full training data,")
+                print("      use the default (loads all 86 sub-datasets, ~10GB, 30-60 min).")
+                ds = load_dataset('Salesforce/dialogstudio', trust_remote_code=True)
+                
+                # Mark as combined dataset in state
+                state["dialogstudio"]["sub_datasets_loaded"] = 0  # 0 means combined mode
+                state["dialogstudio"]["total_sub_datasets"] = 1
+                save_state(state)
+        except Exception as load_error:
+            error_str = str(load_error).lower()
+            
+            # Check for trust_remote_code requirement
+            if "trust_remote_code" in error_str:
+                print("\n" + "="*60)
+                print("TRUST_REMOTE_CODE REQUIRED")
+                print("="*60)
+                print("DialogStudio requires trust_remote_code=True to execute its custom loading script.")
+                print("This should already be set in the script, but if you see this error,")
+                print("please report it as a bug.")
+                print("="*60)
+                raise RuntimeError(
+                    "DialogStudio requires trust_remote_code=True. "
+                    "This should be handled automatically by the script."
+                ) from load_error
+            
+            # Check for loading script compatibility issue
+            elif "dataset scripts are no longer supported" in error_str or "loading script" in error_str:
+                print("\n" + "="*60)
+                print("COMPATIBILITY ISSUE DETECTED")
+                print("="*60)
+                print("DialogStudio requires a datasets library version that supports loading scripts.")
+                print("Your current version doesn't support this.")
+                print("\nSOLUTION: Downgrade datasets library")
+                print("\nRun this command:")
+                print("  pip install 'datasets<3.0.0'")
+                print("\nThen run this script again.")
+                print("\nNote: This is a known issue with DialogStudio and newer datasets versions.")
+                print("="*60)
+                raise RuntimeError(
+                    "DialogStudio requires datasets<3.0.0. "
+                    "Please run: pip install 'datasets<3.0.0'"
+                ) from load_error
+            
+            # Check for authentication error
+            elif "gated" in error_str or "authenticated" in error_str:
+                print("\n" + "="*60)
+                print("AUTHENTICATION REQUIRED")
+                print("="*60)
+                print("DialogStudio requires HuggingFace authentication.")
+                print("\nSteps to fix:")
+                print("1. Visit: https://huggingface.co/datasets/Salesforce/dialogstudio")
+                print("2. Accept the dataset license")
+                print("3. Run: huggingface-cli login")
+                print("   Or set environment variable: HF_TOKEN=your_token_here")
+                print("="*60)
+                raise
+            else:
+                raise
+        
+        print("\nConverting conversations to text format...")
+        
         count = 0
+        total_sub_datasets = len(ds) if isinstance(ds, list) else 1
+        
         with open(output_file, 'w', encoding='utf-8') as f:
-            for split_name in ['train', 'validation', 'test']:
-                if split_name in ds:
-                    print(f"Processing {split_name} split...")
-                    for item in tqdm(ds[split_name], desc=f"Converting {split_name}"):
-                        # Extract conversation text
-                        if 'conversations' in item:
-                            conv_text = ' '.join([
-                                turn.get('content', '') or turn.get('value', '')
-                                for turn in item['conversations']
-                                if isinstance(turn, dict)
-                            ])
-                            if conv_text.strip():
-                                f.write(conv_text.strip() + '\n')
-                                count += 1
-                        elif 'instruction' in item or 'input' in item or 'output' in item:
-                            # Alternative format
-                            parts = []
-                            if 'instruction' in item:
-                                parts.append(str(item['instruction']))
-                            if 'input' in item:
-                                parts.append(str(item['input']))
-                            if 'output' in item:
-                                parts.append(str(item['output']))
-                            if parts:
-                                f.write(' '.join(parts).strip() + '\n')
-                                count += 1
+            # Process all sub-datasets
+            if isinstance(ds, list):
+                # ds is a list of (config_name, dataset) tuples
+                for config_name, dataset in ds:
+                    print(f"\nProcessing sub-dataset: {config_name}")
+                    
+                    # Each dataset is a DatasetDict with train/validation/test splits
+                    if hasattr(dataset, 'keys') and callable(getattr(dataset, 'keys', None)):
+                        splits = list(dataset.keys())
+                        for split_name in splits:
+                            split_data = dataset[split_name]
+                            split_count = len(split_data)
+                            print(f"  Processing {split_name} split ({split_count} items)...")
+                            for item in tqdm(split_data, desc=f"    Converting", leave=False, total=split_count):
+                                text = extract_text_from_item(item)
+                                if text:
+                                    f.write(text + '\n')
+                                    count += 1
+                    else:
+                        # Fallback: try direct iteration
+                        try:
+                            total = len(dataset)
+                            print(f"  Processing all items ({total} items)...")
+                            for item in tqdm(dataset, desc=f"    Converting", total=total):
+                                text = extract_text_from_item(item)
+                                if text:
+                                    f.write(text + '\n')
+                                    count += 1
+                        except Exception as e:
+                            print(f"  ⚠ Error processing {config_name}: {e}")
+                            continue
+            else:
+                # Fallback: original logic for single dataset
+                print(f"Dataset type: {type(ds)}")
+                print(f"Dataset keys: {list(ds.keys()) if hasattr(ds, 'keys') else 'N/A'}")
+                
+                for dataset_name, dataset in ds.items():
+                    print(f"\nProcessing dataset: {dataset_name}")
+                    
+                    if hasattr(dataset, 'keys') and callable(getattr(dataset, 'keys', None)):
+                        splits = list(dataset.keys())
+                        for split_name in splits:
+                            split_data = dataset[split_name]
+                            print(f"  Processing split: {split_name} ({len(split_data)} items)...")
+                            for item in tqdm(split_data, desc=f"    Converting", leave=False):
+                                text = extract_text_from_item(item)
+                                if text:
+                                    f.write(text + '\n')
+                                    count += 1
+                    else:
+                        # Try direct iteration
+                        try:
+                            total = len(dataset)
+                            print(f"  Processing all items ({total} items)...")
+                            for item in tqdm(dataset, desc=f"    Converting", total=total):
+                                text = extract_text_from_item(item)
+                                if text:
+                                    f.write(text + '\n')
+                                    count += 1
+                        except Exception as e:
+                            print(f"  ERROR: {e}")
+                            continue
         
         state["dialogstudio"]["converted"] = True
+        state["dialogstudio"]["conversations_count"] = count
         save_state(state)
-        print(f"✓ Converted {count} conversations to {output_file}")
+        
+        # Print summary
+        print(f"\n✓ Converted {count:,} conversations to {output_file}")
+        if isinstance(ds, list):
+            print(f"   Processed {len(ds)} sub-datasets")
+            if state["dialogstudio"].get("total_sub_datasets", 0) > len(ds):
+                print(f"   ⚠ WARNING: Only {len(ds)}/{state['dialogstudio'].get('total_sub_datasets', 86)} sub-datasets were processed")
+        else:
+            print(f"   Used combined dataset (not all sub-datasets)")
+        
         return True
+    except ImportError:
+        print("ERROR: 'datasets' package not installed. Install with: pip install datasets")
+        return False
     except Exception as e:
         print(f"ERROR converting DialogStudio: {e}")
         import traceback
         traceback.print_exc()
         return False
+
+def extract_text_from_item(item):
+    """Extract text from a DialogStudio item (handles various formats)"""
+    if isinstance(item, dict):
+        # DialogStudio format: 'log' field contains conversation turns
+        if 'log' in item and isinstance(item['log'], list):
+            conv_parts = []
+            for turn in item['log']:
+                if isinstance(turn, dict):
+                    # Extract user utterance
+                    user_utt = turn.get('user utterance') or turn.get('user_utterance') or turn.get('user')
+                    if user_utt:
+                        conv_parts.append(str(user_utt).strip())
+                    
+                    # Extract system response
+                    sys_resp = turn.get('system response') or turn.get('system_response') or turn.get('system') or turn.get('assistant')
+                    if sys_resp:
+                        conv_parts.append(str(sys_resp).strip())
+            
+            if conv_parts:
+                return ' '.join(conv_parts)
+        
+        # Try conversations format (other datasets)
+        if 'conversations' in item:
+            conv_text = ' '.join([
+                str(turn.get('content', '')) or str(turn.get('value', '')) or str(turn.get('text', ''))
+                for turn in item['conversations']
+                if isinstance(turn, dict) and (turn.get('content') or turn.get('value') or turn.get('text'))
+            ])
+            if conv_text.strip():
+                return conv_text.strip()
+        
+        # Try instruction/input/output format
+        parts = []
+        for key in ['instruction', 'input', 'output', 'query', 'response', 'context', 'answer', 'prompt']:
+            if key in item and item[key]:
+                val = item[key]
+                if isinstance(val, str):
+                    parts.append(val.strip())
+                elif isinstance(val, list):
+                    # If it's a list, try to extract text from it
+                    for elem in val:
+                        if isinstance(elem, str) and elem.strip():
+                            parts.append(elem.strip())
+        
+        if parts:
+            return ' '.join(parts)
+        
+        # Try to extract all string values (fallback)
+        text_parts = []
+        for key, value in item.items():
+            if isinstance(value, str) and value.strip() and key not in ['id', 'dataset', 'split', 'original dialog id', 'new dialog id', 'dialog index']:
+                text_parts.append(value.strip())
+        if text_parts:
+            return ' '.join(text_parts)
+    
+    return None
 
 def download_coco(state):
     """Download COCO 2017 dataset"""
@@ -462,6 +677,8 @@ def main():
                        help="Skip conversion, only download")
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download/convert everything")
+    parser.add_argument("--dialogstudio-combined", action="store_true",
+                       help="Load combined DialogStudio dataset instead of all 86 sub-datasets (faster but smaller)")
     
     args = parser.parse_args()
     
@@ -469,7 +686,7 @@ def main():
     if args.reset:
         print("Resetting state...")
         state = {
-            "dialogstudio": {"downloaded": False, "converted": False},
+            "dialogstudio": {"downloaded": False, "converted": False, "sub_datasets_loaded": 0, "total_sub_datasets": 86, "conversations_count": 0},
             "coco": {"images_downloaded": False, "val_images_downloaded": False, "annotations_downloaded": False, "converted": False},
             "librispeech": {"downloaded": False, "converted": False}
         }
@@ -491,7 +708,7 @@ def main():
         if not args.skip_download:
             success = download_dialogstudio(state) and success
         if not args.skip_convert:
-            success = convert_dialogstudio(state) and success
+            success = convert_dialogstudio(state, load_all_sub_datasets=not args.dialogstudio_combined) and success
     
     # Image dataset (COCO)
     if args.dataset in ["all", "images"]:

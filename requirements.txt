@@ -15,9 +15,16 @@ soundfile>=0.12.0
 # NLP & Tokenization
 sentencepiece>=0.1.99
 
+# Dataset handling
+# NOTE: DialogStudio requires datasets<3.0.0 (uses loading scripts not supported in newer versions)
+# If you don't need DialogStudio, you can use datasets>=3.0.0
+datasets<3.0.0
+huggingface_hub  # Required for HuggingFace dataset authentication
+
 # Utilities
 tqdm>=4.64.0
 einops>=0.6.0
+requests  # For downloading datasets
 
 # Video processing
 # Note: PyAV requires ffmpeg to be installed on the system

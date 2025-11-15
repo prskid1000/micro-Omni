@@ -39,23 +39,53 @@ python scripts/download_and_format_datasets.py --dataset audio
 
 ### 1. Text/Conversational Data: DialogStudio (~10 GB)
 
+**⚠️ IMPORTANT: DialogStudio requires special setup**
+
+**Prerequisites**:
+1. **Datasets library version**: DialogStudio uses loading scripts that require `datasets<3.0.0`
+   ```bash
+   pip install 'datasets<3.0.0'
+   ```
+   This is already specified in `requirements.txt`, but if you installed a newer version, downgrade it.
+
+2. **Accept the license**: Visit https://huggingface.co/datasets/Salesforce/dialogstudio and accept the dataset license
+
+3. **Authenticate with HuggingFace**:
+   ```bash
+   # Option 1: Login via CLI (recommended)
+   huggingface-cli login
+   # Enter your HuggingFace token when prompted
+   
+   # Option 2: Set environment variable
+   export HF_TOKEN=your_token_here  # Linux/Mac
+   set HF_TOKEN=your_token_here     # Windows
+   ```
+
 **Download Options**:
-- **HuggingFace**: `datasets/Salesforce/dialogstudio` (recommended)
-- **GitHub**: https://github.com/Salesforce/DialogStudio
+- **HuggingFace**: `datasets/Salesforce/dialogstudio` (recommended, requires authentication)
+- **GitHub**: https://github.com/Salesforce/DialogStudio (alternative, no auth needed)
 
-**Steps**:
+**Steps** (automated script handles this):
 ```bash
-# Using HuggingFace datasets (recommended)
-pip install datasets
-python -c "from datasets import load_dataset; ds = load_dataset('Salesforce/dialogstudio'); ds.save_to_disk('data/dialogstudio')"
+# The automated script will:
+# 1. Check for authentication
+# 2. Download DialogStudio from HuggingFace
+# 3. Convert to text format automatically
+python scripts/download_and_format_datasets.py --dataset text
+```
 
-# Or download from GitHub and extract
+**Manual Steps** (if needed):
+```bash
+# Using HuggingFace datasets (requires authentication and trust_remote_code)
+pip install 'datasets<3.0.0' huggingface_hub
+huggingface-cli login  # Authenticate first!
+python -c "from datasets import load_dataset; ds = load_dataset('Salesforce/dialogstudio', trust_remote_code=True); ..."
 ```
 
 **Format Conversion**:
 - DialogStudio provides multiple dialogue datasets
-- You'll need to convert to your text format (one conversation per line)
-- See conversion script below
+- The automated script converts to text format (one conversation per line)
+- Manual conversion: See `scripts/download_and_format_datasets.py` for reference
 
 ### 2. Image-Caption Data: COCO 2017 (~25 GB)
 
@@ -331,8 +361,23 @@ ls -lh data/audio/asr.csv
 
 **Issue**: "HuggingFace datasets download fails"
 - Check internet connection
-- Try: `pip install --upgrade datasets`
-- May need to login: `huggingface-cli login` (if dataset requires authentication)
+- Try: `pip install --upgrade datasets huggingface_hub`
+- **DialogStudio requires authentication**: 
+  - Visit https://huggingface.co/datasets/Salesforce/dialogstudio
+  - Accept the license
+  - Run: `huggingface-cli login`
+  - Or set: `export HF_TOKEN=your_token_here`
+
+**Issue**: "Dataset 'Salesforce/dialogstudio' is a gated dataset"
+- This means you haven't authenticated or accepted the license
+- Follow the authentication steps above
+- The script will check authentication and provide clear error messages
+
+**Issue**: "Dataset scripts are no longer supported"
+- This means your `datasets` library version is too new (>=3.0.0)
+- DialogStudio requires `datasets<3.0.0` to work with loading scripts
+- Solution: `pip install 'datasets<3.0.0'`
+- This is already in `requirements.txt`, so reinstalling from requirements.txt will fix it
 
 **Issue**: "COCO download is slow"
 - COCO files are large (18GB+ for train images)
