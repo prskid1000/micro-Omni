@@ -259,18 +259,31 @@ print(f"Total tokens: {total_tokens}")
 ## Exercise 8: Checkpoint Loading
 
 ### Task
-Load and inspect a trained model.
+Load and inspect a trained model checkpoint (with full state: model, optimizer, scheduler, etc.).
 
 ### Code
 ```python
 import torch
 
-# Load checkpoint
-checkpoint = torch.load("checkpoints/thinker_tiny/thinker.pt", map_location="cpu")
+# Load checkpoint (new format includes full training state)
+checkpoint = torch.load("checkpoints/thinker_tiny/thinker_best.pt", map_location="cpu")
 
-# Inspect
-print(f"Checkpoint keys: {list(checkpoint.keys())[:5]}")  # First 5 keys
-print(f"Number of parameters: {sum(p.numel() for p in checkpoint.values())}")
+# Inspect checkpoint structure
+print(f"Checkpoint keys: {list(checkpoint.keys())}")
+# Expected: ['model', 'optimizer', 'scheduler', 'scaler', 'step', 'best_val_loss']
+
+# Check if it's new format (dict) or legacy (just model weights)
+if isinstance(checkpoint, dict) and "model" in checkpoint:
+    print("New checkpoint format detected!")
+    model_state = checkpoint["model"]
+    print(f"Step: {checkpoint.get('step', 'N/A')}")
+    print(f"Best validation loss: {checkpoint.get('best_val_loss', 'N/A')}")
+    print(f"Has optimizer state: {'optimizer' in checkpoint}")
+    print(f"Has scheduler state: {'scheduler' in checkpoint}")
+    print(f"Has scaler state: {'scaler' in checkpoint}")
+else:
+    print("Legacy checkpoint format (model weights only)")
+    model_state = checkpoint
 
 # Load into model
 from omni.thinker import ThinkerLM
@@ -284,13 +297,14 @@ model = ThinkerLM(
     rope_theta=10000,
     ctx_len=512
 )
-model.load_state_dict(checkpoint)
+model.load_state_dict(model_state)
 print("Model loaded successfully!")
 ```
 
 ### Questions
 1. How many parameters does the model have?
 2. What happens if model architecture doesn't match checkpoint?
+3. What information is stored in the new checkpoint format?
 
 ## Exercise 9: Inference Script
 

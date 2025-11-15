@@ -35,10 +35,11 @@ study/
 
 ### μOmni Components
 - **Thinker**: Core language model
-- **Audio Encoder**: Processes speech
-- **Vision Encoder**: Processes images
+- **Audio Encoder**: Processes speech (ASR with 98-char vocabulary)
+- **Vision Encoder**: Processes images (contrastive learning, CLIP-style)
 - **Talker**: Generates speech
 - **RVQ Codec**: Audio quantization
+- **Vocoder**: Improved Griffin-Lim (mel filterbank inversion)
 - **Projectors**: Align modalities
 
 ## Training Commands
@@ -97,21 +98,29 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 - `d_ff`: Feedforward dimension (1024)
 
 ### Training
-- `max_steps`: Training steps (1000)
+- `max_steps`: Training steps (1000-5000)
 - `batch_size`: Examples per batch (8)
+- `gradient_accumulation_steps`: Accumulate gradients (1)
 - `lr`: Learning rate (0.0003)
 - `warmup_steps`: Warmup period (10)
+- `use_amp`: Mixed precision training (true)
+- `checkpoint_freq`: Save checkpoint every N steps (500)
 
 ### Audio
 - `sample_rate`: Audio sample rate (16000)
 - `mel_bins`: Mel spectrogram bins (128)
 - `downsample_time`: Temporal reduction (8x)
 - `frame_rate`: Target frame rate (12.5 Hz)
+- `ctc_vocab_size`: Character vocabulary size (98: printable ASCII + special tokens)
+- `max_text_len`: Maximum text length (64 characters)
 
 ### Vision
 - `img_size`: Image size (224)
 - `patch`: Patch size (16)
 - `n_patches`: Patches per image (196)
+- `embed_dim`: Contrastive embedding dimension (128)
+- `vocab_size`: Caption vocabulary size (10000)
+- `temperature`: Contrastive loss temperature (0.07)
 
 ## Data Formats
 
@@ -132,6 +141,31 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 - Location: `data/audio/wav/`
 - Metadata: `data/audio/asr.csv`, `data/audio/tts.csv`
 
+## Training Features
+
+### Automatic Resume
+- **Checkpoint Detection**: Automatically finds latest checkpoint on startup
+- **Full State Recovery**: Loads model, optimizer, scheduler, scaler, step, best_val_loss
+- **Checkpoint Frequency**: Saves every `checkpoint_freq` steps (default: 500)
+- **Best Model**: Saves `{model}_best.pt` when validation improves
+- **Resume Behavior**: Skips already-processed batches, continues from exact step
+
+### Mixed Precision (AMP)
+- **Enabled by Default**: All training scripts use FP16 forward passes
+- **Speedup**: 1.5-2x faster training and inference
+- **Memory**: ~50% less VRAM usage
+- **Gradient Scaling**: Automatic gradient scaling prevents underflow
+
+### Gradient Accumulation
+- **Configurable**: Set `gradient_accumulation_steps` in config
+- **Effective Batch Size**: `batch_size × gradient_accumulation_steps`
+- **Memory Efficient**: Train with larger effective batches on limited VRAM
+
+### Evaluation Metrics
+- **Text**: Perplexity (exponential of cross-entropy loss)
+- **Audio**: Word Error Rate (WER) for ASR evaluation
+- **Vision**: Contrastive loss (InfoNCE) for image-caption alignment
+
 ## 🔒 Numerical Stability & Safety Features
 
 ### Automatic Checks
@@ -144,6 +178,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 - **Gradient Explosion Detection**: Checks gradient norms before clipping
   - Default threshold: 100.0 (configurable)
   - Automatically skips exploded batches
+  - Proper AMP handling: unscales gradients before checking
 
 ### Utilities
 - `validate_loss(loss, min_loss=-1e6, max_loss=1e6)` - Validate loss values
@@ -154,20 +189,21 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 
 ### Training
 - **Loss not decreasing**: Check learning rate, data loading
-- **Out of memory**: Reduce batch size
+- **Out of memory**: Reduce batch size or increase `gradient_accumulation_steps`
+- **Training interrupted**: Automatically resumes from latest checkpoint
 - **NaN values**: 
   - **Automatic detection**: Models check for NaN/Inf automatically
   - **Loss validation**: Training scripts validate losses
   - **Solutions**: Check learning rate, gradient clipping, data preprocessing
 - **Gradient explosion**: 
-  - **Automatic detection**: Training scripts check gradient norms
+  - **Automatic detection**: Training scripts check gradient norms (after AMP unscaling)
   - **Recovery**: Exploded batches are automatically skipped
   - **Solutions**: Reduce learning rate, increase gradient clipping threshold
 
 ### Inference
-- **Model not found**: Check checkpoint path
-- **Poor quality**: Model needs more training
-- **Slow generation**: Use GPU, enable KV cache
+- **Model not found**: Check checkpoint path (look for `{model}_best.pt` or `{model}_step_{N}.pt`)
+- **Poor quality**: Model needs more training, verify checkpoint loaded correctly
+- **Slow generation**: Use GPU, enable KV cache, use AMP (automatic)
 
 ## Code Locations
 

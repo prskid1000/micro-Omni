@@ -94,8 +94,8 @@ Stage E: Multimodal SFT (All Together)
 ```mermaid
 graph TD
     Start[Start] --> StageA[Stage A:<br/>Thinker<br/>Text Only]
-    StageA --> StageB[Stage B:<br/>Audio Encoder<br/>ASR]
-    StageB --> StageC[Stage C:<br/>Vision Encoder<br/>Image Classification]
+    StageA --> StageB[Stage B:<br/>Audio Encoder<br/>ASR<br/>98 char vocab]
+    StageB --> StageC[Stage C:<br/>Vision Encoder<br/>Contrastive Learning<br/>CLIP-style]
     StageC --> StageD[Stage D:<br/>Talker + RVQ<br/>TTS]
     StageD --> StageE[Stage E:<br/>Multimodal SFT<br/>All Together]
     StageE --> Done[Training Complete]
@@ -107,7 +107,7 @@ graph TD
     style StageE fill:#27ae60
 ```
 
-**Explanation**: Training proceeds in stages - first foundation (Thinker), then specialized encoders (Audio, Vision), then generation (Talker), finally multimodal integration (SFT). Each stage builds on previous knowledge.
+**Explanation**: Training proceeds in stages - first foundation (Thinker), then specialized encoders (Audio with full character vocabulary, Vision with contrastive learning), then generation (Talker), finally multimodal integration (SFT). Each stage builds on previous knowledge with proper algorithms.
 
 ## Stage A: Thinker Pretraining
 
@@ -365,7 +365,7 @@ for audio, text in dataloader:
 ## Stage C: Vision Encoder
 
 ### Goal
-Train vision encoder on image classification.
+Train vision encoder using contrastive learning (CLIP-style) for image-caption alignment.
 
 ### Process
 

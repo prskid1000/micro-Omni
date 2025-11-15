@@ -43,7 +43,7 @@ graph TB
     
     subgraph Output["Output Generation"]
         Talker --> RVQ[RVQ Codec]
-        RVQ --> Vocoder[Vocoder]
+        RVQ --> Vocoder[Vocoder<br/>Improved Griffin-Lim]
         Vocoder --> AudioOut[Audio Output]
     end
     
