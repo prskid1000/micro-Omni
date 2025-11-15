@@ -393,10 +393,12 @@ def main(cfg):
             # Backward pass with gradient scaling
             if use_amp:
                 scaler.scale(loss).backward()
+                # Unscale before checking gradients (gradients are in scaled space until unscaled)
+                scaler.unscale_(opt)
             else:
                 loss.backward()
             
-            # Check for gradient explosion before clipping
+            # Check for gradient explosion before clipping (after unscaling if AMP)
             try:
                 grad_norm_think, is_exploded_think = check_gradient_explosion(think, max_grad_norm=100.0, raise_on_error=False)
                 grad_norm_proj_a, is_exploded_proj_a = check_gradient_explosion(proj_a, max_grad_norm=100.0, raise_on_error=False)
@@ -405,18 +407,17 @@ def main(cfg):
                     logger.error(f"Step {step}: Gradient explosion detected (think={grad_norm_think:.2f}, proj_a={grad_norm_proj_a:.2f}, proj_v={grad_norm_proj_v:.2f}). Skipping this batch.")
                     opt.zero_grad()  # Clear gradients
                     if use_amp:
-                        scaler.update()
+                        scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
             except RuntimeError as e:
                 logger.error(f"Step {step}: {e}")
                 opt.zero_grad()  # Clear gradients
                 if use_amp:
-                    scaler.update()
+                    scaler.update()  # Update scaler even though we skipped (unscale was called)
                 continue
             
-            # Gradient clipping (unscale first if using AMP)
+            # Gradient clipping (already unscaled if using AMP)
             if use_amp:
-                scaler.unscale_(opt)
                 clip_gradients(think, max_grad_norm)
                 clip_gradients(proj_a, max_grad_norm)
                 clip_gradients(proj_v, max_grad_norm)

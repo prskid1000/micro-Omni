@@ -1094,13 +1094,22 @@ validate_loss(loss, min_loss=-1e6, max_loss=1e6)
 
 ### Gradient Explosion Detection
 
-**All training scripts check gradients**:
+**All training scripts check gradients** (with proper AMP handling):
 ```python
-# After backward(), before clipping:
+# Backward pass with AMP
+if use_amp:
+    scaler.scale(loss).backward()
+    scaler.unscale_(opt)  # CRITICAL: Unscale BEFORE checking gradients
+else:
+    loss.backward()
+
+# Check for gradient explosion (after unscaling if AMP)
 grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0)
 if is_exploded:
     logger.error(f"Gradient explosion: grad_norm={grad_norm:.2f}")
     opt.zero_grad()  # Clear gradients
+    if use_amp:
+        scaler.update()  # Update scaler (unscale was called, so update is safe)
     continue  # Skip this batch
 ```
 
@@ -1109,10 +1118,23 @@ if is_exploded:
 - Gradient norm is NaN
 - Automatically skips problematic batches
 
+**Critical for AMP**: 
+- **Must unscale BEFORE checking** - Gradients are in scaled space after `scaler.scale(loss).backward()`
+- **Scaled gradients appear much larger** - Checking before unscaling causes false positives (e.g., 200k+ instead of <10)
+- **Unscale immediately after backward** - Then check gradients in real space
+- **Update scaler when skipping** - Since `unscale()` was called, `scaler.update()` is safe and necessary
+
+**Important**: When skipping a batch due to gradient explosion:
+- **Do call `scaler.unscale_(opt)`** - Before checking gradients (if using AMP)
+- **Do call `scaler.update()`** - After unscaling, even if skipping (unscale records inf checks)
+- **Do call `opt.zero_grad()`** - Clear the problematic gradients
+
 **Benefits**:
 - **Prevents training collapse**: Catches exploding gradients early
 - **Automatic recovery**: Skips bad batches, continues training
 - **Detailed logging**: Reports gradient norms for debugging
+- **Accurate detection**: Unscaling before checking prevents false positives from scaled gradients
+- **Scaler safety**: Proper update sequence prevents AssertionError
 
 ## ⚠️ Common Pitfalls
 

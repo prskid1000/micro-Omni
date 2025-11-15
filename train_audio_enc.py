@@ -138,10 +138,12 @@ def main(cfg):
             # Backward pass with gradient scaling
             if use_amp:
                 scaler.scale(loss).backward()
+                # Unscale before checking gradients (gradients are in scaled space until unscaled)
+                scaler.unscale_(opt)
             else:
                 loss.backward()
             
-            # Check for gradient explosion before clipping
+            # Check for gradient explosion before clipping (after unscaling if AMP)
             try:
                 grad_norm_model, is_exploded_model = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
                 grad_norm_head, is_exploded_head = check_gradient_explosion(head, max_grad_norm=100.0, raise_on_error=False)
@@ -149,18 +151,17 @@ def main(cfg):
                     logger.error(f"Step {step}: Gradient explosion detected (model={grad_norm_model:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
                     opt.zero_grad()  # Clear gradients
                     if use_amp:
-                        scaler.update()
+                        scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
             except RuntimeError as e:
                 logger.error(f"Step {step}: {e}")
                 opt.zero_grad()  # Clear gradients
                 if use_amp:
-                    scaler.update()
+                    scaler.update()  # Update scaler even though we skipped (unscale was called)
                 continue
             
-            # Gradient clipping (unscale first if using AMP)
+            # Gradient clipping (already unscaled if using AMP)
             if use_amp:
-                scaler.unscale_(opt)
                 clip_gradients(model, max_grad_norm)
                 clip_gradients(head, max_grad_norm)
                 scaler.step(opt)

@@ -430,36 +430,37 @@ for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
         validate_loss(loss, min_loss=-1e6, max_loss=1e6)
     except RuntimeError as e:
         logger.error(f"Step {step}: {e}")
-        if use_amp:
-            scaler.update()
-        continue  # Skip this batch
+        logger.error("Skipping this batch due to invalid loss")
+        continue  # Skip this batch - no backward() called, so no scaler.update() needed
     
-    # Backward with gradient scaling (AMP)
+    # Backward pass with gradient scaling
     if use_amp:
         scaler.scale(loss).backward()
+        # Unscale before checking gradients (gradients are in scaled space until unscaled)
+        scaler.unscale_(opt)
     else:
         loss.backward()
     
     # 🔒 Gradient Explosion Detection (NEW)
+    # Note: Must unscale BEFORE checking when using AMP (gradients are in scaled space)
     try:
         grad_norm_rvq, is_exploded_rvq = check_gradient_explosion(rvq, max_grad_norm=100.0, raise_on_error=False)
         grad_norm_talker, is_exploded_talker = check_gradient_explosion(talker, max_grad_norm=100.0, raise_on_error=False)
         if is_exploded_rvq or is_exploded_talker:
             logger.error(f"Gradient explosion detected. Skipping batch.")
-            opt.zero_grad()
+            opt.zero_grad()  # Clear gradients
             if use_amp:
-                scaler.update()
+                scaler.update()  # Update scaler even though we skipped (unscale was called)
             continue
     except RuntimeError as e:
         logger.error(f"Step {step}: {e}")
-        opt.zero_grad()
+        opt.zero_grad()  # Clear gradients
         if use_amp:
-            scaler.update()
+            scaler.update()  # Update scaler even though we skipped (unscale was called)
         continue
     
-    # Gradient clipping (unscale first if using AMP)
+    # Gradient clipping (already unscaled if using AMP)
     if use_amp:
-        scaler.unscale_(opt)
         clip_gradients(rvq, max_grad_norm)
         clip_gradients(talker, max_grad_norm)
         scaler.step(opt)
@@ -781,7 +782,15 @@ if use_amp:
         loss = loss_fn(logits, targets)
     
     scaler.scale(loss).backward()  # Scaled backward
-    scaler.unscale_(opt)  # Unscale before clipping
+    scaler.unscale_(opt)  # CRITICAL: Unscale BEFORE checking gradients/clipping
+    
+    # Check for gradient explosion (after unscaling)
+    grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0)
+    if is_exploded:
+        opt.zero_grad()
+        scaler.update()  # Update scaler (unscale was called)
+        continue  # Skip batch
+    
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     scaler.step(opt)  # Scaled optimizer step
     scaler.update()  # Update scaler
@@ -796,8 +805,14 @@ if use_amp:
 **How it works**:
 - **Forward pass**: Uses FP16 (half precision) for speed
 - **Loss scaling**: Scales loss to prevent underflow
-- **Backward pass**: Computes gradients in FP16
-- **Optimizer step**: Unscales and updates in FP32
+- **Backward pass**: Computes gradients in FP16 (scaled space)
+- **Unscaling**: Converts gradients back to FP32 (real space) - **must do before checking/clipping**
+- **Optimizer step**: Updates weights in FP32
+
+**Critical AMP Gotcha**: 
+- Gradients are in **scaled space** after `scaler.scale(loss).backward()`
+- **Must unscale BEFORE** checking gradient norms or clipping
+- Checking before unscaling causes **false positives** (gradients appear 1000x larger)
 
 **Configuration**:
 - **Default**: `use_amp: true` in all configs
@@ -931,15 +946,30 @@ if step % val_freq == 0 and step > 0:
 
 5. **Gradient Issues**: Use gradient clipping for stability
    ```python
-   # Check for gradient explosion first
+   # Backward pass
+   if use_amp:
+       scaler.scale(loss).backward()
+       scaler.unscale_(opt)  # CRITICAL: Unscale BEFORE checking gradients
+   else:
+       loss.backward()
+   
+   # Check for gradient explosion (after unscaling if AMP)
    grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0)
    if is_exploded:
        logger.error(f"Gradient explosion: {grad_norm:.2f}")
        opt.zero_grad()
+       if use_amp:
+           scaler.update()  # Update scaler (unscale was called)
        continue
    
-   # Then clip gradients
-   torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+   # Then clip gradients (already unscaled if using AMP)
+   if use_amp:
+       torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+       scaler.step(opt)
+       scaler.update()
+   else:
+       torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+       opt.step()
    ```
 
 6. **Numerical Stability**: All models now check for NaN/Inf automatically
