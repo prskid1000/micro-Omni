@@ -2,6 +2,7 @@
 
 checkpoints/
 data/
+examples/
 *.pyc
 *.pyo
 *.pyd
