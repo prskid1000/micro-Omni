@@ -17,7 +17,7 @@ study/
 ├── 07_Training_Workflow.md     # How to train
 ├── 08_Inference_Guide.md       # How to use
 ├── 09_Hands_On_Exercises.md    # Practice
-├── QUICK_REFERENCE.md          # This file
+├── QUICK_REFERENCE.md          # This  file
 └── diagrams/                    # Visual aids
 ```
 
