@@ -5,9 +5,8 @@
 Post-training allows you to continue training a model from a checkpoint using a **different dataset**. This is useful for:
 
 > **📖 Related Guides**: 
-> - [Data Setup Guide](DATA_SETUP.md) - Initial dataset preparation
+> - [Quick Reference Guide](QUICK_REFERENCE.md) - Dataset setup and all commands
 > - [Training Workflow](07_Training_Workflow.md) - Regular training process
-> - [Quick Reference](QUICK_REFERENCE.md) - Command cheat sheet
 
 - **Domain adaptation**: Fine-tune a general model on domain-specific data
 - **Task-specific fine-tuning**: Adapt a pretrained model for specific tasks
@@ -85,7 +84,7 @@ python scripts/prep_post_training_data.py \
 - ✅ Transcript/caption file support
 - ✅ Progress reporting and error handling
 
-**For more details on data formats, see [Data Setup Guide](DATA_SETUP.md)**
+**For more details on data formats, see [Quick Reference Guide](QUICK_REFERENCE.md)**
 
 ### Step 2: Choose a Checkpoint
 

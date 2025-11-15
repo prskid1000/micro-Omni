@@ -130,8 +130,6 @@ python post_train.py \
 
 **See [Post-Training Guide](14_Post_Training.md) for detailed documentation.**
 
-**See [Data Setup Guide](DATA_SETUP.md) for initial dataset preparation.**
-
 ## Inference Commands
 
 ```bash
@@ -278,9 +276,43 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 - `check_numerical_stability(tensor, name="tensor")` - Check tensors
 - `reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, model, opt, scheduler, scaler)` - Reload from checkpoint
 
-## Common Issues
+## Troubleshooting
 
-### Training
+### Download Script Issues
+
+**Issue**: "Download interrupted"
+- Script automatically resumes - just run it again
+- Check `data/.download_state.json` to see progress
+- Use `--reset` flag to start over: `python scripts/download_datasets.py --reset`
+
+**Issue**: "HuggingFace datasets download fails"
+- Check internet connection
+- Try: `pip install --upgrade datasets huggingface_hub`
+- **DialogStudio requires authentication**: 
+  - Visit https://huggingface.co/datasets/Salesforce/dialogstudio
+  - Accept the license
+  - Run: `huggingface-cli login`
+  - Or set: `export HF_TOKEN=your_token_here`
+
+**Issue**: "Dataset 'Salesforce/dialogstudio' is a gated dataset"
+- This means you haven't authenticated or accepted the license
+- Follow the authentication steps above
+
+**Issue**: "Dataset scripts are no longer supported"
+- This means your `datasets` library version is too new (>=3.0.0)
+- DialogStudio requires `datasets<3.0.0` to work with loading scripts
+- Solution: `pip install 'datasets<3.0.0'`
+
+**Issue**: "COCO download is slow"
+- COCO files are large (18GB+ for train images)
+- Download supports resume - safe to interrupt and restart
+- Consider downloading during off-peak hours
+
+**Issue**: "LibriSpeech .flac files not supported"
+- torchaudio supports .flac files natively
+- If issues occur, convert to .wav: `ffmpeg -i input.flac output.wav`
+
+### Training Issues
 - **Loss not decreasing**: Check learning rate, data loading
 - **Out of memory**: Reduce batch size or increase `gradient_accumulation_steps`
 - **Training interrupted**: Automatically resumes from latest checkpoint
@@ -302,6 +334,15 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 - **Model not found**: Check checkpoint path (look for `{model}_best.pt` or `{model}_step_{N}.pt`)
 - **Poor quality**: Model needs more training, verify checkpoint loaded correctly
 - **Slow generation**: Use GPU, enable KV cache, use AMP (automatic)
+
+**Issue**: "AMP not working"
+- Verify CUDA is available: `python -c "import torch; print(torch.cuda.is_available())"`
+- Check PyTorch version supports AMP (1.6+)
+- Look for "Mixed precision training (AMP) enabled" message
+
+**Issue**: "Too many gradient explosion warnings"
+- Gradients are now checked after unscaling (accurate detection)
+- If still seeing many warnings, try reducing learning rate
 
 ## Code Locations
 
@@ -387,7 +428,7 @@ python scripts/download_datasets.py --reset
 - `data/audio/asr.csv` - ASR data
 - `data/audio/tts.csv` - TTS data
 
-**Note**: DialogStudio requires HuggingFace authentication. See [Data Setup Guide](DATA_SETUP.md) for details.
+**Note**: DialogStudio requires HuggingFace authentication. See Dataset Setup section above for details.
 
 ---
 
@@ -515,6 +556,183 @@ ffmpeg -framerate 1 -i data/images/images/%06d.png \
 
 ---
 
+## Dataset Setup
+
+### Quick Start (Automated)
+
+**Easiest way**: Use the automated download and format script:
+
+```bash
+# 1. Check your setup first
+python scripts/check_setup.py
+
+# 2. Download and format all datasets (supports resume)
+python scripts/download_datasets.py
+
+# 3. Resume if interrupted (automatically skips completed steps)
+python scripts/download_datasets.py
+
+# 4. Download specific dataset only
+python scripts/download_datasets.py --dataset text
+python scripts/download_datasets.py --dataset images
+python scripts/download_datasets.py --dataset audio
+```
+
+**Features**:
+- ✅ Automatic download with resume support
+- ✅ Progress tracking (saves state to `data/.download_state.json`)
+- ✅ Automatic format conversion
+- ✅ Skips already downloaded/converted files
+- ✅ Can resume from interruptions
+
+### Dataset Requirements
+
+**Total Storage Needed**: ~50-60 GB
+
+#### 1. Text/Conversational Data: DialogStudio (~10 GB)
+
+**⚠️ IMPORTANT: DialogStudio requires special setup**
+
+**Prerequisites**:
+1. **Datasets library version**: DialogStudio uses loading scripts that require `datasets<3.0.0`
+   ```bash
+   pip install 'datasets<3.0.0'
+   ```
+
+2. **Accept the license**: Visit https://huggingface.co/datasets/Salesforce/dialogstudio and accept the dataset license
+
+3. **Authenticate with HuggingFace**:
+   ```bash
+   # Option 1: Login via CLI (recommended)
+   huggingface-cli login
+   
+   # Option 2: Set environment variable
+   export HF_TOKEN=your_token_here  # Linux/Mac
+   set HF_TOKEN=your_token_here     # Windows
+   ```
+
+**Download**: The automated script handles this:
+```bash
+python scripts/download_datasets.py --dataset text
+```
+
+#### 2. Image-Caption Data: COCO 2017 (~25 GB)
+
+**Download**: https://cocodataset.org/#download
+- "2017 Train images" (18GB) + "2017 Val images" (1GB) + "2017 Train/Val annotations" (241MB)
+
+**Automated**: 
+```bash
+python scripts/download_datasets.py --dataset images
+```
+
+#### 3. Audio-Speech Data: LibriSpeech train-clean-100 (~6.3 GB)
+
+**Download**: https://www.openslr.org/12/
+- Download: "train-clean-100.tar.gz" (6.3 GB)
+
+**Automated**:
+```bash
+python scripts/download_datasets.py --dataset audio
+```
+
+### Update Config Files
+
+After downloading datasets, update config files with correct paths:
+
+**`configs/thinker_tiny.json`**:
+```json
+{
+  "train_text": "data/text/dialogstudio.txt",
+  "max_steps": 1000000,
+  "batch_size": 8,
+  "use_amp": true
+}
+```
+
+**`configs/vision_tiny.json`**:
+```json
+{
+  "train_manifest": "data/images/annotations.json",
+  "image_root": "data/images",
+  "max_steps": 250000,
+  "batch_size": 8,
+  "use_amp": true
+}
+```
+
+**`configs/audio_enc_tiny.json`**:
+```json
+{
+  "train_csv": "data/audio/asr.csv",
+  "max_steps": 20000,
+  "batch_size": 4,
+  "use_amp": true
+}
+```
+
+**`configs/talker_tiny.json`**:
+```json
+{
+  "tts_csv": "data/audio/tts.csv",
+  "max_steps": 20000,
+  "batch_size": 4,
+  "use_amp": true
+}
+```
+
+**`configs/omni_sft_tiny.json`**:
+```json
+{
+  "sft_mix": {
+    "text_path": "data/text/dialogstudio.txt",
+    "image_manifest": "data/images/annotations.json",
+    "image_root": "data/images",
+    "asr_csv": "data/audio/asr.csv"
+  },
+  "max_steps": 5000,
+  "batch_size": 2,
+  "use_amp": true
+}
+```
+
+### Expected Training Times
+
+**With AMP enabled** (RTX 5070 Ti or similar):
+- **Stage 1 (Thinker)**: ~41 hours (1M steps, ~2 epochs)
+- **Stage 2 (Audio)**: ~1.1 hours (20K steps, ~3 epochs)
+- **Stage 3 (Vision)**: ~17.4 hours (250K steps, ~3.6 epochs)
+- **Stage 4 (Talker)**: ~1.1 hours (20K steps, ~3 epochs)
+- **Stage 5 (SFT)**: ~12-18 hours
+
+**Total**: ~72-78 hours (~3 days) for full training
+
+### Verification Checklist
+
+**Quick Check**:
+```bash
+python scripts/check_setup.py
+```
+
+**Manual Checklist**:
+- [ ] DialogStudio downloaded and converted (~10 GB)
+- [ ] COCO 2017 downloaded and extracted (~25 GB)
+- [ ] LibriSpeech train-clean-100 downloaded (~6.3 GB)
+- [ ] All conversion scripts run successfully
+- [ ] Config files updated with correct paths
+- [ ] `use_amp: true` added to all configs
+- [ ] At least 60 GB free space available
+- [ ] GPU drivers and CUDA installed
+
+**Verify Data Files**:
+```bash
+# Check if files exist
+ls -lh data/text/dialogstudio.txt
+ls -lh data/images/annotations.json
+ls -lh data/audio/asr.csv
+ls -lh data/audio/tts.csv
+```
+
 ## Script Usage Workflow
 
 ### Initial Setup
@@ -546,13 +764,21 @@ python post_train.py \
     --new_dataset data/post_training/text.txt
 ```
 
-**See [Data Setup Guide](DATA_SETUP.md) for detailed script documentation.**
+
+## Important Notes
+
+- **AMP is enabled by default** in all training scripts
+- Training times are estimates; actual times may vary
+- Start with smaller `max_steps` for testing, then increase for full training
+- Monitor GPU temperature and usage during training
+- Save checkpoints regularly (configured in configs)
+- DialogStudio requires HuggingFace authentication - see setup section above
 
 ## Resources
 
 - Main README: `../README.md`
-- [Data Setup Guide](DATA_SETUP.md) - Dataset preparation
 - [Post-Training Guide](14_Post_Training.md) - Fine-tuning workflows
+- [Training Workflow](07_Training_Workflow.md) - Complete training process
 - PyTorch Docs: https://pytorch.org/docs/
 - Transformer Paper: "Attention Is All You Need"
 - ViT Paper: "An Image is Worth 16x16 Words"
