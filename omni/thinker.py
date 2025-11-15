@@ -186,7 +186,15 @@ class Attention(nn.Module):
         
         # Attention computation
         T_total = k.shape[2]
+        
+        # Check for NaN in q, k before attention computation
+        if torch.isnan(q).any() or torch.isnan(k).any():
+            raise RuntimeError("NaN detected in attention queries or keys")
+        
         att = torch.einsum("bhtd,bhTd->bhtT", q, k) / math.sqrt(self.dk)
+        
+        # Clamp attention scores to prevent extreme values that could cause NaN in softmax
+        att = torch.clamp(att, min=-50.0, max=50.0)
         
         # Create mask if needed
         if mask is None and is_incremental:
@@ -239,9 +247,27 @@ class Attention(nn.Module):
                 mask = mask.expand(B, self.h, -1, -1)
             att = att.masked_fill(mask==0, float("-inf"))
         
+        # Check for NaN before softmax
+        if torch.isnan(att).any():
+            raise RuntimeError("NaN detected in attention scores before softmax")
+        
         att = att.softmax(dim=-1)
+        
+        # Check for NaN after softmax
+        if torch.isnan(att).any():
+            raise RuntimeError("NaN detected in attention probabilities after softmax")
+        
         att = self.drop(att)
+        
+        # Check for NaN in values
+        if torch.isnan(v).any():
+            raise RuntimeError("NaN detected in attention values")
+        
         y = torch.einsum("bhtT,bhTd->bhtd", att, v)
+        
+        # Check for NaN in attention output
+        if torch.isnan(y).any():
+            raise RuntimeError("NaN detected in attention output")
         y = rearrange(y, "b h t d -> b t (h d)")
         
         return self.o(y), cache
@@ -374,6 +400,31 @@ class ThinkerLM(nn.Module):
         self.use_kv_cache = enable
         if not enable:
             self.kv_cache = None
+    
+    def check_weights_stability(self):
+        """
+        Check if any model weights contain NaN or Inf values.
+        
+        Returns:
+            tuple: (has_nan, has_inf, nan_count, inf_count)
+        """
+        has_nan = False
+        has_inf = False
+        nan_count = 0
+        inf_count = 0
+        
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                param_nan = torch.isnan(param).any().item()
+                param_inf = torch.isinf(param).any().item()
+                if param_nan:
+                    has_nan = True
+                    nan_count += torch.isnan(param).sum().item()
+                if param_inf:
+                    has_inf = True
+                    inf_count += torch.isinf(param).sum().item()
+        
+        return has_nan, has_inf, nan_count, inf_count
 
     def forward(self, idx=None, embeddings=None, attn_mask=None, pos=None):
         """
@@ -397,6 +448,12 @@ class ThinkerLM(nn.Module):
             T = idx.shape[1]
         else:
             raise ValueError("Either idx or embeddings must be provided")
+        
+        # Early NaN detection after embedding
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            nan_count = torch.isnan(x).sum().item()
+            inf_count = torch.isinf(x).sum().item()
+            raise RuntimeError(f"Numerical instability detected after embedding: NaN={nan_count}, Inf={inf_count}")
         
         # Handle KV caching
         use_cache = self.use_kv_cache and (self.kv_cache is not None or (idx is not None and T == 1))
@@ -426,6 +483,11 @@ class ThinkerLM(nn.Module):
             # Process through blocks with caching
             for i, blk in enumerate(self.blocks):
                 x, self.kv_cache[i] = blk(x, mask=mask, pos=pos, cache=self.kv_cache[i])
+                # Check for NaN after each block
+                if torch.isnan(x).any() or torch.isinf(x).any():
+                    nan_count = torch.isnan(x).sum().item()
+                    inf_count = torch.isinf(x).sum().item()
+                    raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
         else:
             # No caching - standard forward
             if pos is None:
@@ -439,10 +501,21 @@ class ThinkerLM(nn.Module):
                 mask = mask * attn_mask
             
             # Standard forward pass
-            for blk in self.blocks:
+            for i, blk in enumerate(self.blocks):
                 x, _ = blk(x, mask=mask, pos=pos, cache=None)
+                # Check for NaN after each block
+                if torch.isnan(x).any() or torch.isinf(x).any():
+                    nan_count = torch.isnan(x).sum().item()
+                    inf_count = torch.isinf(x).sum().item()
+                    raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
         
         x = self.norm(x)
+        # Check after final norm
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            nan_count = torch.isnan(x).sum().item()
+            inf_count = torch.isinf(x).sum().item()
+            raise RuntimeError(f"Numerical instability detected after final norm: NaN={nan_count}, Inf={inf_count}")
+        
         logits = self.lm_head(x)
         
         # Check for numerical stability (NaN/Inf detection)

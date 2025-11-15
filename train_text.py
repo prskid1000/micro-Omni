@@ -211,6 +211,46 @@ def main(cfg):
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     opt.step()
                 scheduler.step()
+                
+                # Check if weights became NaN after optimizer step
+                has_nan, has_inf, nan_count, inf_count = model.check_weights_stability()
+                if has_nan or has_inf:
+                    logger.error(f"Step {step}: Model weights corrupted after optimizer step (NaN={nan_count}, Inf={inf_count})")
+                    logger.error("This indicates numerical instability. Consider:")
+                    logger.error("  - Reducing learning rate")
+                    logger.error("  - Using gradient clipping")
+                    logger.error("  - Disabling mixed precision training")
+                    logger.error("  - Checking for gradient explosion")
+                    # Try to recover by loading from last checkpoint if available
+                    checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("thinker_step_") and f.endswith(".pt")]
+                    if checkpoint_files:
+                        step_numbers = []
+                        for f in checkpoint_files:
+                            try:
+                                step_num = int(f.replace("thinker_step_", "").replace(".pt", ""))
+                                step_numbers.append((step_num, f))
+                            except:
+                                continue
+                        if step_numbers:
+                            step_numbers.sort(key=lambda x: x[0], reverse=True)
+                            last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                            logger.error(f"Attempting to recover from checkpoint: {last_checkpoint}")
+                            checkpoint = torch.load(last_checkpoint, map_location=device)
+                            if isinstance(checkpoint, dict) and "model" in checkpoint:
+                                model.load_state_dict(checkpoint["model"])
+                                if "optimizer" in checkpoint:
+                                    opt.load_state_dict(checkpoint["optimizer"])
+                                if "scheduler" in checkpoint:
+                                    scheduler.load_state_dict(checkpoint["scheduler"])
+                                if "scaler" in checkpoint and scaler is not None:
+                                    scaler.load_state_dict(checkpoint["scaler"])
+                                logger.info("Recovered from checkpoint. Continuing training...")
+                            else:
+                                model.load_state_dict(checkpoint)
+                                logger.info("Recovered model weights from checkpoint. Continuing training...")
+                    opt.zero_grad()
+                    continue
+                
                 opt.zero_grad()  # Clear gradients after stepping
             else:
                 # Not accumulation step - just validate loss
@@ -250,28 +290,42 @@ def main(cfg):
             
             # Validation
             if step % val_freq == 0 and step > 0:
+                # Check model weights for NaN/Inf before validation
+                has_nan, has_inf, nan_count, inf_count = model.check_weights_stability()
+                if has_nan or has_inf:
+                    logger.error(f"Step {step}: Model weights corrupted (NaN={nan_count}, Inf={inf_count}). Skipping validation.")
+                    logger.error("This indicates numerical instability during training. Consider:")
+                    logger.error("  - Reducing learning rate")
+                    logger.error("  - Using gradient clipping")
+                    logger.error("  - Disabling mixed precision training")
+                    logger.error("  - Checking for gradient explosion")
+                    # Continue training but skip validation
+                    model.train()
+                    continue
+                
                 model.eval()
                 val_loss_sum = 0.0
                 val_count = 0
                 with torch.no_grad():
                     for val_x, val_y in val_dl:
                         val_x, val_y = val_x.to(device), val_y.to(device)
-                        if use_amp:
-                            with autocast():
+                        try:
+                            if use_amp:
+                                with autocast():
+                                    val_logits = model(val_x)
+                                    val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                            else:
                                 val_logits = model(val_x)
                                 val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                        else:
-                            val_logits = model(val_x)
-                            val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                        
-                        # Validate validation loss
-                        try:
+                            
+                            # Validate validation loss
                             validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                             val_loss_sum += float(val_loss.detach())
                             val_count += 1
                         except RuntimeError as e:
-                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                            logger.warning(f"Step {step}: Validation error: {e}")
                             # Continue with other validation batches
+                            break  # Break on NaN/Inf to avoid repeated errors
                         
                         if val_count >= 20:  # Limit validation batches
                             break
@@ -314,30 +368,44 @@ def main(cfg):
                 return
         
         # Final validation at end of epoch
-        model.eval()
-        val_loss_sum = 0.0
-        val_count = 0
-        with torch.no_grad():
-            for val_x, val_y in val_dl:
-                val_x, val_y = val_x.to(device), val_y.to(device)
-                if use_amp:
-                    with autocast():
-                        val_logits = model(val_x)
-                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                else:
-                    val_logits = model(val_x)
-                    val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                
-                # Validate validation loss
-                try:
-                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                    val_loss_sum += float(val_loss.detach())
-                    val_count += 1
-                except RuntimeError as e:
-                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
-                    # Continue with other validation batches
+        # Check model weights for NaN/Inf before validation
+        has_nan, has_inf, nan_count, inf_count = model.check_weights_stability()
+        if has_nan or has_inf:
+            logger.error(f"Epoch {epoch}: Model weights corrupted (NaN={nan_count}, Inf={inf_count}). Skipping validation.")
+            logger.error("This indicates numerical instability during training. Consider:")
+            logger.error("  - Reducing learning rate")
+            logger.error("  - Using gradient clipping")
+            logger.error("  - Disabling mixed precision training")
+            logger.error("  - Checking for gradient explosion")
+            model.train()
+            avg_val_loss = float('inf')
+        else:
+            model.eval()
+            val_loss_sum = 0.0
+            val_count = 0
+            with torch.no_grad():
+                for val_x, val_y in val_dl:
+                    val_x, val_y = val_x.to(device), val_y.to(device)
+                    try:
+                        if use_amp:
+                            with autocast():
+                                val_logits = model(val_x)
+                                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                        else:
+                            val_logits = model(val_x)
+                            val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                        
+                        # Validate validation loss
+                        validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                        val_loss_sum += float(val_loss.detach())
+                        val_count += 1
+                    except RuntimeError as e:
+                        logger.warning(f"Epoch {epoch}: Validation error: {e}")
+                        # Break on NaN/Inf to avoid repeated errors
+                        break
+            
+            avg_val_loss = val_loss_sum / max(val_count, 1)
         
-        avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
         model.train()
         
