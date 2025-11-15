@@ -7,7 +7,7 @@
   "lr": 5e-05,
   "wd": 0.01,
   "warmup_steps": 10,
-  "max_steps": 2000,
+  "max_steps": 5000,
   "batch_size": 2,
   "val_split": 0.1,
   "val_freq": 100,
@@ -34,10 +34,11 @@
   },
   "prompt": "You are an omni assistant.",
   "sft_mix": {
-    "text_path": "data/text/tiny_corpus.txt",
+    "text_path": "data/text/dialogstudio.txt",
     "image_manifest": "data/images/annotations.json",
-    "image_root": "data/images/images",
+    "image_root": "data/images",
     "asr_csv": "data/audio/asr.csv"
   },
+  "use_amp": true,
   "save_dir": "checkpoints/omni_sft_tiny"
 }

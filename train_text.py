@@ -87,11 +87,62 @@ def main(cfg):
     val_freq = cfg.get("val_freq", 200)  # Validate every N steps
     best_val_loss = float('inf')
     
+    # Resume from checkpoint if available
+    resume_from = None
+    checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("thinker_step_") and f.endswith(".pt")]
+    if checkpoint_files:
+        # Extract step numbers and find latest
+        step_numbers = []
+        for f in checkpoint_files:
+            try:
+                step_num = int(f.replace("thinker_step_", "").replace(".pt", ""))
+                step_numbers.append((step_num, f))
+            except:
+                continue
+        if step_numbers:
+            step_numbers.sort(key=lambda x: x[0], reverse=True)
+            resume_from = os.path.join(cfg["save_dir"], step_numbers[0][1])
+            step = step_numbers[0][0]
+            logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
+            
+            # Load full checkpoint state
+            checkpoint = torch.load(resume_from, map_location=device)
+            if isinstance(checkpoint, dict) and "model" in checkpoint:
+                model.load_state_dict(checkpoint["model"])
+                if "optimizer" in checkpoint:
+                    opt.load_state_dict(checkpoint["optimizer"])
+                if "scheduler" in checkpoint:
+                    scheduler.load_state_dict(checkpoint["scheduler"])
+                if "scaler" in checkpoint and scaler is not None:
+                    scaler.load_state_dict(checkpoint["scaler"])
+                if "step" in checkpoint:
+                    step = checkpoint["step"]
+                if "best_val_loss" in checkpoint:
+                    best_val_loss = checkpoint["best_val_loss"]
+                logger.info(f"Resumed from step {step}, best_val_loss={best_val_loss:.4f}")
+            else:
+                # Legacy checkpoint format (just model weights)
+                model.load_state_dict(checkpoint)
+                logger.info(f"Loaded model weights from checkpoint (legacy format)")
+    
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
-    for epoch in range(max_epochs):
+    # Skip to the correct epoch/step if resuming
+    start_epoch = 0
+    steps_per_epoch = len(train_dl)
+    initial_step = step
+    if step > 0:
+        start_epoch = step // steps_per_epoch
+        logger.info(f"Resuming from epoch {start_epoch}, step {step}")
+    
+    for epoch in range(start_epoch, max_epochs):
         logger.epoch_start(epoch)
-        for x,y in tqdm(train_dl, desc=f"epoch{epoch}"):
+        for batch_idx, (x,y) in enumerate(tqdm(train_dl, desc=f"epoch{epoch}")):
+            # Skip batches if resuming mid-epoch
+            if epoch == start_epoch and initial_step > 0:
+                current_batch_step = epoch * steps_per_epoch + batch_idx
+                if current_batch_step < initial_step:
+                    continue
             x,y = x.to(device), y.to(device)
             
             # Forward pass with mixed precision
@@ -154,7 +205,16 @@ def main(cfg):
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
                 checkpoint_path = os.path.join(cfg["save_dir"], f"thinker_step_{step}.pt")
-                torch.save(model.state_dict(), checkpoint_path)
+                checkpoint_data = {
+                    "model": model.state_dict(),
+                    "optimizer": opt.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "step": step,
+                    "best_val_loss": best_val_loss
+                }
+                if scaler is not None:
+                    checkpoint_data["scaler"] = scaler.state_dict()
+                torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
             
             # Validation
@@ -192,13 +252,32 @@ def main(cfg):
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
                     best_path = os.path.join(cfg["save_dir"], "thinker_best.pt")
-                    torch.save(model.state_dict(), best_path)
+                    checkpoint_data = {
+                        "model": model.state_dict(),
+                        "optimizer": opt.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "step": step,
+                        "best_val_loss": best_val_loss
+                    }
+                    if scaler is not None:
+                        checkpoint_data["scaler"] = scaler.state_dict()
+                    torch.save(checkpoint_data, best_path)
                     logger.checkpoint(step, best_path, is_best=True)
                 
                 model.train()
             
             if step >= max_steps:
-                torch.save(model.state_dict(), os.path.join(cfg["save_dir"], "thinker.pt"))
+                final_path = os.path.join(cfg["save_dir"], "thinker.pt")
+                checkpoint_data = {
+                    "model": model.state_dict(),
+                    "optimizer": opt.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "step": step,
+                    "best_val_loss": best_val_loss
+                }
+                if scaler is not None:
+                    checkpoint_data["scaler"] = scaler.state_dict()
+                torch.save(checkpoint_data, final_path)
                 logger.info(f"Final model saved to {cfg['save_dir']}")
                 logger.training_end(step)
                 return
@@ -233,7 +312,17 @@ def main(cfg):
         
         # Save at end of epoch if max_steps not reached
         if step < cfg["max_steps"]:
-            torch.save(model.state_dict(), os.path.join(cfg["save_dir"], "thinker.pt"))
+            final_path = os.path.join(cfg["save_dir"], "thinker.pt")
+            checkpoint_data = {
+                "model": model.state_dict(),
+                "optimizer": opt.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "step": step,
+                "best_val_loss": best_val_loss
+            }
+            if scaler is not None:
+                checkpoint_data["scaler"] = scaler.state_dict()
+            torch.save(checkpoint_data, final_path)
             logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
             return
 

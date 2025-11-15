@@ -13,7 +13,7 @@
   "lr": 0.0003,
   "wd": 0.1,
   "warmup_steps": 10,
-  "max_steps": 500,
+  "max_steps": 2000,
   "batch_size": 4,
   "num_workers": 2,
   "drop_last": true,
@@ -28,5 +28,6 @@
   "n_mels": 128,
   "frame_ms": 80,
   "tts_csv": "data/audio/tts.csv",
+  "use_amp": true,
   "save_dir": "checkpoints/talker_tiny"
 }
