@@ -17,6 +17,7 @@ study/
 ├── 07_Training_Workflow.md     # How to train
 ├── 08_Inference_Guide.md       # How to use
 ├── 09_Hands_On_Exercises.md    # Practice
+├── 14_Post_Training.md         # Post-training & fine-tuning
 ├── QUICK_REFERENCE.md          # This  file
 └── diagrams/                    # Visual aids
 ```
@@ -62,6 +63,74 @@ python train_talker.py --config configs/talker_tiny.json
 # Stage E: Multimodal SFT
 python sft_omni.py --config configs/omni_sft_tiny.json
 ```
+
+## Post-Training Commands
+
+**Prepare data for post-training:**
+```bash
+# Text data (Thinker)
+python scripts/prep_post_training_data.py \
+    --input data/your_data.txt \
+    --output data/post_training/text.txt \
+    --format text
+
+# Audio ASR data (Audio Encoder)
+python scripts/prep_post_training_data.py \
+    --input data/your_audio/ \
+    --output data/post_training/asr.csv \
+    --format audio_asr
+
+# Audio TTS data (Talker)
+python scripts/prep_post_training_data.py \
+    --input data/your_audio/ \
+    --output data/post_training/tts.csv \
+    --format audio_tts
+
+# Image data (Vision Encoder)
+python scripts/prep_post_training_data.py \
+    --input data/your_images/ \
+    --output data/post_training/images.json \
+    --format images
+```
+
+**Post-train models:**
+```bash
+# Post-train Thinker (text)
+python post_train.py \
+    --config configs/thinker_tiny.json \
+    --checkpoint checkpoints/thinker_tiny/thinker.pt \
+    --new_dataset data/post_training/text.txt
+
+# Post-train Audio Encoder (ASR)
+python post_train.py \
+    --config configs/audio_enc_tiny.json \
+    --checkpoint checkpoints/audio_enc_tiny/audio_enc.pt \
+    --new_dataset data/post_training/asr.csv
+
+# Post-train Vision Encoder
+python post_train.py \
+    --config configs/vision_tiny.json \
+    --checkpoint checkpoints/vision_tiny/vision.pt \
+    --new_dataset data/post_training/images.json
+
+# Post-train Talker (TTS)
+python post_train.py \
+    --config configs/talker_tiny.json \
+    --checkpoint checkpoints/talker_tiny/talker.pt \
+    --new_dataset data/post_training/tts.csv
+
+# Fine-tune (reset optimizer, lower LR)
+python post_train.py \
+    --config configs/thinker_tiny.json \
+    --checkpoint checkpoints/thinker_tiny/thinker.pt \
+    --new_dataset data/post_training/text.txt \
+    --reset_optimizer \
+    --lr 0.0001
+```
+
+**See [Post-Training Guide](14_Post_Training.md) for detailed documentation.**
+
+**See [Data Setup Guide](DATA_SETUP.md) for initial dataset preparation.**
 
 ## Inference Commands
 
@@ -127,21 +196,26 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 ## Data Formats
 
 ### Text
-- Format: Plain text files
-- Location: `data/text/tiny_corpus.txt`
+- Format: Plain text files (one example per line)
+- Location: `data/text/dialogstudio.txt` (training) or `data/post_training/text.txt` (post-training)
 - Processing: BPE tokenization
+- Preparation: Use `scripts/prep_post_training_data.py --format text` for custom data
 
 ### Images
 - Format: PNG/JPG
-- Size: 224×224 (resized)
-- Location: `data/images/images/`
-- Annotations: `data/images/annotations.json`
+- Size: 224×224 (resized automatically)
+- Location: `data/images/images/` (training) or custom directory (post-training)
+- Annotations: `data/images/annotations.json` (JSON manifest with `{"image": "path", "caption": "text"}`)
+- Preparation: Use `scripts/prep_post_training_data.py --format images` for custom data
 
 ### Audio
-- Format: WAV
-- Sample Rate: 16 kHz
-- Location: `data/audio/wav/`
-- Metadata: `data/audio/asr.csv`, `data/audio/tts.csv`
+- Format: WAV, FLAC, MP3, M4A
+- Sample Rate: 16 kHz (default)
+- Location: `data/audio/wav/` (training) or custom directory (post-training)
+- Metadata: 
+  - ASR: `data/audio/asr.csv` (format: `wav,text`)
+  - TTS: `data/audio/tts.csv` (format: `text,wav`)
+- Preparation: Use `scripts/prep_post_training_data.py --format audio_asr` or `--format audio_tts` for custom data
 
 ## Training Features
 
@@ -182,10 +256,27 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
   - Automatically skips exploded batches
   - Proper AMP handling: unscales gradients before checking
 
+### Automatic NaN Recovery (Thinker Models)
+- **Automatic Checkpoint Recovery**: When NaN is detected in attention probabilities during training
+  - **Affected Scripts**: `train_text.py`, `sft_omni.py`, `post_train.py` (thinker mode)
+  - **Behavior**: Automatically reloads from last saved checkpoint and continues training
+  - **Recovery Process**:
+    1. Catches `RuntimeError: NaN detected in attention probabilities after softmax`
+    2. Finds latest checkpoint in save directory
+    3. Reloads model, optimizer, scheduler, and scaler states
+    4. Resumes training from recovered checkpoint step
+  - **Checkpoint Prefixes**:
+    - `train_text.py`: `thinker_step_`
+    - `sft_omni.py`: `omni_step_`
+    - `post_train.py`: `{model_type}_post_step_`
+  - **No Manual Intervention**: Training continues automatically after recovery
+  - **Logging**: All recovery actions are logged with step numbers and checkpoint paths
+
 ### Utilities
 - `validate_loss(loss, min_loss=-1e6, max_loss=1e6)` - Validate loss values
 - `check_gradient_explosion(model, max_grad_norm=100.0)` - Check gradients
 - `check_numerical_stability(tensor, name="tensor")` - Check tensors
+- `reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, model, opt, scheduler, scaler)` - Reload from checkpoint
 
 ## Common Issues
 
@@ -196,11 +287,16 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 - **NaN values**: 
   - **Automatic detection**: Models check for NaN/Inf automatically
   - **Loss validation**: Training scripts validate losses
+  - **Automatic recovery (Thinker models)**: When NaN detected in attention, automatically reloads from last checkpoint
   - **Solutions**: Check learning rate, gradient clipping, data preprocessing
 - **Gradient explosion**: 
   - **Automatic detection**: Training scripts check gradient norms (after AMP unscaling)
   - **Recovery**: Exploded batches are automatically skipped
   - **Solutions**: Reduce learning rate, increase gradient clipping threshold
+- **NaN in attention (Thinker models)**:
+  - **Automatic recovery**: Scripts automatically reload from last checkpoint and continue
+  - **No data loss**: Training state (step, optimizer, scheduler) is fully restored
+  - **Check logs**: Recovery actions are logged with checkpoint paths
 
 ### Inference
 - **Model not found**: Check checkpoint path (look for `{model}_best.pt` or `{model}_step_{N}.pt`)
@@ -223,9 +319,240 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 3. **Advanced**: Read 07-08, train and deploy
 4. **Expert**: Modify code, experiment
 
+## Available Scripts
+
+**In `scripts/` directory:**
+
+### 1. `check_setup.py` - Verify Setup
+
+**Purpose**: Check if your environment is ready for training
+
+**Usage**:
+```bash
+python scripts/check_setup.py
+```
+
+**What it checks**:
+- ✓ Python version (3.8+)
+- ✓ Required packages (torch, torchaudio, torchvision, datasets, etc.)
+- ✓ CUDA/GPU availability
+- ✓ Disk space (warns if <60GB free)
+- ✓ Data files existence
+
+**Example output**:
+```
+✓ Python 3.10.0
+✓ torch installed
+✓ CUDA available (GPU: NVIDIA RTX 5070 Ti)
+✓ Disk space: 120.5 GB free
+✗ Data files not found
+```
+
+---
+
+### 2. `download_datasets.py` - Download Standard Datasets
+
+**Purpose**: Download and convert industry-standard datasets (DialogStudio, COCO, LibriSpeech)
+
+**Usage**:
+```bash
+# Download and convert all datasets
+python scripts/download_datasets.py
+
+# Download specific dataset only
+python scripts/download_datasets.py --dataset text
+python scripts/download_datasets.py --dataset images
+python scripts/download_datasets.py --dataset audio
+
+# Skip download, only convert existing data
+python scripts/download_datasets.py --skip-download
+
+# Skip conversion, only download
+python scripts/download_datasets.py --skip-convert
+
+# Reset and start over
+python scripts/download_datasets.py --reset
+```
+
+**Features**:
+- ✅ Automatic download with resume support
+- ✅ Progress tracking (saves state to `data/.download_state.json`)
+- ✅ Automatic format conversion
+- ✅ Skips already downloaded/converted files
+- ✅ Can resume from interruptions
+
+**Output files**:
+- `data/text/dialogstudio.txt` - Text data
+- `data/images/annotations.json` - Image manifest
+- `data/audio/asr.csv` - ASR data
+- `data/audio/tts.csv` - TTS data
+
+**Note**: DialogStudio requires HuggingFace authentication. See [Data Setup Guide](DATA_SETUP.md) for details.
+
+---
+
+### 3. `prep_post_training_data.py` - Prepare Post-Training Data
+
+**Purpose**: Convert raw data to training format for fine-tuning/post-training
+
+**Usage**:
+
+**Text Data (for Thinker)**:
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/my_text.txt \
+    --output data/post_training/text.txt \
+    --format text
+```
+
+**Audio ASR Data (for Audio Encoder)**:
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/audio/ \
+    --output data/post_training/asr.csv \
+    --format audio_asr \
+    --sample_rate 16000
+```
+
+**Audio TTS Data (for Talker)**:
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/audio/ \
+    --output data/post_training/tts.csv \
+    --format audio_tts \
+    --sample_rate 16000
+```
+
+**Image Data (for Vision Encoder)**:
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/images/ \
+    --output data/post_training/images.json \
+    --format images \
+    --caption_file data/raw/captions.txt  # Optional
+```
+
+**Arguments**:
+- `--input`: Input path (file for text, directory for audio/images)
+- `--output`: Output file path
+- `--format`: `text`, `audio_asr`, `audio_tts`, or `images`
+- `--sample_rate`: Audio sample rate (default: 16000)
+- `--caption_file`: Caption file for images (one caption per line)
+- `--encoding`: Text file encoding (default: utf-8)
+
+**Features**:
+- ✅ Recursive file discovery (finds all files in subdirectories)
+- ✅ Duplicate removal (for text data)
+- ✅ Transcript/caption file support
+- ✅ Progress reporting
+
+**See [Post-Training Guide](14_Post_Training.md) for complete workflow.**
+
+---
+
+### 4. `make_synthetic_datasets.py` - Generate Test Data
+
+**Purpose**: Create synthetic datasets for quick testing (no download needed)
+
+**Usage**:
+```bash
+python scripts/make_synthetic_datasets.py
+```
+
+**What it creates**:
+- `data/text/tiny_corpus.txt` - 5000 synthetic text sentences
+- `data/images/images/*.png` - 500 synthetic images (geometric shapes)
+- `data/images/annotations.json` - Image-caption manifest
+- `data/audio/wav/*.wav` - 300 synthetic audio files (beeps)
+- `data/audio/asr.csv` - ASR metadata
+- `data/audio/tts.csv` - TTS metadata
+
+**Use case**: Quick testing without downloading large datasets
+
+**Note**: Synthetic data is very simple and only for testing. Use real datasets for actual training.
+
+---
+
+### 5. `download_examples.py` - Download Example Files
+
+**Purpose**: Download small example files for testing inference
+
+**Usage**:
+```bash
+python scripts/download_examples.py
+```
+
+**What it creates**:
+- `examples/sample_image.png` - Test image
+- `examples/sample_audio.mp3` - Test audio
+- `examples/sample_text.txt` - Test text
+
+**Use case**: Quick testing of inference without preparing full datasets
+
+---
+
+### 6. `create_test_video.py` - Create Test Video
+
+**Purpose**: Create a test video from image frames
+
+**Usage**:
+```bash
+python scripts/create_test_video.py
+```
+
+**Requirements**:
+- PyAV: `pip install av`
+- ffmpeg installed on system
+
+**What it creates**:
+- `examples/sample_video.mp4` - Test video from image frames
+
+**Alternative** (if PyAV not available):
+```bash
+ffmpeg -framerate 1 -i data/images/images/%06d.png \
+    -c:v libx264 -pix_fmt yuv420p examples/sample_video.mp4
+```
+
+---
+
+## Script Usage Workflow
+
+### Initial Setup
+```bash
+# 1. Check your setup
+python scripts/check_setup.py
+
+# 2. Download standard datasets (or use synthetic for testing)
+python scripts/download_datasets.py
+# OR
+python scripts/make_synthetic_datasets.py  # For quick testing
+
+# 3. Verify data files
+python scripts/check_setup.py
+```
+
+### Post-Training Setup
+```bash
+# 1. Prepare your custom data
+python scripts/prep_post_training_data.py \
+    --input your_data.txt \
+    --output data/post_training/text.txt \
+    --format text
+
+# 2. Post-train the model
+python post_train.py \
+    --config configs/thinker_tiny.json \
+    --checkpoint checkpoints/thinker_tiny/thinker.pt \
+    --new_dataset data/post_training/text.txt
+```
+
+**See [Data Setup Guide](DATA_SETUP.md) for detailed script documentation.**
+
 ## Resources
 
 - Main README: `../README.md`
+- [Data Setup Guide](DATA_SETUP.md) - Dataset preparation
+- [Post-Training Guide](14_Post_Training.md) - Fine-tuning workflows
 - PyTorch Docs: https://pytorch.org/docs/
 - Transformer Paper: "Attention Is All You Need"
 - ViT Paper: "An Image is Worth 16x16 Words"

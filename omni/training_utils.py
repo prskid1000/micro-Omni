@@ -282,3 +282,91 @@ def calculate_perplexity(loss):
     loss_val = min(loss_val, 10.0)  # exp(10) ≈ 22026
     return math.exp(loss_val)
 
+def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, model, opt=None, scheduler=None, scaler=None):
+    """
+    Reload from the last saved checkpoint in the save directory.
+    
+    Args:
+        save_dir: Directory containing checkpoints
+        checkpoint_prefix: Prefix for checkpoint files (e.g., "thinker_step_", "omni_step_")
+        device: Device to load checkpoint on
+        logger: Logger instance for logging
+        model: Model to load state into
+        opt: Optimizer to load state into (optional)
+        scheduler: Scheduler to load state into (optional)
+        scaler: GradScaler to load state into (optional)
+    
+    Returns:
+        tuple: (step, best_val_loss) from checkpoint, or (0, float('inf')) if no checkpoint found
+    """
+    import os
+    
+    if not os.path.exists(save_dir):
+        logger.error(f"Save directory does not exist: {save_dir}")
+        return 0, float('inf')
+    
+    checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith(checkpoint_prefix) and f.endswith(".pt")]
+    if not checkpoint_files:
+        logger.error(f"No checkpoint files found with prefix '{checkpoint_prefix}' in {save_dir}")
+        return 0, float('inf')
+    
+    # Extract step numbers and find latest
+    step_numbers = []
+    for f in checkpoint_files:
+        try:
+            step_num = int(f.replace(checkpoint_prefix, "").replace(".pt", ""))
+            step_numbers.append((step_num, f))
+        except:
+            continue
+    
+    if not step_numbers:
+        logger.error(f"Could not parse step numbers from checkpoint files")
+        return 0, float('inf')
+    
+    step_numbers.sort(key=lambda x: x[0], reverse=True)
+    last_checkpoint = os.path.join(save_dir, step_numbers[0][1])
+    step = step_numbers[0][0]
+    
+    logger.error(f"NaN detected in attention. Reloading from checkpoint: {last_checkpoint}")
+    
+    try:
+        checkpoint = torch.load(last_checkpoint, map_location=device)
+        
+        # Load model state
+        if isinstance(checkpoint, dict):
+            # Try different possible keys for model state
+            if "model" in checkpoint:
+                model.load_state_dict(checkpoint["model"])
+            elif "thinker" in checkpoint:
+                model.load_state_dict(checkpoint["thinker"])
+            else:
+                # Assume it's a model state dict
+                model.load_state_dict(checkpoint)
+            
+            # Load optimizer state
+            if opt is not None and "optimizer" in checkpoint:
+                opt.load_state_dict(checkpoint["optimizer"])
+            
+            # Load scheduler state
+            if scheduler is not None and "scheduler" in checkpoint:
+                scheduler.load_state_dict(checkpoint["scheduler"])
+            
+            # Load scaler state
+            if scaler is not None and "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
+            
+            # Get step and best_val_loss
+            loaded_step = checkpoint.get("step", step)
+            best_val_loss = checkpoint.get("best_val_loss", float('inf'))
+            
+            logger.info(f"Successfully reloaded from step {loaded_step}, best_val_loss={best_val_loss:.4f}")
+            return loaded_step, best_val_loss
+        else:
+            # Legacy format - just model weights
+            model.load_state_dict(checkpoint)
+            logger.info(f"Loaded model weights from checkpoint (legacy format)")
+            return step, float('inf')
+    except Exception as e:
+        logger.error(f"Failed to reload from checkpoint: {e}")
+        return 0, float('inf')
+

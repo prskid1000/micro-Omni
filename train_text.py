@@ -5,7 +5,7 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint
 from tqdm import tqdm
 
 class TextDataset(Dataset):
@@ -151,13 +151,36 @@ def main(cfg):
             x,y = x.to(device), y.to(device)
             
             # Forward pass with mixed precision
-            if use_amp:
-                with autocast():
+            try:
+                if use_amp:
+                    with autocast():
+                        logits = model(x)  # (B,T,V)
+                        loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+                else:
                     logits = model(x)  # (B,T,V)
                     loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
-            else:
-                logits = model(x)  # (B,T,V)
-                loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+            except RuntimeError as e:
+                if "NaN detected in attention probabilities after softmax" in str(e):
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Reloading from last checkpoint...")
+                    # Reload from last checkpoint
+                    reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                        cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
+                    )
+                    if reloaded_step > 0:
+                        step = reloaded_step
+                        best_val_loss = reloaded_best_val_loss
+                        # Recalculate start_epoch and initial_step for resuming
+                        start_epoch = step // steps_per_epoch
+                        initial_step = step
+                        logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                    opt.zero_grad()
+                    if use_amp:
+                        scaler.update()
+                    continue
+                else:
+                    # Re-raise if it's a different error
+                    raise
             
             # Scale loss for gradient accumulation
             loss = loss / accumulation_steps
@@ -323,9 +346,25 @@ def main(cfg):
                             val_loss_sum += float(val_loss.detach())
                             val_count += 1
                         except RuntimeError as e:
-                            logger.warning(f"Step {step}: Validation error: {e}")
-                            # Continue with other validation batches
-                            break  # Break on NaN/Inf to avoid repeated errors
+                            if "NaN detected in attention probabilities after softmax" in str(e):
+                                logger.error(f"Step {step}: {e}")
+                                logger.error("Reloading from last checkpoint...")
+                                # Reload from last checkpoint
+                                reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                                    cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
+                                )
+                                if reloaded_step > 0:
+                                    step = reloaded_step
+                                    best_val_loss = reloaded_best_val_loss
+                                    start_epoch = step // steps_per_epoch
+                                    initial_step = step
+                                    logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                                model.train()
+                                break
+                            else:
+                                logger.warning(f"Step {step}: Validation error: {e}")
+                                # Continue with other validation batches
+                                break  # Break on NaN/Inf to avoid repeated errors
                         
                         if val_count >= 20:  # Limit validation batches
                             break
@@ -400,9 +439,25 @@ def main(cfg):
                         val_loss_sum += float(val_loss.detach())
                         val_count += 1
                     except RuntimeError as e:
-                        logger.warning(f"Epoch {epoch}: Validation error: {e}")
-                        # Break on NaN/Inf to avoid repeated errors
-                        break
+                        if "NaN detected in attention probabilities after softmax" in str(e):
+                            logger.error(f"Epoch {epoch}: {e}")
+                            logger.error("Reloading from last checkpoint...")
+                            # Reload from last checkpoint
+                            reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                                cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
+                            )
+                            if reloaded_step > 0:
+                                step = reloaded_step
+                                best_val_loss = reloaded_best_val_loss
+                                start_epoch = step // steps_per_epoch
+                                initial_step = step
+                                logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                            model.train()
+                            break
+                        else:
+                            logger.warning(f"Epoch {epoch}: Validation error: {e}")
+                            # Break on NaN/Inf to avoid repeated errors
+                            break
             
             avg_val_loss = val_loss_sum / max(val_count, 1)
         

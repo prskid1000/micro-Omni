@@ -132,9 +132,80 @@ cd data/audio/librispeech
 
 ---
 
+## 📋 Post-Training Data Preparation
+
+After initial training, you may want to fine-tune on custom datasets. Use the post-training data preparation script:
+
+### Prepare Post-Training Data
+
+**Text Data (for Thinker):**
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/my_text.txt \
+    --output data/post_training/text.txt \
+    --format text
+```
+
+**Audio ASR Data (for Audio Encoder):**
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/audio/ \
+    --output data/post_training/asr.csv \
+    --format audio_asr
+```
+
+**Audio TTS Data (for Talker):**
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/audio/ \
+    --output data/post_training/tts.csv \
+    --format audio_tts
+```
+
+**Image Data (for Vision Encoder):**
+```bash
+python scripts/prep_post_training_data.py \
+    --input data/raw/images/ \
+    --output data/post_training/images.json \
+    --format images \
+    --caption_file data/raw/captions.txt
+```
+
+**Features:**
+- ✅ Automatic format conversion
+- ✅ Recursive file discovery
+- ✅ Duplicate removal (for text)
+- ✅ Transcript/caption file support
+- ✅ Progress reporting
+
+**For detailed post-training workflow, see [Post-Training Guide](14_Post_Training.md)**
+
+---
+
 ## 🔧 Data Conversion Scripts
 
-**Note**: The automated script (`scripts/download_and_format_datasets.py`) handles all conversions automatically. The scripts below are for reference or manual use.
+**Available Scripts in `scripts/` directory:**
+
+1. **`download_datasets.py`** - Main script for downloading and converting standard datasets
+   - Handles DialogStudio, COCO, LibriSpeech
+   - Automatic format conversion
+   - Resume support with state tracking
+
+2. **`prep_post_training_data.py`** - Prepare datasets for post-training/fine-tuning
+   - Converts raw data to training format
+   - Supports text, audio (ASR/TTS), and images
+   - See [Post-Training Guide](14_Post_Training.md) for details
+
+3. **`check_setup.py`** - Verify your setup and data files
+   - Checks for required files
+   - Verifies data directories
+   - Validates dataset formats
+
+4. **`make_synthetic_datasets.py`** - Generate synthetic test data
+   - Creates toy datasets for testing
+   - Useful for quick validation
+
+**Note**: The automated script (`scripts/download_datasets.py`) handles all conversions automatically. The scripts below are for reference or manual use.
 
 ### Convert DialogStudio to Text Format
 
@@ -419,6 +490,16 @@ ls -lh data/audio/asr.csv
 - Start with smaller `max_steps` for testing, then increase for full training
 - Monitor GPU temperature and usage during training
 - Save checkpoints regularly (configured in configs)
+
+---
+
+## 📚 Related Documentation
+
+- **[Post-Training Guide](14_Post_Training.md)** - Fine-tuning and domain adaptation
+- **[Training Workflow](07_Training_Workflow.md)** - Complete training process
+- **[Quick Reference](QUICK_REFERENCE.md)** - Command cheat sheet
+
+---
 
 Good luck with your training! 🚀
 

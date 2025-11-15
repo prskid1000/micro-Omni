@@ -10,7 +10,7 @@ import torchaudio
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint
 
 class MixDataset(Dataset):
     def __init__(self, text_path, image_manifest, image_root, asr_csv, ctx=1024):
@@ -433,15 +433,57 @@ def main(cfg):
             batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True, use_amp_flag=use_amp)
             
             # Forward pass with mixed precision
-            if use_amp:
-                with autocast():
+            try:
+                if use_amp:
+                    with autocast():
+                        logits = think(embeddings=batch_emb)  # (B, T, vocab)
+                        # Calculate loss (mask out padding)
+                        loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
+                else:
                     logits = think(embeddings=batch_emb)  # (B, T, vocab)
                     # Calculate loss (mask out padding)
                     loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
-            else:
-                logits = think(embeddings=batch_emb)  # (B, T, vocab)
-                # Calculate loss (mask out padding)
-                loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
+            except RuntimeError as e:
+                if "NaN detected in attention probabilities after softmax" in str(e):
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Reloading from last checkpoint...")
+                    # Reload from last checkpoint
+                    reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                        cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                    )
+                    if reloaded_step > 0:
+                        step = reloaded_step
+                        best_val_loss = reloaded_best_val_loss
+                        # Also reload proj_a and proj_v from checkpoint
+                        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                        if checkpoint_files:
+                            step_numbers = []
+                            for f in checkpoint_files:
+                                try:
+                                    step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
+                                    step_numbers.append((step_num, f))
+                                except:
+                                    continue
+                            if step_numbers:
+                                step_numbers.sort(key=lambda x: x[0], reverse=True)
+                                last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                checkpoint = torch.load(last_checkpoint, map_location=device)
+                                if isinstance(checkpoint, dict):
+                                    if "proj_a" in checkpoint:
+                                        proj_a.load_state_dict(checkpoint["proj_a"])
+                                    if "proj_v" in checkpoint:
+                                        proj_v.load_state_dict(checkpoint["proj_v"])
+                        # Recalculate start_epoch and initial_step for resuming
+                        start_epoch = step // steps_per_epoch
+                        initial_step = step
+                        logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                    opt.zero_grad()
+                    if use_amp:
+                        scaler.update()
+                    continue
+                else:
+                    # Re-raise if it's a different error
+                    raise
             
             # Scale loss for gradient accumulation
             loss = loss / accumulation_steps
@@ -534,22 +576,59 @@ def main(cfg):
                 with torch.no_grad():
                     for val_data in val_dl:
                         val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
-                        if use_amp:
-                            with autocast():
+                        try:
+                            if use_amp:
+                                with autocast():
+                                    val_logits = think(embeddings=val_emb)
+                                    val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                            else:
                                 val_logits = think(embeddings=val_emb)
                                 val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                        else:
-                            val_logits = think(embeddings=val_emb)
-                            val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                        
-                        # Validate validation loss
-                        try:
+                            
+                            # Validate validation loss
                             validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                             val_loss_sum += float(val_loss.detach())
                             val_count += 1
                         except RuntimeError as e:
-                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
-                            # Continue with other validation batches
+                            if "NaN detected in attention probabilities after softmax" in str(e):
+                                logger.error(f"Step {step}: {e}")
+                                logger.error("Reloading from last checkpoint...")
+                                # Reload from last checkpoint
+                                reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                                    cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                                )
+                                if reloaded_step > 0:
+                                    step = reloaded_step
+                                    best_val_loss = reloaded_best_val_loss
+                                    # Also reload proj_a and proj_v from checkpoint
+                                    checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                                    if checkpoint_files:
+                                        step_numbers = []
+                                        for f in checkpoint_files:
+                                            try:
+                                                step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
+                                                step_numbers.append((step_num, f))
+                                            except:
+                                                continue
+                                        if step_numbers:
+                                            step_numbers.sort(key=lambda x: x[0], reverse=True)
+                                            last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                            checkpoint = torch.load(last_checkpoint, map_location=device)
+                                            if isinstance(checkpoint, dict):
+                                                if "proj_a" in checkpoint:
+                                                    proj_a.load_state_dict(checkpoint["proj_a"])
+                                                if "proj_v" in checkpoint:
+                                                    proj_v.load_state_dict(checkpoint["proj_v"])
+                                    start_epoch = step // steps_per_epoch
+                                    initial_step = step
+                                    logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                                think.train()
+                                proj_a.train()
+                                proj_v.train()
+                                break
+                            else:
+                                logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                                # Continue with other validation batches
                         if val_count >= 10:  # Limit validation batches
                             break
                 
@@ -625,22 +704,59 @@ def main(cfg):
         with torch.no_grad():
             for val_data in val_dl:
                 val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
-                if use_amp:
-                    with autocast():
+                try:
+                    if use_amp:
+                        with autocast():
+                            val_logits = think(embeddings=val_emb)
+                            val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                    else:
                         val_logits = think(embeddings=val_emb)
                         val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                else:
-                    val_logits = think(embeddings=val_emb)
-                    val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                
-                # Validate validation loss
-                try:
+                    
+                    # Validate validation loss
                     validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                     val_loss_sum += float(val_loss.detach())
                     val_count += 1
                 except RuntimeError as e:
-                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
-                    # Continue with other validation batches
+                    if "NaN detected in attention probabilities after softmax" in str(e):
+                        logger.error(f"Epoch {epoch}: {e}")
+                        logger.error("Reloading from last checkpoint...")
+                        # Reload from last checkpoint
+                        reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                            cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                        )
+                        if reloaded_step > 0:
+                            step = reloaded_step
+                            best_val_loss = reloaded_best_val_loss
+                            # Also reload proj_a and proj_v from checkpoint
+                            checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                            if checkpoint_files:
+                                step_numbers = []
+                                for f in checkpoint_files:
+                                    try:
+                                        step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
+                                        step_numbers.append((step_num, f))
+                                    except:
+                                        continue
+                                if step_numbers:
+                                    step_numbers.sort(key=lambda x: x[0], reverse=True)
+                                    last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                    checkpoint = torch.load(last_checkpoint, map_location=device)
+                                    if isinstance(checkpoint, dict):
+                                        if "proj_a" in checkpoint:
+                                            proj_a.load_state_dict(checkpoint["proj_a"])
+                                        if "proj_v" in checkpoint:
+                                            proj_v.load_state_dict(checkpoint["proj_v"])
+                            start_epoch = step // steps_per_epoch
+                            initial_step = step
+                            logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                        think.train()
+                        proj_a.train()
+                        proj_v.train()
+                        break
+                    else:
+                        logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                        # Continue with other validation batches
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
