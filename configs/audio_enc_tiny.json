@@ -24,8 +24,9 @@
   "checkpoint_freq": 500,
   "max_grad_norm": 1.0,
   "seed": 42,
-  "ctc_vocab_size": 64,
-  "max_text_len": 16,
+  "ctc_vocab_size": 98,
+  "max_text_len": 64,
+  "gradient_accumulation_steps": 1,
   "train_csv": "data/audio/asr.csv",
   "use_amp": true,
   "save_dir": "checkpoints/audio_enc_tiny"

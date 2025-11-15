@@ -580,15 +580,31 @@ graph TD
 **Explanation**: Training uses next-token prediction - given a sequence, predict the next token. Cross-entropy loss measures prediction quality, and gradients update model weights.
 
 ```python
-# Training example
+# Training example (with gradient accumulation and AMP)
 input_ids = [1, 1234, 5678, 9012]  # [BOS, The, cat, sat]
 target_ids = [1234, 5678, 9012, 3456]  # [The, cat, sat, on]
 
-# Forward pass
-logits = model(input_ids)  # (B, T, vocab_size)
+# Forward pass with AMP
+with autocast():
+    logits = model(input_ids)  # (B, T, vocab_size)
+    loss = cross_entropy(logits, target_ids)
 
-# Calculate loss
-loss = cross_entropy(logits, target_ids)
+# Scale loss for gradient accumulation
+loss = loss / accumulation_steps
+
+# Backward pass
+scaler.scale(loss).backward()
+
+# Step optimizer every N steps
+if (step + 1) % accumulation_steps == 0:
+    scaler.unscale_(optimizer)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    scaler.step(optimizer)
+    scaler.update()
+    optimizer.zero_grad()
+
+# Calculate perplexity
+perplexity = torch.exp(loss * accumulation_steps).item()
 ```
 
 ### Loss Function
@@ -809,19 +825,35 @@ x = x + alpha * attention(x)  # alpha < 1.0
 - **Batch Processing**: Process multiple sequences together
 - **GPU Utilization**: Ensure GPU is fully utilized (check `nvidia-smi`)
 
-### Example: Mixed Precision Training
+### Example: Mixed Precision Training with Gradient Accumulation
 ```python
 from torch.cuda.amp import autocast, GradScaler
 
 scaler = GradScaler()
-for batch in dataloader:
+accumulation_steps = 4  # Accumulate over 4 steps
+
+for step, batch in enumerate(dataloader):
     with autocast():
         logits = model(batch)
         loss = criterion(logits, targets)
     
+    # Scale loss for gradient accumulation
+    loss = loss / accumulation_steps
+    
     scaler.scale(loss).backward()
-    scaler.step(optimizer)
-    scaler.update()
+    
+    # Only step every N steps
+    if (step + 1) % accumulation_steps == 0:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
+    
+    # Log perplexity periodically
+    if step % print_freq == 0:
+        perplexity = torch.exp(loss * accumulation_steps).item()
+        print(f"Perplexity: {perplexity:.2f}")
 ```
 
 ## Performance Tips
@@ -1424,6 +1456,12 @@ Before moving on, can you answer:
 
 5. **What's the benefit of pre-norm over post-norm?**
    - Answer: Stable gradients, enables training very deep networks (100+ layers)
+
+6. **When are checkpoints saved during Thinker training?**
+   - Answer: Every `checkpoint_freq` steps (default: 500), when validation improves (best model), and at end. Training automatically resumes from latest checkpoint.
+
+7. **What evaluation metrics are used for Thinker?**
+   - Answer: Loss (cross-entropy), perplexity (exp(loss)), and validation loss. Perplexity measures model uncertainty - lower is better.
 
 ## 📖 Related Papers
 

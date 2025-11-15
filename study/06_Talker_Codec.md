@@ -264,6 +264,14 @@ Audio Waveform
 - **Fast** - quick generation
 - **Trade-off**: Lower quality than neural vocoders
 
+**Implementation Details**: The Griffin-Lim vocoder implementation includes several improvements:
+- **Mel Filterbank Inversion**: Uses pseudo-inverse approach to convert mel spectrograms back to linear magnitude spectrograms (more accurate than simple upsampling)
+- **Domain Handling**: Automatically detects and handles both log and magnitude domain mel spectrograms
+- **Normalization**: Proper amplitude normalization to prevent clipping (scales to 95% of max to avoid distortion)
+- **Fallback**: Multiple fallback strategies if inversion fails (librosa's built-in inversion, then simple tone generation)
+
+These improvements provide better audio quality than basic Griffin-Lim implementations while maintaining the simplicity of a classical vocoder.
+
 ### Process
 
 ```python

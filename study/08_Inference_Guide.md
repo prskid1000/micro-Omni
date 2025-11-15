@@ -250,9 +250,11 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny \
 ```python
 # From infer_chat.py
 
-# Load Thinker
+# Load Thinker (with automatic checkpoint detection)
 thinker = ThinkerLM(...)
-thinker.load_state_dict(torch.load("thinker.pt"))
+# Training automatically detects latest checkpoint, but for inference:
+checkpoint = torch.load("checkpoints/thinker_tiny/thinker_best.pt")
+thinker.load_state_dict(checkpoint["model"])
 thinker.eval()  # Set to evaluation mode
 
 # Load encoders
@@ -260,9 +262,10 @@ vision_encoder = ViTTiny(...)
 audio_encoder = AudioEncoderTiny(...)
 
 # Load projectors (from omni checkpoint)
-projectors = torch.load("omni.pt")
-vision_projector.load_state_dict(projectors["proj_v"])
-audio_projector.load_state_dict(projectors["proj_a"])
+# Checkpoint includes: thinker, proj_a, proj_v, optimizer, scheduler, step, best_val_loss, scaler
+omni_checkpoint = torch.load("checkpoints/omni_sft_tiny/omni_best.pt")
+vision_projector.load_state_dict(omni_checkpoint["proj_v"])
+audio_projector.load_state_dict(omni_checkpoint["proj_a"])
 ```
 
 ### Processing Inputs
@@ -466,7 +469,9 @@ codes = generate_audio_codes(talker, text, max_frames=200)
 # 3. Decode codes to mel
 mel = rvq.decode(codes)
 
-# 4. Convert mel to audio
+# 4. Convert mel to audio (improved Griffin-Lim)
+# Uses proper mel filterbank inversion, automatic domain detection,
+# momentum for convergence, and proper normalization
 audio = vocoder.mel_to_audio(mel)
 
 # 5. Save
@@ -659,6 +664,7 @@ while True:
 3. **AMP (Mixed Precision)**: Enabled by default for 1.5-2x speedup
 4. **Batch Processing**: Process multiple inputs together
 5. **Context Length**: Truncate if too long
+6. **Checkpoint Resume**: Training automatically resumes from latest checkpoint if interrupted
 
 ### AMP Performance Benefits
 
@@ -703,8 +709,24 @@ Error: CUDA out of memory
 
 **Solutions**:
 - Train longer
-- Use best checkpoint
+- Use best checkpoint (automatically saved when validation improves)
 - Check data quality
+- Verify checkpoint was loaded correctly (training automatically resumes from latest)
+
+### Checkpoint Loading
+
+**Automatic Resume**: If training was interrupted, it automatically resumes from the latest checkpoint:
+- Detects latest checkpoint in checkpoint directory
+- Loads model weights, optimizer state, scheduler state, step counter, best validation loss, and scaler state (if using AMP)
+- Continues training from exact point where it stopped
+
+**Manual Loading**: For inference, load specific checkpoint:
+```python
+# Checkpoint structure includes all training state
+checkpoint = torch.load("checkpoints/thinker_tiny/thinker_best.pt")
+# Contains: model, optimizer, scheduler, step, best_val_loss, scaler (if AMP)
+model.load_state_dict(checkpoint["model"])
+```
 
 ---
 

@@ -305,25 +305,46 @@ class ViTTiny(nn.Module):
         return cls, patches
 ```
 
-## Training: Image Classification
+## Training: Contrastive Learning (CLIP-style)
 
-The vision encoder is trained on a simple classification task:
+The vision encoder is trained using contrastive learning for proper image-caption alignment. This approach learns to align images and their captions in a shared embedding space.
+
+### How It Works
+
+1. **Encode Images**: Vision encoder processes image → CLS token
+2. **Encode Captions**: Captions encoded as bag-of-words using learned word embeddings
+3. **Project to Shared Space**: Both image and text embeddings projected to same dimension
+4. **Contrastive Loss**: Learn that matching image-caption pairs should be similar, non-matching pairs should be dissimilar
 
 ```python
-# Simplified training
+# Contrastive learning approach
 image = load_image("red_square.png")
 caption = "This is a red square"
 
-# Encode
-cls_token = vision_encoder(image)
+# Encode and project to shared space
+cls_token, _ = vision_encoder(image)  # (1, d_model)
+img_emb = img_proj(cls_token.squeeze(1))  # (embed_dim)
+img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
 
-# Classify
-logits = classifier(cls_token)
-# Predict: "red" in caption? → label 0, else → label 1
-loss = cross_entropy(logits, label)
+# Encode caption (bag-of-words) and project
+text_emb = encode_caption(caption)  # (d_model) - average of word embeddings
+text_emb = text_proj(text_emb)  # (embed_dim)
+text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+
+# Contrastive loss (InfoNCE)
+# Similarity matrix: (B, B) where diagonal = positive pairs
+logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+labels = torch.arange(batch_size)  # Positive pairs on diagonal
+loss = cross_entropy(logits, labels)
 ```
 
-**Note**: This is a simplified pretraining task. Real models use contrastive learning (CLIP-style).
+**Key Points**:
+- **Positive pairs**: (image_i, caption_i) should have high similarity
+- **Negative pairs**: (image_i, caption_j) where i≠j should have low similarity
+- **Temperature**: Controls how "sharp" the similarity distribution is (default: 0.07)
+- **L2 normalization**: Ensures embeddings are on unit sphere for stable training
+
+**Why This Works**: Contrastive learning learns rich visual-semantic representations that align images and text naturally, providing better features for multimodal fusion than simple classification tasks.
 
 ## Configuration
 
@@ -441,13 +462,21 @@ caption = "This is a red square"
 # Preprocess
 img_tensor = transform(image)  # (3, 224, 224)
 
-# Encode
+# Encode image
 cls_token, _ = vision_encoder(img_tensor)  # (1, 128)
 
-# Classify
-logits = classifier(cls_token)
-label = 0 if "red" in caption else 1
-loss = cross_entropy(logits, label)
+# Contrastive learning: align image and caption embeddings
+img_emb = img_proj(cls_token.squeeze(1))  # (embed_dim)
+img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+
+# Encode caption (bag-of-words) and project
+text_emb = text_proj(encode_caption(caption))  # (embed_dim)
+text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+
+# Contrastive loss (InfoNCE)
+logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+labels = torch.arange(batch_size)  # Positive pairs on diagonal
+loss = cross_entropy(logits, labels)
 ```
 
 ## Performance Tips

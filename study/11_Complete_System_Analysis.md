@@ -133,8 +133,10 @@ Instead of making Thinker handle raw images/audio, we:
 
 **What gets learned?**
 - How to represent visual concepts in language space
-- Cross-modal relationships
+- Cross-modal relationships (via contrastive learning)
 - Task-specific visual features
+
+**Training Approach**: Vision encoder is trained using contrastive learning (CLIP-style) with InfoNCE loss. Image and caption embeddings are projected to a shared space and aligned through contrastive learning, where matching image-caption pairs should be similar and non-matching pairs should be dissimilar.
 
 #### Information Preservation
 
@@ -168,6 +170,8 @@ Instead of making Thinker handle raw images/audio, we:
 - How to represent audio concepts in language space
 - Speech-to-text relationships
 - Acoustic-semantic mapping
+
+**Character Tokenization**: Uses full printable ASCII vocabulary (32-126) + special tokens (\n, \t, <UNK>). Vocabulary size: 98 (includes blank token for CTC). Max text length: 64 characters. This provides proper character-level encoding for better ASR performance.
 
 #### Frame Rate Alignment
 
@@ -216,7 +220,7 @@ Instead of making Thinker handle raw images/audio, we:
 
 **Stage-by-stage training**:
 1. Train each component separately
-2. Each learns its task well
+2. Each learns its task well (with proper algorithms: contrastive learning for vision, CTC for audio)
 3. Then combine in SFT stage
 4. Fine-tune together
 
@@ -225,6 +229,11 @@ Instead of making Thinker handle raw images/audio, we:
 - **Stability**: Easier to train and debug
 - **Efficiency**: Can reuse pretrained components
 - **Modularity**: Can improve components independently
+
+**Training Features**:
+- **Gradient accumulation**: All scripts support accumulating gradients over multiple steps for larger effective batch sizes
+- **Automatic resume**: Training automatically detects and resumes from latest checkpoint
+- **Evaluation metrics**: Perplexity for text, proper character-level tokenization for audio
 
 ### The SFT Stage: Multimodal Alignment
 
@@ -304,6 +313,8 @@ Instead of making Thinker handle raw images/audio, we:
 - Parallel processing where possible
 - Efficient attention mechanisms
 - Optimized for 12GB GPU
+- Mixed precision (AMP) for 1.5-2x speedup
+- Gradient accumulation for larger effective batch sizes
 
 #### Quality
 
@@ -369,6 +380,8 @@ Instead of making Thinker handle raw images/audio, we:
 - **Readable code**: Easy to understand
 - **Clear architecture**: Well-organized
 - **Complete system**: End-to-end example
+- **Proper implementations**: Uses contrastive learning, proper tokenization, gradient accumulation
+- **Production-ready features**: Automatic resume, evaluation metrics, numerical stability checks
 
 ### 4. Extensibility
 

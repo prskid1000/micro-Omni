@@ -86,44 +86,111 @@ class RVQ(nn.Module):
         return mel
 
 class GriffinLimVocoder:
-    """ Classical Griffin-Lim to turn mels -> waveform (approximate). """
-    def __init__(self, sample_rate=16000, n_fft=1024, hop_length=256, win_length=1024, n_iter=32):
+    """ 
+    Improved Griffin-Lim vocoder to convert mel spectrograms to audio waveforms.
+    
+    Uses proper mel-to-linear spectrogram conversion with mel filterbank inversion
+    for better quality than simple upsampling.
+    """
+    def __init__(self, sample_rate=16000, n_fft=1024, hop_length=256, win_length=1024, n_iter=32, n_mels=128):
         import librosa
         self.sr = sample_rate
         self.n_fft = n_fft
         self.hop = hop_length
         self.win = win_length
         self.n_iter = n_iter
+        self.n_mels = n_mels
         self.librosa = librosa
+        import numpy as np
+        self.np = np
+        
+        # Build mel filterbank for proper inversion
+        # This matches the mel spectrogram parameters used in training
+        self.mel_fb = librosa.filters.mel(
+            sr=sample_rate,
+            n_fft=n_fft,
+            n_mels=n_mels,
+            fmin=0.0,
+            fmax=sample_rate / 2.0
+        )  # (n_mels, n_fft//2 + 1)
 
     def mel_to_audio(self, mel):
-        # mel: (T, mel_bins), scaled [0, 1] approx; invert via pseudo-inverse then Griffin-Lim
-        import numpy as np
-        mel = mel.T  # (mel_bins, T) = (128, T)
-        S = np.maximum(mel, 1e-5)
+        """
+        Convert mel spectrogram to audio waveform using improved Griffin-Lim.
         
-        # Convert mel to linear magnitude spectrogram
-        # Approximate: use librosa's mel filterbank to convert back
-        # This is a simplified approach - in practice you'd need the exact inverse
+        Args:
+            mel: (T, mel_bins) or (mel_bins, T) mel spectrogram
+        
+        Returns:
+            y: (n_samples,) audio waveform
+        """
+        import numpy as np
+        
+        # Handle input shape: convert to (mel_bins, T)
+        if mel.shape[0] > mel.shape[1]:
+            mel = mel.T  # (mel_bins, T) = (128, T)
+        
+        # Ensure mel is in magnitude domain (not log)
+        # If mel is in log domain, exponentiate it
+        if np.max(mel) < 1.0:
+            # Likely in log domain or normalized, try to recover
+            mel = np.maximum(mel, 1e-5)
+            # If values are very small, assume log domain
+            if np.max(mel) < 0.1:
+                mel = np.exp(mel) - 1e-5
+        
+        # Convert mel to linear magnitude spectrogram using pseudo-inverse
+        # mel = mel_fb @ linear_mag  =>  linear_mag ≈ mel_fb^T @ (mel_fb @ mel_fb^T)^-1 @ mel
+        # More stable: use least squares or direct inversion
         try:
-            # Create a dummy linear spectrogram by upsampling mel
-            # Griffin-Lim expects (n_fft//2 + 1, T) = (513, T)
-            n_freq = self.n_fft // 2 + 1  # 513
-            mel_bins = S.shape[0]  # 128
+            # Pseudo-inverse approach: linear_mag = mel_fb^T @ (mel_fb @ mel_fb^T)^-1 @ mel
+            mel_fb_T = self.mel_fb.T  # (n_fft//2+1, n_mels)
+            gram = self.mel_fb @ mel_fb_T  # (n_mels, n_mels)
+            gram_inv = np.linalg.pinv(gram)  # Pseudo-inverse for stability
+            linear_mag = mel_fb_T @ gram_inv @ mel  # (n_fft//2+1, T)
             
-            # Simple upsampling: repeat mel bins to fill frequency bins
-            S_linear = np.zeros((n_freq, S.shape[1]))
-            # Distribute mel bins across frequency range
-            for i in range(mel_bins):
-                start_idx = int(i * n_freq / mel_bins)
-                end_idx = int((i + 1) * n_freq / mel_bins)
-                S_linear[start_idx:end_idx, :] = S[i:i+1, :]
+            # Ensure non-negative and reasonable magnitude
+            linear_mag = np.maximum(linear_mag, 1e-8)
             
-            y = self.librosa.griffinlim(S_linear, hop_length=self.hop, win_length=self.win, n_fft=self.n_fft, n_iter=self.n_iter)
+            # Griffin-Lim algorithm to recover phase
+            y = self.librosa.griffinlim(
+                linear_mag,
+                hop_length=self.hop,
+                win_length=self.win,
+                n_fft=self.n_fft,
+                n_iter=self.n_iter,
+                momentum=0.99  # Add momentum for better convergence
+            )
+            
+            # Normalize to prevent clipping
+            if np.max(np.abs(y)) > 0:
+                y = y / np.max(np.abs(y)) * 0.95  # Scale to 95% to avoid clipping
+            
             return y
         except Exception as e:
-            # Fallback: generate simple tone
-            duration = S.shape[1] * self.hop / self.sr
-            t = np.linspace(0, duration, int(self.sr * duration))
-            y = 0.1 * np.sin(2 * np.pi * 440 * t)  # A4 note
-            return y
+            # Fallback: use simpler approach with librosa's built-in mel inversion
+            try:
+                # Use librosa's mel_to_stft (approximate)
+                linear_mag = self.librosa.feature.inverse.mel_to_stft(
+                    mel,
+                    sr=self.sr,
+                    n_fft=self.n_fft,
+                    fmin=0.0,
+                    fmax=self.sr / 2.0
+                )
+                y = self.librosa.griffinlim(
+                    linear_mag,
+                    hop_length=self.hop,
+                    win_length=self.win,
+                    n_fft=self.n_fft,
+                    n_iter=self.n_iter
+                )
+                if np.max(np.abs(y)) > 0:
+                    y = y / np.max(np.abs(y)) * 0.95
+                return y
+            except Exception as e2:
+                # Final fallback: generate simple tone
+                duration = mel.shape[1] * self.hop / self.sr
+                t = np.linspace(0, duration, int(self.sr * duration))
+                y = 0.1 * np.sin(2 * np.pi * 440 * t)  # A4 note
+                return y

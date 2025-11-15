@@ -20,9 +20,12 @@
   "checkpoint_freq": 500,
   "max_grad_norm": 1.0,
   "seed": 42,
-  "head_output_size": 64,
   "train_manifest": "data/images/annotations.json",
   "image_root": "data/images",
+  "embed_dim": 128,
+  "vocab_size": 10000,
+  "temperature": 0.07,
+  "gradient_accumulation_steps": 1,
   "use_amp": true,
   "save_dir": "checkpoints/vision_tiny"
 }

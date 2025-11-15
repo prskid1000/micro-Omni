@@ -61,11 +61,16 @@ def main(cfg):
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
     
+    # Gradient accumulation
+    accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
+    
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
     scaler = GradScaler() if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
+    if accumulation_steps > 1:
+        print(f"Gradient accumulation: {accumulation_steps} steps")
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -146,7 +151,6 @@ def main(cfg):
             x,y = x.to(device), y.to(device)
             
             # Forward pass with mixed precision
-            opt.zero_grad()
             if use_amp:
                 with autocast():
                     logits = model(x)  # (B,T,V)
@@ -155,52 +159,79 @@ def main(cfg):
                 logits = model(x)  # (B,T,V)
                 loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
             
-            # Validate loss value
-            try:
-                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                logger.error("Skipping this batch due to invalid loss")
-                continue
+            # Scale loss for gradient accumulation
+            loss = loss / accumulation_steps
             
             # Backward pass with gradient scaling
             if use_amp:
                 scaler.scale(loss).backward()
-                # Unscale before checking gradients (gradients are in scaled space until unscaled)
-                scaler.unscale_(opt)
             else:
                 loss.backward()
             
-            # Check for gradient explosion before clipping (after unscaling if AMP)
-            try:
-                grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
-                if is_exploded:
-                    logger.error(f"Step {step}: Gradient explosion detected (grad_norm={grad_norm:.2f}). Skipping this batch.")
+            # Gradient accumulation: only step optimizer every N steps
+            if (step + 1) % accumulation_steps == 0:
+                # Unscale before checking gradients
+                if use_amp:
+                    scaler.unscale_(opt)
+                
+                # Validate loss value (unscaled)
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    opt.zero_grad()
+                    if use_amp:
+                        scaler.update()
+                    continue
+                
+                # Check for gradient explosion before clipping (after unscaling if AMP)
+                try:
+                    grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
+                    if is_exploded:
+                        logger.error(f"Step {step}: Gradient explosion detected (grad_norm={grad_norm:.2f}). Skipping this batch.")
+                        opt.zero_grad()  # Clear gradients
+                        if use_amp:
+                            scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        continue
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
                     opt.zero_grad()  # Clear gradients
                     if use_amp:
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                opt.zero_grad()  # Clear gradients
+                
+                # Gradient clipping (already unscaled if using AMP)
                 if use_amp:
-                    scaler.update()  # Update scaler even though we skipped (unscale was called)
-                continue
-            
-            # Gradient clipping (already unscaled if using AMP)
-            if use_amp:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-                scaler.step(opt)
-                scaler.update()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    opt.step()
+                scheduler.step()
+                opt.zero_grad()  # Clear gradients after stepping
             else:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-                opt.step()
-            scheduler.step()
+                # Not accumulation step - just validate loss
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    continue
+            
             step+=1
             
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                logger.train_step(step, float(loss.detach()), current_lr, epoch)
+                unscaled_loss = loss * accumulation_steps
+                # Calculate perplexity for evaluation
+                perplexity = torch.exp(unscaled_loss).item() if unscaled_loss.item() < 10 else float('inf')
+                logger.train_step(step, float(unscaled_loss.detach()), current_lr, epoch)
+                if step % (print_freq * 10) == 0:  # Log perplexity less frequently
+                    logger.info(f"Perplexity: {perplexity:.2f}")
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:

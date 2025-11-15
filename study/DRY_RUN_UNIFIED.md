@@ -780,19 +780,24 @@ mel = torch.stack(mel_frames, dim=0)  # (301, 128)
 - **602 code indices → 301 mel frames**
 
 ### Step 5: Vocoder (Mel → Audio Waveform)
-**What it does**: Converts mel spectrogram to audio waveform using Griffin-Lim
+**What it does**: Converts mel spectrogram to audio waveform using improved Griffin-Lim
 
 ```python
 # Input: (301, 128) mel spectrogram
-# Process: Griffin-Lim algorithm
+# Process: Improved Griffin-Lim with proper mel filterbank inversion
 mel_np = mel.cpu().numpy()  # (301, 128)
-mel_np = mel_np.T  # (128, 301) - transpose for vocoder
-# Upsample to linear spectrogram: (513, 301)
-# Griffin-Lim: Iterative phase reconstruction
+
+# Improved implementation:
+# 1. Proper mel filterbank inversion (pseudo-inverse approach)
+# 2. Automatic domain detection (log vs magnitude)
+# 3. Griffin-Lim with momentum (0.99) for better convergence
+# 4. Proper normalization to prevent clipping
 audio = voc.mel_to_audio(mel_np)  # (audio_samples,)
 # Duration: 301 frames @ 12.5 Hz = 24.08 seconds
 # Samples: 24.08 * 16000 = 385,280 samples
 ```
+
+**Improvements**: Uses proper mel filterbank inversion (pseudo-inverse) instead of simple upsampling, handles both log and magnitude domains automatically, includes momentum for better convergence, and proper normalization to prevent clipping.
 
 **Transformation**:
 - Input: `(301, 128)` - 301 mel frames
@@ -1054,19 +1059,26 @@ if torch.isnan(logits).any() or torch.isinf(logits).any():
 - **Loss scaling**: Scales loss before backward to prevent underflow
 - **Unscaling**: Unscales gradients before clipping (required for AMP)
 
-**AMP workflow**:
+**AMP workflow with gradient accumulation**:
 ```python
 # Forward pass in FP16 (automatic)
 with autocast():
     logits = model(x)  # Computed in FP16
     loss = loss_fn(logits, targets)
 
+# Scale loss for gradient accumulation
+loss = loss / accumulation_steps
+
 # Backward with scaling
-scaler.scale(loss).backward()  # Scales gradients
-scaler.unscale_(opt)  # Unscales before clipping
-clip_gradients(model, max_grad_norm)  # Clip in FP32
-scaler.step(opt)  # Updates weights
-scaler.update()  # Updates scaler
+scaler.scale(loss).backward()  # Scales gradients, accumulates
+
+# Gradient accumulation: only step every N steps
+if (step + 1) % accumulation_steps == 0:
+    scaler.unscale_(opt)  # Unscales before clipping
+    clip_gradients(model, max_grad_norm)  # Clip in FP32
+    scaler.step(opt)  # Updates weights
+    scaler.update()  # Updates scaler
+    opt.zero_grad()  # Clear gradients after stepping
 ```
 
 **Benefits of AMP**:
@@ -1094,23 +1106,39 @@ validate_loss(loss, min_loss=-1e6, max_loss=1e6)
 
 ### Gradient Explosion Detection
 
-**All training scripts check gradients** (with proper AMP handling):
+**All training scripts check gradients** (with proper AMP and gradient accumulation handling):
 ```python
+# Scale loss for gradient accumulation
+loss = loss / accumulation_steps
+
 # Backward pass with AMP
 if use_amp:
     scaler.scale(loss).backward()
-    scaler.unscale_(opt)  # CRITICAL: Unscale BEFORE checking gradients
 else:
     loss.backward()
 
-# Check for gradient explosion (after unscaling if AMP)
-grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0)
-if is_exploded:
-    logger.error(f"Gradient explosion: grad_norm={grad_norm:.2f}")
-    opt.zero_grad()  # Clear gradients
+# Gradient accumulation: only check/step every N steps
+if (step + 1) % accumulation_steps == 0:
     if use_amp:
-        scaler.update()  # Update scaler (unscale was called, so update is safe)
-    continue  # Skip this batch
+        scaler.unscale_(opt)  # CRITICAL: Unscale BEFORE checking gradients
+    
+    # Check for gradient explosion (after unscaling if AMP)
+    grad_norm, is_exploded = check_gradient_explosion(model, max_grad_norm=100.0)
+    if is_exploded:
+        logger.error(f"Gradient explosion: grad_norm={grad_norm:.2f}")
+        opt.zero_grad()  # Clear gradients
+        if use_amp:
+            scaler.update()  # Update scaler (unscale was called, so update is safe)
+        continue  # Skip this batch
+    
+    # Gradient clipping and optimizer step
+    clip_gradients(model, max_grad_norm)
+    if use_amp:
+        scaler.step(opt)
+        scaler.update()
+    else:
+        opt.step()
+    opt.zero_grad()  # Clear after stepping
 ```
 
 **What it checks**:
@@ -1193,6 +1221,12 @@ Before moving on, can you answer:
 5. **What happens to token count during generation?**
    - Answer: Grows incrementally (6 → 7 → 8 → ...) as new tokens are generated
 
+6. **When are checkpoints saved during training?**
+   - Answer: Every `checkpoint_freq` steps (default: 500), when validation improves (best model), and at end. Training automatically resumes from latest checkpoint.
+
+7. **What training improvements have been made?**
+   - Answer: Vision uses contrastive learning (CLIP-style), audio uses full character vocabulary (98 tokens), gradient accumulation support, improved Griffin-Lim vocoder, automatic resume functionality
+
 ## Key Insights
 
 1. **Unified Token Representation**: All modalities (text, image, audio) are converted to token embeddings of the same dimension (256), allowing them to be processed together.
@@ -1216,6 +1250,15 @@ Before moving on, can you answer:
    - Inference: Forward in FP16 for faster generation
    - Memory: ~50% less VRAM usage
    - Quality: Minimal impact on model performance
+
+7. **Gradient Accumulation**: All training scripts support accumulating gradients over multiple steps before updating weights, allowing larger effective batch sizes when memory is limited.
+
+8. **Automatic Checkpointing**: Checkpoints saved every `checkpoint_freq` steps (default: 500), when validation improves, and at end. Training automatically resumes from latest checkpoint.
+
+9. **Proper Algorithms**: 
+   - Vision: Contrastive learning (CLIP-style) with InfoNCE loss for proper image-caption alignment
+   - Audio: Full character vocabulary (98 tokens) with proper CTC tokenization
+   - Vocoder: Improved Griffin-Lim with proper mel filterbank inversion
 
 **Conclusion**: The entire pipeline operates on a unified token-based representation, where each step transforms tokens while preserving or modifying their count based on the operation type. AMP accelerates all computations with minimal quality impact.
 

@@ -131,12 +131,11 @@ python train_text.py --config configs/thinker_tiny.json
 ### Training Loop (From `train_text.py`)
 
 ```python
-# Actual code from train_text.py (with AMP enabled)
+# Actual code from train_text.py (with AMP and gradient accumulation)
 for x, y in tqdm(train_dl, desc=f"epoch{epoch}"):
     x, y = x.to(device), y.to(device)
     
     # Forward pass with mixed precision (AMP)
-    opt.zero_grad()
     if use_amp:
         with autocast():
             logits = model(x)  # (B, T, V)
@@ -145,19 +144,34 @@ for x, y in tqdm(train_dl, desc=f"epoch{epoch}"):
         logits = model(x)  # (B, T, V)
         loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
     
+    # Scale loss for gradient accumulation
+    loss = loss / accumulation_steps
+    
     # Backward pass with gradient scaling (AMP)
     if use_amp:
         scaler.scale(loss).backward()
-        scaler.unscale_(opt)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        scaler.step(opt)
-        scaler.update()
     else:
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        opt.step()
     
-    scheduler.step()
+    # Gradient accumulation: only step every N steps
+    if (step + 1) % accumulation_steps == 0:
+        if use_amp:
+            scaler.unscale_(opt)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        if use_amp:
+            scaler.step(opt)
+            scaler.update()
+        else:
+            opt.step()
+        scheduler.step()
+        opt.zero_grad()
+    
+    step += 1
+    
+    # Log perplexity periodically
+    if step % print_freq == 0:
+        perplexity = torch.exp(loss * accumulation_steps).item() if (loss * accumulation_steps).item() < 10 else float('inf')
+        logger.info(f"Perplexity: {perplexity:.2f}")
 ```
 
 ### Deep Theoretical Analysis: Next-Token Prediction
@@ -244,6 +258,8 @@ loss_fn = nn.CrossEntropyLoss(ignore_index=0)
 
 **Note**: `use_amp: true` is now the default in all configs. AMP provides 1.5-2x speedup and ~50% memory reduction.
 
+**Gradient Accumulation**: All training scripts support `gradient_accumulation_steps` (default: 1). This allows simulating larger effective batch sizes by accumulating gradients over multiple forward passes before updating weights. How it works: (1) Forward pass and backward pass run normally, but loss is divided by accumulation_steps, (2) Gradients accumulate in model parameters, (3) Only every N steps (where N = accumulation_steps), optimizer steps and gradients are cleared. This is useful when memory is limited but you want larger effective batch sizes for more stable training.
+
 ### Output
 
 - `thinker.pt` - Model weights
@@ -275,30 +291,60 @@ python train_audio_enc.py --config configs/audio_enc_tiny.json
 for audio, text in dataloader:
     # Convert to mel
     mel = mel_spec(audio)
+    mel = mel.to(device)
+    
+    # Encode text to character IDs (proper tokenization)
+    tgt = []
+    for t in text:
+        ids = []
+        for c in t[:max_text_len]:  # max_text_len = 64
+            if c in char_to_idx:
+                ids.append(char_to_idx[c])
+            else:
+                ids.append(char_to_idx['<UNK>'])
+        if len(ids) == 0:
+            ids = [char_to_idx['<UNK>']]
+        tgt.append(torch.tensor(ids, dtype=torch.long, device=device))
+    tgt_lens = torch.tensor([len(t) for t in tgt], dtype=torch.long)
+    tgt = torch.cat(tgt)
     
     # Forward pass with AMP
-    opt.zero_grad()
     if use_amp:
         with autocast():
-            embeddings = audio_encoder(mel)
-            logits = ctc_head(embeddings)
-            loss = ctc_loss(logits, text)
+            embeddings = audio_encoder(mel)  # (B, T', d_model)
+            logits = ctc_head(embeddings)  # (B, T', vocab_size)
+            log_prob = logits.log_softmax(-1).transpose(0, 1)  # (T', B, vocab_size)
+            inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
+            loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
     else:
         embeddings = audio_encoder(mel)
         logits = ctc_head(embeddings)
-        loss = ctc_loss(logits, text)
+        log_prob = logits.log_softmax(-1).transpose(0, 1)
+        inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
+        loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+    
+    # Scale loss for gradient accumulation
+    loss = loss / accumulation_steps
     
     # Backward with gradient scaling
     if use_amp:
         scaler.scale(loss).backward()
-        scaler.unscale_(opt)
-        clip_gradients(model, max_grad_norm)
-        scaler.step(opt)
-        scaler.update()
     else:
         loss.backward()
+    
+    # Gradient accumulation: only step every N steps
+    if (step + 1) % accumulation_steps == 0:
+        if use_amp:
+            scaler.unscale_(opt)
         clip_gradients(model, max_grad_norm)
-        opt.step()
+        clip_gradients(ctc_head, max_grad_norm)
+        if use_amp:
+            scaler.step(opt)
+            scaler.update()
+        else:
+            opt.step()
+        opt.zero_grad()
+    step += 1
 ```
 
 ### CTC (Connectionist Temporal Classification)
@@ -309,6 +355,8 @@ for audio, text in dataloader:
 - Multiple frames per character
 - Blank tokens
 - Automatic alignment
+
+**Character Tokenization**: Uses full printable ASCII vocabulary (32-126) + special tokens. Vocabulary size: 98 (includes blank token). Max text length: 64 characters.
 
 ### Output
 
@@ -328,47 +376,73 @@ python train_vision.py --config configs/vision_tiny.json
 ### What Happens
 
 1. **Load Data**: Images + captions (`data/images/annotations.json`)
-2. **Encode**: Vision encoder processes image
-3. **Classify**: Predict label (e.g., "red" in caption?)
-4. **Loss**: Cross-entropy classification
+2. **Encode**: Vision encoder processes image → CLS token
+3. **Project**: Image and text embeddings projected to shared space
+4. **Contrastive Loss**: InfoNCE loss for image-caption alignment
 
 ### Training Loop
 
 ```python
 for image, caption in dataloader:
-    label = 0 if "red" in caption else 1
+    B = image.shape[0]
     
-    # Forward pass with AMP
-    opt.zero_grad()
+    # Encode images and captions
     if use_amp:
         with autocast():
-            cls_token, _ = vision_encoder(image)
-            logits = classifier(cls_token)
-            loss = cross_entropy(logits, label)
+            cls_token, _ = vision_encoder(image)  # (B, 1, d_model)
+            img_emb = img_proj(cls_token.squeeze(1))  # (B, embed_dim)
+            img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+            
+            # Encode captions (bag-of-words)
+            text_embs = torch.stack([encode_caption(c) for c in caption]).to(device)
+            text_emb = text_proj(text_embs)  # (B, embed_dim)
+            text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+            
+            # Contrastive loss (InfoNCE)
+            logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+            labels = torch.arange(B, device=device)  # Positive pairs on diagonal
+            loss = cross_entropy(logits, labels)
     else:
         cls_token, _ = vision_encoder(image)
-        logits = classifier(cls_token)
-        loss = cross_entropy(logits, label)
+        img_emb = img_proj(cls_token.squeeze(1))
+        img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)
+        text_embs = torch.stack([encode_caption(c) for c in caption]).to(device)
+        text_emb = text_proj(text_embs)
+        text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+        logits = torch.matmul(img_emb, text_emb.t()) / temperature
+        labels = torch.arange(B, device=device)
+        loss = cross_entropy(logits, labels)
+    
+    # Scale loss for gradient accumulation
+    loss = loss / accumulation_steps
     
     # Backward with gradient scaling
     if use_amp:
         scaler.scale(loss).backward()
-        scaler.unscale_(opt)
-        clip_gradients(vit, max_grad_norm)
-        scaler.step(opt)
-        scaler.update()
     else:
         loss.backward()
+    
+    # Gradient accumulation: only step every N steps
+    if (step + 1) % accumulation_steps == 0:
+        if use_amp:
+            scaler.unscale_(opt)
         clip_gradients(vit, max_grad_norm)
-        opt.step()
+        clip_gradients(img_proj, max_grad_norm)
+        clip_gradients(text_proj, max_grad_norm)
+        if use_amp:
+            scaler.step(opt)
+            scaler.update()
+        else:
+            opt.step()
+        opt.zero_grad()
+    step += 1
 ```
 
 ### Note
 
-This is a simplified task. Real models use:
-- Contrastive learning (CLIP)
-- Image-text pairs
-- Larger datasets
+**Current Implementation**: Uses contrastive learning (CLIP-style) with InfoNCE loss for proper image-caption alignment. Projects image and text embeddings to shared space and learns alignment through contrastive learning.
+
+**Simplified Alternative**: Some implementations use simple classification tasks (e.g., "red" in caption?), but contrastive learning provides better representations for multimodal fusion.
 
 ### Output
 
@@ -1040,6 +1114,9 @@ Before moving on, can you answer:
 
 7. **How do you know when a stage is done?**
    - Answer: Loss plateaus, validation loss stops improving, or max steps reached
+
+8. **When are checkpoints saved and how does resuming work?**
+   - Answer: Checkpoints are saved in three scenarios: (1) Periodically every `checkpoint_freq` steps (default: 500) - saves as `{model}_step_{step}.pt`, (2) When validation loss improves - saves as `{model}_best.pt`, (3) At end of training - saves as `{model}.pt`. Each checkpoint includes: model weights, optimizer state, scheduler state, step counter, best validation loss, and scaler state (if using AMP). Training automatically detects the latest checkpoint on startup and resumes from that exact point, skipping already-processed batches. Example: If training stops at step 1999 with checkpoint_freq=500, the latest checkpoint is `thinker_step_1500.pt`, so training resumes from step 1500, skips batches until step 1999, then continues from step 2000.
 
 ## Training Time Estimates
 

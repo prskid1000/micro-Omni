@@ -27,6 +27,7 @@
   "max_grad_norm": 1.0,
   "seed": 42,
   "train_text": "data/text/dialogstudio.txt",
+  "gradient_accumulation_steps": 1,
   "use_amp": true,
   "save_dir": "checkpoints/thinker_tiny"
 }

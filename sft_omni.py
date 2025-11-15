@@ -140,11 +140,16 @@ def main(cfg):
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
     
+    # Gradient accumulation
+    accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
+    
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
     scaler = GradScaler() if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
+    if accumulation_steps > 1:
+        print(f"Gradient accumulation: {accumulation_steps} steps")
 
     mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=160, win_length=400, n_mels=128).to(device)
     tok_model = os.path.join(cfg["thinker_ckpt"], "tokenizer.model")
@@ -428,7 +433,6 @@ def main(cfg):
             batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True, use_amp_flag=use_amp)
             
             # Forward pass with mixed precision
-            opt.zero_grad()
             if use_amp:
                 with autocast():
                     logits = think(embeddings=batch_emb)  # (B, T, vocab)
@@ -439,58 +443,85 @@ def main(cfg):
                 # Calculate loss (mask out padding)
                 loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
             
-            # Validate loss value
-            try:
-                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                logger.error("Skipping this batch due to invalid loss")
-                continue
+            # Scale loss for gradient accumulation
+            loss = loss / accumulation_steps
             
             # Backward pass with gradient scaling
             if use_amp:
                 scaler.scale(loss).backward()
-                # Unscale before checking gradients (gradients are in scaled space until unscaled)
-                scaler.unscale_(opt)
             else:
                 loss.backward()
             
-            # Check for gradient explosion before clipping (after unscaling if AMP)
-            try:
-                grad_norm_think, is_exploded_think = check_gradient_explosion(think, max_grad_norm=100.0, raise_on_error=False)
-                grad_norm_proj_a, is_exploded_proj_a = check_gradient_explosion(proj_a, max_grad_norm=100.0, raise_on_error=False)
-                grad_norm_proj_v, is_exploded_proj_v = check_gradient_explosion(proj_v, max_grad_norm=100.0, raise_on_error=False)
-                if is_exploded_think or is_exploded_proj_a or is_exploded_proj_v:
-                    logger.error(f"Step {step}: Gradient explosion detected (think={grad_norm_think:.2f}, proj_a={grad_norm_proj_a:.2f}, proj_v={grad_norm_proj_v:.2f}). Skipping this batch.")
+            # Gradient accumulation: only step optimizer every N steps
+            if (step + 1) % accumulation_steps == 0:
+                # Unscale before checking gradients
+                if use_amp:
+                    scaler.unscale_(opt)
+                
+                # Validate loss value (unscaled)
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    opt.zero_grad()
+                    if use_amp:
+                        scaler.update()
+                    continue
+                
+                # Check for gradient explosion before clipping (after unscaling if AMP)
+                try:
+                    grad_norm_think, is_exploded_think = check_gradient_explosion(think, max_grad_norm=100.0, raise_on_error=False)
+                    grad_norm_proj_a, is_exploded_proj_a = check_gradient_explosion(proj_a, max_grad_norm=100.0, raise_on_error=False)
+                    grad_norm_proj_v, is_exploded_proj_v = check_gradient_explosion(proj_v, max_grad_norm=100.0, raise_on_error=False)
+                    if is_exploded_think or is_exploded_proj_a or is_exploded_proj_v:
+                        logger.error(f"Step {step}: Gradient explosion detected (think={grad_norm_think:.2f}, proj_a={grad_norm_proj_a:.2f}, proj_v={grad_norm_proj_v:.2f}). Skipping this batch.")
+                        opt.zero_grad()  # Clear gradients
+                        if use_amp:
+                            scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        continue
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
                     opt.zero_grad()  # Clear gradients
                     if use_amp:
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                opt.zero_grad()  # Clear gradients
+                
+                # Gradient clipping (already unscaled if using AMP)
                 if use_amp:
-                    scaler.update()  # Update scaler even though we skipped (unscale was called)
-                continue
-            
-            # Gradient clipping (already unscaled if using AMP)
-            if use_amp:
-                clip_gradients(think, max_grad_norm)
-                clip_gradients(proj_a, max_grad_norm)
-                clip_gradients(proj_v, max_grad_norm)
-                scaler.step(opt)
-                scaler.update()
+                    clip_gradients(think, max_grad_norm)
+                    clip_gradients(proj_a, max_grad_norm)
+                    clip_gradients(proj_v, max_grad_norm)
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    clip_gradients(think, max_grad_norm)
+                    clip_gradients(proj_a, max_grad_norm)
+                    clip_gradients(proj_v, max_grad_norm)
+                    opt.step()
+                scheduler.step()
+                opt.zero_grad()  # Clear gradients after stepping
             else:
-                clip_gradients(think, max_grad_norm)
-                clip_gradients(proj_a, max_grad_norm)
-                clip_gradients(proj_v, max_grad_norm)
-                opt.step()
-            scheduler.step()
+                # Not accumulation step - just validate loss
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    continue
+            
             step += 1  # Increment global step counter
             
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                logger.train_step(step, float(loss.detach()), current_lr, epoch)
+                unscaled_loss = loss * accumulation_steps
+                # Calculate perplexity for evaluation
+                perplexity = torch.exp(unscaled_loss).item() if unscaled_loss.item() < 10 else float('inf')
+                logger.train_step(step, float(unscaled_loss.detach()), current_lr, epoch)
+                if step % (print_freq * 10) == 0:  # Log perplexity less frequently
+                    logger.info(f"Perplexity: {perplexity:.2f}")
             
             # Validation
             if step % val_freq == 0 and step > 0:

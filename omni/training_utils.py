@@ -220,4 +220,65 @@ class SimpleLogger:
         elapsed = datetime.now() - self.start_time
         msg = f"Training completed | total_steps={total_steps} | elapsed={elapsed}"
         print(self._format_message("END", msg))
+    
+    def metric(self, step, metric_name, value, epoch=None):
+        """Log custom metric"""
+        epoch_str = f"epoch={epoch}, " if epoch is not None else ""
+        msg = f"Step {step} | {epoch_str}{metric_name}={value:.4f}"
+        print(self._format_message("METRIC", msg))
+
+def calculate_wer(reference, hypothesis):
+    """
+    Calculate Word Error Rate (WER) between reference and hypothesis texts.
+    
+    Args:
+        reference: Reference text (ground truth)
+        hypothesis: Hypothesis text (prediction)
+    
+    Returns:
+        wer: Word Error Rate (0.0 to 1.0+)
+    """
+    ref_words = reference.lower().split()
+    hyp_words = hypothesis.lower().split()
+    
+    # Dynamic programming for edit distance
+    n, m = len(ref_words), len(hyp_words)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    
+    # Initialize
+    for i in range(n + 1):
+        dp[i][0] = i
+    for j in range(m + 1):
+        dp[0][j] = j
+    
+    # Fill DP table
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if ref_words[i-1] == hyp_words[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+            else:
+                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+    
+    # WER = edit_distance / num_reference_words
+    wer = dp[n][m] / max(n, 1)
+    return wer
+
+def calculate_perplexity(loss):
+    """
+    Calculate perplexity from cross-entropy loss.
+    
+    Args:
+        loss: Cross-entropy loss value
+    
+    Returns:
+        perplexity: Perplexity value (exp(loss))
+    """
+    if isinstance(loss, torch.Tensor):
+        loss_val = loss.detach().item()
+    else:
+        loss_val = float(loss)
+    
+    # Clamp to prevent overflow
+    loss_val = min(loss_val, 10.0)  # exp(10) ≈ 22026
+    return math.exp(loss_val)
 

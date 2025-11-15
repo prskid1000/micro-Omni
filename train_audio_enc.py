@@ -55,10 +55,23 @@ def main(cfg):
         cfg["dropout"],
         downsample_factor=downsample_factor
     ).to(device)
-    # simple CTC head on top
-    vocab = cfg.get("ctc_vocab_size", 64)  # toy char vocab
+    # Improved CTC head: proper character vocabulary
+    # Build character vocabulary (printable ASCII + special tokens)
+    # This will be used in the training loop for encoding text
+    char_to_idx = {}
+    for i in range(32, 127):  # Printable ASCII
+        char_to_idx[chr(i)] = len(char_to_idx) + 1
+    char_to_idx['\n'] = len(char_to_idx) + 1
+    char_to_idx['\t'] = len(char_to_idx) + 1
+    char_to_idx['<UNK>'] = len(char_to_idx) + 1
+    vocab_size_ctc = len(char_to_idx) + 1  # +1 for blank token (0)
+    
+    # Use proper vocabulary size instead of toy 64
+    vocab = cfg.get("ctc_vocab_size", vocab_size_ctc)  # Proper char vocab size
     head = nn.Linear(cfg["d_model"], vocab).to(device)
     ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True)
+    print(f"CTC vocabulary size: {vocab} (includes blank token)")
+    print(f"Character vocabulary: {len(char_to_idx)} characters")
     opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
     
     # Learning rate scheduler with warmup
@@ -69,11 +82,16 @@ def main(cfg):
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
     
+    # Gradient accumulation
+    accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
+    
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
     scaler = GradScaler() if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
+    if accumulation_steps > 1:
+        print(f"Gradient accumulation: {accumulation_steps} steps")
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -159,17 +177,28 @@ def main(cfg):
                     continue
             mel = mel.to(device)
             
-            # fabricate tiny targets: map chars to 1..63
-            max_text_len = cfg.get("max_text_len", 16)
+            # Improved tokenization: proper character-level encoding
+            # Use the character vocabulary built at initialization
+            max_text_len = cfg.get("max_text_len", 64)  # Increased from 16
+            
+            # Encode text to character IDs using the vocabulary (built at initialization)
             tgt = []
             for t in text:
-                ids = [ (ord(c)%63)+1 for c in t[:max_text_len] ]  # small cap
-                tgt.append(torch.tensor(ids, dtype=torch.long))
+                ids = []
+                for c in t[:max_text_len]:
+                    if c in char_to_idx:
+                        ids.append(char_to_idx[c])
+                    else:
+                        unk_idx = char_to_idx.get('<UNK>', len(char_to_idx))  # Use UNK if not in vocab
+                        ids.append(unk_idx)
+                if len(ids) == 0:
+                    unk_idx = char_to_idx.get('<UNK>', len(char_to_idx))
+                    ids = [unk_idx]  # At least one token
+                tgt.append(torch.tensor(ids, dtype=torch.long, device=device))
             tgt_lens = torch.tensor([len(t) for t in tgt], dtype=torch.long)
             tgt = torch.cat(tgt)
             
             # Forward pass with mixed precision
-            opt.zero_grad()
             if use_amp:
                 with autocast():
                     x = model(mel)  # (B, T', d)
@@ -184,54 +213,78 @@ def main(cfg):
                 inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
                 loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
             
-            # Validate loss value
-            try:
-                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                logger.error("Skipping this batch due to invalid loss")
-                continue
+            # Scale loss for gradient accumulation
+            loss = loss / accumulation_steps
             
             # Backward pass with gradient scaling
             if use_amp:
                 scaler.scale(loss).backward()
-                # Unscale before checking gradients (gradients are in scaled space until unscaled)
-                scaler.unscale_(opt)
             else:
                 loss.backward()
             
-            # Check for gradient explosion before clipping (after unscaling if AMP)
-            try:
-                grad_norm_model, is_exploded_model = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
-                grad_norm_head, is_exploded_head = check_gradient_explosion(head, max_grad_norm=100.0, raise_on_error=False)
-                if is_exploded_model or is_exploded_head:
-                    logger.error(f"Step {step}: Gradient explosion detected (model={grad_norm_model:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
+            # Gradient accumulation: only step optimizer every N steps
+            if (step + 1) % accumulation_steps == 0:
+                # Unscale before checking gradients
+                if use_amp:
+                    scaler.unscale_(opt)
+                
+                # Validate loss value (unscaled)
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    opt.zero_grad()
+                    if use_amp:
+                        scaler.update()
+                    continue
+                
+                # Check for gradient explosion before clipping (after unscaling if AMP)
+                try:
+                    grad_norm_model, is_exploded_model = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
+                    grad_norm_head, is_exploded_head = check_gradient_explosion(head, max_grad_norm=100.0, raise_on_error=False)
+                    if is_exploded_model or is_exploded_head:
+                        logger.error(f"Step {step}: Gradient explosion detected (model={grad_norm_model:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
+                        opt.zero_grad()  # Clear gradients
+                        if use_amp:
+                            scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        continue
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
                     opt.zero_grad()  # Clear gradients
                     if use_amp:
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                opt.zero_grad()  # Clear gradients
+                
+                # Gradient clipping (already unscaled if using AMP)
                 if use_amp:
-                    scaler.update()  # Update scaler even though we skipped (unscale was called)
-                continue
-            
-            # Gradient clipping (already unscaled if using AMP)
-            if use_amp:
-                clip_gradients(model, max_grad_norm)
-                clip_gradients(head, max_grad_norm)
-                scaler.step(opt)
-                scaler.update()
+                    clip_gradients(model, max_grad_norm)
+                    clip_gradients(head, max_grad_norm)
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    clip_gradients(model, max_grad_norm)
+                    clip_gradients(head, max_grad_norm)
+                    opt.step()
+                scheduler.step()
+                opt.zero_grad()  # Clear gradients after stepping
             else:
-                clip_gradients(model, max_grad_norm)
-                clip_gradients(head, max_grad_norm)
-                opt.step()
-            scheduler.step()
+                # Not accumulation step - just validate loss
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    # Don't clear gradients here - we're accumulating
+                    continue
+            
             step+=1
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                logger.train_step(step, float(loss.detach()), current_lr, epoch)
+                unscaled_loss = loss * accumulation_steps
+                logger.train_step(step, float(unscaled_loss.detach()), current_lr, epoch)
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:

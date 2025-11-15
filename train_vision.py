@@ -33,10 +33,23 @@ def main(cfg):
     ds = ImgCapDataset(cfg["train_manifest"], cfg["image_root"], cfg["img_size"])
     dl = DataLoader(ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
     vit = ViTTiny(cfg["img_size"], cfg["patch"], cfg["d_model"], cfg["n_layers"], cfg["n_heads"], cfg["d_ff"], cfg["dropout"]).to(device)
-    head_output_size = cfg.get("head_output_size", 64)
-    head = nn.Linear(cfg["d_model"], head_output_size).to(device)  # predict bag-of-words toy target
-    opt = torch.optim.AdamW(list(vit.parameters())+list(head.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
-    loss_fn = nn.CrossEntropyLoss()
+    
+    # Use contrastive learning (CLIP-style) for proper vision-language alignment
+    # Project image CLS token to embedding space for contrastive learning
+    embed_dim = cfg.get("embed_dim", cfg["d_model"])  # Embedding dimension for contrastive learning
+    img_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)
+    text_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)  # For text embeddings (if using text encoder)
+    
+    # Simple text encoder using word embeddings (can be replaced with proper tokenizer)
+    # For now, we'll use a simple approach: encode captions as bag-of-words
+    vocab_size = cfg.get("vocab_size", 10000)  # Vocabulary size for caption encoding
+    text_embed = nn.Embedding(vocab_size, cfg["d_model"]).to(device)
+    
+    opt = torch.optim.AdamW(list(vit.parameters())+list(img_proj.parameters())+list(text_proj.parameters())+list(text_embed.parameters()), 
+                           lr=cfg["lr"], weight_decay=cfg["wd"])
+    
+    # Contrastive loss (InfoNCE)
+    temperature = cfg.get("temperature", 0.07)  # Temperature for contrastive loss
     
     # Learning rate scheduler with warmup
     warmup_steps = cfg.get("warmup_steps", 500)
@@ -46,13 +59,45 @@ def main(cfg):
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
     
+    # Gradient accumulation
+    accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
+    
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
     scaler = GradScaler() if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
-
-    words = ["red","blue","square","background","big","small","roughly","pixel"]
+    if accumulation_steps > 1:
+        print(f"Gradient accumulation: {accumulation_steps} steps")
+    
+    # Simple vocabulary for caption encoding (create from training data)
+    print("Building vocabulary from captions...")
+    all_captions = [item["caption"] for item in ds.items]
+    # Create simple word-based vocabulary
+    word_to_idx = {}
+    word_freq = {}
+    for cap in all_captions:
+        words = cap.lower().split()
+        for word in words:
+            word_freq[word] = word_freq.get(word, 0) + 1
+    
+    # Keep top N most frequent words
+    sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
+    vocab_size = min(vocab_size, len(sorted_words))
+    word_to_idx = {word: idx+1 for idx, (word, _) in enumerate(sorted_words[:vocab_size-1])}  # +1 for padding=0
+    word_to_idx["<UNK>"] = vocab_size - 1
+    print(f"Vocabulary size: {len(word_to_idx)}")
+    
+    def encode_caption(caption):
+        """Encode caption to bag-of-words representation"""
+        words = caption.lower().split()
+        # Simple bag-of-words: sum embeddings
+        word_ids = [word_to_idx.get(word, word_to_idx["<UNK>"]) for word in words]
+        if len(word_ids) == 0:
+            word_ids = [word_to_idx["<UNK>"]]
+        # Average pooling
+        word_embeds = text_embed(torch.tensor(word_ids, device=device))
+        return word_embeds.mean(dim=0)  # Average pooling
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -68,7 +113,9 @@ def main(cfg):
     
     step=0
     vit.train()
-    head.train()
+    img_proj.train()
+    text_proj.train()
+    text_embed.train()
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 100)
     checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
@@ -98,8 +145,12 @@ def main(cfg):
                 checkpoint = torch.load(resume_from, map_location=device)
                 if isinstance(checkpoint, dict) and "vit" in checkpoint:
                     vit.load_state_dict(checkpoint["vit"])
-                    if "head" in checkpoint:
-                        head.load_state_dict(checkpoint["head"])
+                    if "img_proj" in checkpoint:
+                        img_proj.load_state_dict(checkpoint["img_proj"])
+                    if "text_proj" in checkpoint:
+                        text_proj.load_state_dict(checkpoint["text_proj"])
+                    if "text_embed" in checkpoint:
+                        text_embed.load_state_dict(checkpoint["text_embed"])
                     if "optimizer" in checkpoint:
                         opt.load_state_dict(checkpoint["optimizer"])
                     if "scheduler" in checkpoint:
@@ -115,8 +166,6 @@ def main(cfg):
                     # Legacy checkpoint format
                     if "vit" in checkpoint:
                         vit.load_state_dict(checkpoint["vit"])
-                    if "head" in checkpoint:
-                        head.load_state_dict(checkpoint["head"])
                     logger.info(f"Loaded model weights from checkpoint (legacy format)")
     
     logger.training_start(cfg["max_steps"], train_size, val_size)
@@ -137,76 +186,122 @@ def main(cfg):
                 if current_batch_step < initial_step:
                     continue
             img = img.to(device)
-            # make a toy label: predict 'red'(0) if 'red' in caption else 'blue'(1)
-            labels = torch.tensor([0 if "red" in c else 1 for c in cap], dtype=torch.long, device=device)
+            B = img.shape[0]
             
-            # Forward pass with mixed precision
-            opt.zero_grad()
+            # Encode images and captions
             if use_amp:
                 with autocast():
-                    cls,_ = vit(img)  # (B,1,d)
-                    logit = head(cls.squeeze(1))  # (B,64)
-                    loss = loss_fn(logit, labels)
+                    cls, _ = vit(img)  # (B,1,d)
+                    img_emb = img_proj(cls.squeeze(1))  # (B, embed_dim)
+                    img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+                    
+                    # Encode captions
+                    text_embs = torch.stack([encode_caption(c) for c in cap]).to(device)  # (B, d_model)
+                    text_emb = text_proj(text_embs)  # (B, embed_dim)
+                    text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+                    
+                    # Contrastive loss (InfoNCE)
+                    # Similarity matrix: (B, B)
+                    logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+                    labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
+                    loss = nn.CrossEntropyLoss()(logits, labels)
             else:
-                cls,_ = vit(img)  # (B,1,d)
-                logit = head(cls.squeeze(1))  # (B,64)
-                loss = loss_fn(logit, labels)
+                cls, _ = vit(img)  # (B,1,d)
+                img_emb = img_proj(cls.squeeze(1))  # (B, embed_dim)
+                img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+                
+                # Encode captions
+                text_embs = torch.stack([encode_caption(c) for c in cap]).to(device)  # (B, d_model)
+                text_emb = text_proj(text_embs)  # (B, embed_dim)
+                text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
+                
+                # Contrastive loss (InfoNCE)
+                logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+                labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
+                loss = nn.CrossEntropyLoss()(logits, labels)
             
-            # Validate loss value
-            try:
-                validate_loss(loss, min_loss=-1e6, max_loss=1e6)
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                logger.error("Skipping this batch due to invalid loss")
-                continue
+            # Forward pass with gradient accumulation
+            loss = loss / accumulation_steps  # Scale loss for accumulation
             
-            # Backward pass with gradient scaling
             if use_amp:
                 scaler.scale(loss).backward()
-                # Unscale before checking gradients (gradients are in scaled space until unscaled)
-                scaler.unscale_(opt)
             else:
                 loss.backward()
             
-            # Check for gradient explosion before clipping (after unscaling if AMP)
-            try:
-                grad_norm_vit, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=100.0, raise_on_error=False)
-                grad_norm_head, is_exploded_head = check_gradient_explosion(head, max_grad_norm=100.0, raise_on_error=False)
-                if is_exploded_vit or is_exploded_head:
-                    logger.error(f"Step {step}: Gradient explosion detected (vit={grad_norm_vit:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
+            # Gradient accumulation: only step optimizer every N steps
+            if (step + 1) % accumulation_steps == 0:
+                # Unscale before checking gradients
+                if use_amp:
+                    scaler.unscale_(opt)
+            
+                # Validate loss value (unscaled)
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    opt.zero_grad()
+                    if use_amp:
+                        scaler.update()
+                    continue
+                
+                # Check for gradient explosion before clipping (after unscaling if AMP)
+                try:
+                    grad_norm_vit, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=100.0, raise_on_error=False)
+                    grad_norm_proj, is_exploded_proj = check_gradient_explosion(img_proj, max_grad_norm=100.0, raise_on_error=False)
+                    if is_exploded_vit or is_exploded_proj:
+                        logger.error(f"Step {step}: Gradient explosion detected (vit={grad_norm_vit:.2f}, proj={grad_norm_proj:.2f}). Skipping this batch.")
+                        opt.zero_grad()  # Clear gradients
+                        if use_amp:
+                            scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        continue
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
                     opt.zero_grad()  # Clear gradients
                     if use_amp:
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
-            except RuntimeError as e:
-                logger.error(f"Step {step}: {e}")
-                opt.zero_grad()  # Clear gradients
+                
+                # Gradient clipping (already unscaled if using AMP)
                 if use_amp:
-                    scaler.update()  # Update scaler even though we skipped (unscale was called)
-                continue
-            
-            # Gradient clipping (already unscaled if using AMP)
-            if use_amp:
-                clip_gradients(vit, max_grad_norm)
-                clip_gradients(head, max_grad_norm)
-                scaler.step(opt)
-                scaler.update()
+                    clip_gradients(vit, max_grad_norm)
+                    clip_gradients(img_proj, max_grad_norm)
+                    clip_gradients(text_proj, max_grad_norm)
+                    clip_gradients(text_embed, max_grad_norm)
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    clip_gradients(vit, max_grad_norm)
+                    clip_gradients(img_proj, max_grad_norm)
+                    clip_gradients(text_proj, max_grad_norm)
+                    clip_gradients(text_embed, max_grad_norm)
+                    opt.step()
+                scheduler.step()
+                opt.zero_grad()  # Clear gradients after stepping
             else:
-                clip_gradients(vit, max_grad_norm)
-                clip_gradients(head, max_grad_norm)
-                opt.step()
-            scheduler.step()
+                # Not accumulation step - just validate loss
+                unscaled_loss = loss * accumulation_steps
+                try:
+                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
+                except RuntimeError as e:
+                    logger.error(f"Step {step}: {e}")
+                    logger.error("Skipping this batch due to invalid loss")
+                    continue
             step+=1
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                logger.train_step(step, float(loss.detach()), current_lr, epoch)
+                unscaled_loss = loss * accumulation_steps
+                logger.train_step(step, float(unscaled_loss.detach()), current_lr, epoch)
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
                 checkpoint_path = os.path.join(cfg["save_dir"], f"vision_step_{step}.pt")
                 checkpoint_data = {
                     "vit": vit.state_dict(),
-                    "head": head.state_dict(),
+                    "img_proj": img_proj.state_dict(),
+                    "text_proj": text_proj.state_dict(),
+                    "text_embed": text_embed.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                     "step": step,
@@ -220,22 +315,40 @@ def main(cfg):
             # Validation
             if step % val_freq == 0 and step > 0:
                 vit.eval()
-                head.eval()
+                img_proj.eval()
+                text_proj.eval()
+                text_embed.eval()
                 val_loss_sum = 0.0
                 val_count = 0
                 with torch.no_grad():
                     for val_img, val_cap in val_dl:
                         val_img = val_img.to(device)
-                        val_labels = torch.tensor([0 if "red" in c else 1 for c in val_cap], dtype=torch.long, device=device)
+                        val_B = val_img.shape[0]
                         if use_amp:
                             with autocast():
                                 val_cls, _ = vit(val_img)
-                                val_logit = head(val_cls.squeeze(1))
-                                val_loss = loss_fn(val_logit, val_labels)
+                                val_img_emb = img_proj(val_cls.squeeze(1))
+                                val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
+                                
+                                val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                                val_text_emb = text_proj(val_text_embs)
+                                val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
+                                
+                                val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                                val_labels = torch.arange(val_B, device=device)
+                                val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                         else:
                             val_cls, _ = vit(val_img)
-                            val_logit = head(val_cls.squeeze(1))
-                            val_loss = loss_fn(val_logit, val_labels)
+                            val_img_emb = img_proj(val_cls.squeeze(1))
+                            val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
+                            
+                            val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                            val_text_emb = text_proj(val_text_embs)
+                            val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
+                            
+                            val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                            val_labels = torch.arange(val_B, device=device)
+                            val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                         
                         # Validate validation loss
                         try:
@@ -269,13 +382,17 @@ def main(cfg):
                     logger.checkpoint(step, best_path, is_best=True)
                 
                 vit.train()
-                head.train()
+                img_proj.train()
+                text_proj.train()
+                text_embed.train()
             
             if step >= cfg["max_steps"]:
                 final_path = os.path.join(cfg["save_dir"], "vision.pt")
                 checkpoint_data = {
                     "vit": vit.state_dict(),
-                    "head": head.state_dict(),
+                    "img_proj": img_proj.state_dict(),
+                    "text_proj": text_proj.state_dict(),
+                    "text_embed": text_embed.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                     "step": step,
@@ -290,22 +407,40 @@ def main(cfg):
         
         # Final validation at end of epoch
         vit.eval()
-        head.eval()
+        img_proj.eval()
+        text_proj.eval()
+        text_embed.eval()
         val_loss_sum = 0.0
         val_count = 0
         with torch.no_grad():
             for val_img, val_cap in val_dl:
                 val_img = val_img.to(device)
-                val_labels = torch.tensor([0 if "red" in c else 1 for c in val_cap], dtype=torch.long, device=device)
+                val_B = val_img.shape[0]
                 if use_amp:
                     with autocast():
                         val_cls, _ = vit(val_img)
-                        val_logit = head(val_cls.squeeze(1))
-                        val_loss = loss_fn(val_logit, val_labels)
+                        val_img_emb = img_proj(val_cls.squeeze(1))
+                        val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
+                        
+                        val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                        val_text_emb = text_proj(val_text_embs)
+                        val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
+                        
+                        val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                        val_labels = torch.arange(val_B, device=device)
+                        val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                 else:
                     val_cls, _ = vit(val_img)
-                    val_logit = head(val_cls.squeeze(1))
-                    val_loss = loss_fn(val_logit, val_labels)
+                    val_img_emb = img_proj(val_cls.squeeze(1))
+                    val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
+                    
+                    val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                    val_text_emb = text_proj(val_text_embs)
+                    val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
+                    
+                    val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                    val_labels = torch.arange(val_B, device=device)
+                    val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                 
                 # Validate validation loss
                 try:
@@ -319,7 +454,9 @@ def main(cfg):
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
         vit.train()
-        head.train()
+        img_proj.train()
+        text_proj.train()
+        text_embed.train()
         
         # Save at end of epoch if max_steps not reached
         if step < cfg["max_steps"]:

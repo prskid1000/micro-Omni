@@ -327,6 +327,14 @@ logits = ctc_head(frames)  # (100, vocab_size)
 loss = ctc_loss(logits, "hello")
 ```
 
+**Character Tokenization**: The implementation uses a proper character-level vocabulary:
+- **Vocabulary**: Full printable ASCII (32-126) + special tokens (\n, \t, <UNK>)
+- **Size**: 98 tokens total (97 characters + 1 blank token for CTC)
+- **Max length**: 64 characters per transcription (increased from 16)
+- **Encoding**: Each character mapped to unique ID, with UNK token for out-of-vocabulary characters
+
+This replaces the previous toy implementation that used `ord(c) % 63` and provides proper character-level encoding for better ASR performance.
+
 ### Training Data
 
 From `data/audio/asr.csv`:
@@ -485,9 +493,23 @@ mel = mel_spec(audio)
 # Encode
 embeddings = audio_encoder(mel)
 
-# For ASR training: predict text
-logits = ctc_head(embeddings)
-loss = ctc_loss(logits, text)
+# For ASR training: predict text (with proper character tokenization)
+# Encode text to character IDs
+char_to_idx = {...}  # Built from printable ASCII (32-126) + special tokens
+tgt = []
+for c in text[:64]:  # max_text_len = 64
+    if c in char_to_idx:
+        tgt.append(char_to_idx[c])
+    else:
+        tgt.append(char_to_idx['<UNK>'])
+tgt = torch.tensor(tgt, dtype=torch.long, device=device)
+
+# CTC loss
+logits = ctc_head(embeddings)  # (T', vocab_size=98)
+log_prob = logits.log_softmax(-1).transpose(0, 1)  # (T', B, vocab_size)
+inp_lens = torch.full((B,), log_prob.size(0), dtype=torch.long)
+tgt_lens = torch.tensor([len(tgt)], dtype=torch.long)
+loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
 ```
 
 ## Performance Tips

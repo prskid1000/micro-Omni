@@ -28,6 +28,7 @@
   "n_mels": 128,
   "frame_ms": 80,
   "tts_csv": "data/audio/tts.csv",
+  "gradient_accumulation_steps": 1,
   "use_amp": true,
   "save_dir": "checkpoints/talker_tiny"
 }

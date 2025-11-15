@@ -118,7 +118,9 @@ graph TB
   - Split into patches (16×16)
   - Convert patches to embeddings
   - Add CLS token (summary token)
-- **Output**: Image embeddings
+  - Process through transformer blocks
+- **Output**: Image embeddings (CLS token)
+- **Training**: Contrastive learning (CLIP-style) with InfoNCE loss for proper image-caption alignment
 
 ```python
 # Simplified vision encoding
@@ -153,6 +155,7 @@ graph LR
   - Downsample (8x reduction)
   - Process with transformer
 - **Output**: Audio frame embeddings (12.5 Hz rate)
+- **Training**: CTC loss with full character vocabulary (98 tokens: printable ASCII + special tokens)
 
 ```python
 # Simplified audio encoding
@@ -364,7 +367,9 @@ graph LR
 
 **Purpose**: Convert mel spectrogram to audio waveform
 
-**Process**: Iterative phase reconstruction (no neural network needed!)
+**Process**: Improved Griffin-Lim with proper mel filterbank inversion (pseudo-inverse approach), automatic domain detection (log vs magnitude), momentum for better convergence, and proper normalization to prevent clipping.
+
+**Improvements**: Uses proper mel filterbank inversion instead of simple upsampling, handles both log and magnitude domains automatically, includes momentum (0.99) for better convergence, and proper amplitude normalization.
 
 ## Data Flow Example
 
@@ -461,11 +466,17 @@ All "tiny" models are designed to fit in 12GB VRAM:
 
 ## Training Stages
 
-1. **Stage A**: Thinker (text-only)
-2. **Stage B**: Audio Encoder (ASR)
-3. **Stage C**: Vision Encoder
-4. **Stage D**: Talker + RVQ
-5. **Stage E**: Multimodal SFT (all together)
+1. **Stage A**: Thinker (text-only) - Next-token prediction with gradient accumulation
+2. **Stage B**: Audio Encoder (ASR) - CTC loss with full character vocabulary (98 tokens)
+3. **Stage C**: Vision Encoder - Contrastive learning (CLIP-style) for image-caption alignment
+4. **Stage D**: Talker + RVQ - Autoregressive code prediction
+5. **Stage E**: Multimodal SFT (all together) - Fine-tuning with all modalities
+
+**Training Features**:
+- **Gradient accumulation**: All scripts support accumulating gradients for larger effective batch sizes
+- **Automatic resume**: Training automatically detects and resumes from latest checkpoint
+- **Mixed precision (AMP)**: Enabled by default for 1.5-2x speedup
+- **Evaluation metrics**: Perplexity for text, proper character-level tokenization for audio
 
 See [Training Workflow](07_Training_Workflow.md) for details.
 
@@ -557,6 +568,9 @@ Before moving on, can you answer:
 
 4. **Why staged training instead of end-to-end?**
    - Answer: Fits in 12GB VRAM, easier to debug, components can be pretrained separately
+
+5. **What training improvements have been made?**
+   - Answer: Vision uses contrastive learning (CLIP-style), audio uses full character vocabulary (98 tokens), gradient accumulation support, improved Griffin-Lim vocoder, automatic checkpoint resume
 
 ## 🚀 Extension Ideas
 
