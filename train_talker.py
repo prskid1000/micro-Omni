@@ -1,6 +1,7 @@
 
 import argparse, json, os, csv, torch
 from torch import nn
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 import torchaudio
 from omni.codec import RVQ
@@ -83,6 +84,12 @@ def main(cfg):
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
+    
+    # Mixed precision training (AMP)
+    use_amp = cfg.get("use_amp", True) and device == "cuda"
+    scaler = GradScaler() if use_amp else None
+    if use_amp:
+        print("Mixed precision training (AMP) enabled")
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -110,13 +117,26 @@ def main(cfg):
     for epoch in range(max_epochs):
         for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
             mel = mel.to(device)  # (B,T,128)
-            # Batch encode all frames at once (optimized)
-            idxs = rvq.encode(mel)  # (B,T,2) - encodes all frames in batch
-            # AR training: predict current codes from previous codes
-            prev = torch.roll(idxs, 1, dims=1); prev[:,0,:]=0
-            base_logit, res_logit = talker(prev)
-            loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:,:,0].reshape(-1)) + \
-                   loss_fn(res_logit.reshape(-1, res_logit.size(-1)),  idxs[:,:,1].reshape(-1))
+            
+            # Forward pass with mixed precision
+            opt.zero_grad()
+            if use_amp:
+                with autocast():
+                    # Batch encode all frames at once (optimized)
+                    idxs = rvq.encode(mel)  # (B,T,2) - encodes all frames in batch
+                    # AR training: predict current codes from previous codes
+                    prev = torch.roll(idxs, 1, dims=1); prev[:,0,:]=0
+                    base_logit, res_logit = talker(prev)
+                    loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:,:,0].reshape(-1)) + \
+                           loss_fn(res_logit.reshape(-1, res_logit.size(-1)),  idxs[:,:,1].reshape(-1))
+            else:
+                # Batch encode all frames at once (optimized)
+                idxs = rvq.encode(mel)  # (B,T,2) - encodes all frames in batch
+                # AR training: predict current codes from previous codes
+                prev = torch.roll(idxs, 1, dims=1); prev[:,0,:]=0
+                base_logit, res_logit = talker(prev)
+                loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:,:,0].reshape(-1)) + \
+                       loss_fn(res_logit.reshape(-1, res_logit.size(-1)),  idxs[:,:,1].reshape(-1))
             
             # Validate loss value
             try:
@@ -126,8 +146,11 @@ def main(cfg):
                 logger.error("Skipping this batch due to invalid loss")
                 continue
             
-            opt.zero_grad()
-            loss.backward()
+            # Backward pass with gradient scaling
+            if use_amp:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             
             # Check for gradient explosion before clipping
             try:
@@ -136,17 +159,27 @@ def main(cfg):
                 if is_exploded_rvq or is_exploded_talker:
                     logger.error(f"Step {step}: Gradient explosion detected (rvq={grad_norm_rvq:.2f}, talker={grad_norm_talker:.2f}). Skipping this batch.")
                     opt.zero_grad()  # Clear gradients
+                    if use_amp:
+                        scaler.update()
                     continue
             except RuntimeError as e:
                 logger.error(f"Step {step}: {e}")
                 opt.zero_grad()  # Clear gradients
+                if use_amp:
+                    scaler.update()
                 continue
             
-            # Gradient clipping
-            clip_gradients(rvq, max_grad_norm)
-            clip_gradients(talker, max_grad_norm)
-            
-            opt.step()
+            # Gradient clipping (unscale first if using AMP)
+            if use_amp:
+                scaler.unscale_(opt)
+                clip_gradients(rvq, max_grad_norm)
+                clip_gradients(talker, max_grad_norm)
+                scaler.step(opt)
+                scaler.update()
+            else:
+                clip_gradients(rvq, max_grad_norm)
+                clip_gradients(talker, max_grad_norm)
+                opt.step()
             scheduler.step()
             step+=1
             if step % print_freq == 0:
@@ -168,12 +201,21 @@ def main(cfg):
                 with torch.no_grad():
                     for val_mel in val_dl:
                         val_mel = val_mel.to(device)
-                        # Batch encode all frames at once (optimized)
-                        val_idxs = rvq.encode(val_mel)  # (B,T,2)
-                        val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
-                        val_base_logit, val_res_logit = talker(val_prev)
-                        val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
-                                   loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                        if use_amp:
+                            with autocast():
+                                # Batch encode all frames at once (optimized)
+                                val_idxs = rvq.encode(val_mel)  # (B,T,2)
+                                val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
+                                val_base_logit, val_res_logit = talker(val_prev)
+                                val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
+                                           loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                        else:
+                            # Batch encode all frames at once (optimized)
+                            val_idxs = rvq.encode(val_mel)  # (B,T,2)
+                            val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
+                            val_base_logit, val_res_logit = talker(val_prev)
+                            val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
+                                       loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
                         
                         # Validate validation loss
                         try:
@@ -213,12 +255,21 @@ def main(cfg):
         with torch.no_grad():
             for val_mel in val_dl:
                 val_mel = val_mel.to(device)
-                # Batch encode all frames at once (optimized)
-                val_idxs = rvq.encode(val_mel)  # (B,T,2)
-                val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
-                val_base_logit, val_res_logit = talker(val_prev)
-                val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
-                           loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                if use_amp:
+                    with autocast():
+                        # Batch encode all frames at once (optimized)
+                        val_idxs = rvq.encode(val_mel)  # (B,T,2)
+                        val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
+                        val_base_logit, val_res_logit = talker(val_prev)
+                        val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
+                                   loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                else:
+                    # Batch encode all frames at once (optimized)
+                    val_idxs = rvq.encode(val_mel)  # (B,T,2)
+                    val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
+                    val_base_logit, val_res_logit = talker(val_prev)
+                    val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
+                               loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
                 
                 # Validate validation loss
                 try:

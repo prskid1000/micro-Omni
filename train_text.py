@@ -1,6 +1,7 @@
 
 import argparse, json, torch, os, random
 from torch import nn
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
@@ -59,6 +60,12 @@ def main(cfg):
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
+    
+    # Mixed precision training (AMP)
+    use_amp = cfg.get("use_amp", True) and device == "cuda"
+    scaler = GradScaler() if use_amp else None
+    if use_amp:
+        print("Mixed precision training (AMP) enabled")
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -86,8 +93,16 @@ def main(cfg):
         logger.epoch_start(epoch)
         for x,y in tqdm(train_dl, desc=f"epoch{epoch}"):
             x,y = x.to(device), y.to(device)
-            logits = model(x)  # (B,T,V)
-            loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+            
+            # Forward pass with mixed precision
+            opt.zero_grad()
+            if use_amp:
+                with autocast():
+                    logits = model(x)  # (B,T,V)
+                    loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+            else:
+                logits = model(x)  # (B,T,V)
+                loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
             
             # Validate loss value
             try:
@@ -97,8 +112,11 @@ def main(cfg):
                 logger.error("Skipping this batch due to invalid loss")
                 continue
             
-            opt.zero_grad()
-            loss.backward()
+            # Backward pass with gradient scaling
+            if use_amp:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             
             # Check for gradient explosion before clipping
             try:
@@ -106,16 +124,25 @@ def main(cfg):
                 if is_exploded:
                     logger.error(f"Step {step}: Gradient explosion detected (grad_norm={grad_norm:.2f}). Skipping this batch.")
                     opt.zero_grad()  # Clear gradients
+                    if use_amp:
+                        scaler.update()
                     continue
             except RuntimeError as e:
                 logger.error(f"Step {step}: {e}")
                 opt.zero_grad()  # Clear gradients
+                if use_amp:
+                    scaler.update()
                 continue
             
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            
-            opt.step()
+            # Gradient clipping (unscale first if using AMP)
+            if use_amp:
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                scaler.step(opt)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                opt.step()
             scheduler.step()
             step+=1
             
@@ -137,8 +164,13 @@ def main(cfg):
                 with torch.no_grad():
                     for val_x, val_y in val_dl:
                         val_x, val_y = val_x.to(device), val_y.to(device)
-                        val_logits = model(val_x)
-                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                        if use_amp:
+                            with autocast():
+                                val_logits = model(val_x)
+                                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                        else:
+                            val_logits = model(val_x)
+                            val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
                         
                         # Validate validation loss
                         try:
@@ -177,8 +209,13 @@ def main(cfg):
         with torch.no_grad():
             for val_x, val_y in val_dl:
                 val_x, val_y = val_x.to(device), val_y.to(device)
-                val_logits = model(val_x)
-                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                if use_amp:
+                    with autocast():
+                        val_logits = model(val_x)
+                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                else:
+                    val_logits = model(val_x)
+                    val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
                 
                 # Validate validation loss
                 try:

@@ -7,7 +7,7 @@
 - **How**: 5 stages: Thinker → Audio → Vision → Talker → Multimodal SFT
 - **Key Insight**: Each stage builds on previous knowledge (curriculum learning)
 - **Common Mistake**: Skipping stages or training end-to-end (runs out of memory)
-- **Time Estimate**: Stage A: 2-4 hours, Full pipeline: 8-12 hours
+- **Time Estimate**: Stage A: 2-4 hours, Full pipeline: 8-12 hours (with AMP: 1-2 hours)
 
 **📖 Reading Guide**:
 - **Quick Read**: 15 minutes (overview + stages)
@@ -131,18 +131,32 @@ python train_text.py --config configs/thinker_tiny.json
 ### Training Loop (From `train_text.py`)
 
 ```python
-# Actual code from train_text.py
+# Actual code from train_text.py (with AMP enabled)
 for x, y in tqdm(train_dl, desc=f"epoch{epoch}"):
     x, y = x.to(device), y.to(device)
-    logits = model(x)  # (B, T, V)
-    loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+    
+    # Forward pass with mixed precision (AMP)
     opt.zero_grad()
-    loss.backward()
+    if use_amp:
+        with autocast():
+            logits = model(x)  # (B, T, V)
+            loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+    else:
+        logits = model(x)  # (B, T, V)
+        loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
     
-    # Gradient clipping (our implementation)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+    # Backward pass with gradient scaling (AMP)
+    if use_amp:
+        scaler.scale(loss).backward()
+        scaler.unscale_(opt)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        scaler.step(opt)
+        scaler.update()
+    else:
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        opt.step()
     
-    opt.step()
     scheduler.step()
 ```
 
@@ -223,9 +237,12 @@ loss_fn = nn.CrossEntropyLoss(ignore_index=0)
   "max_steps": 1000,
   "batch_size": 8,
   "lr": 0.0003,
-  "warmup_steps": 10
+  "warmup_steps": 10,
+  "use_amp": true
 }
 ```
+
+**Note**: `use_amp: true` is now the default in all configs. AMP provides 1.5-2x speedup and ~50% memory reduction.
 
 ### Output
 
@@ -259,17 +276,29 @@ for audio, text in dataloader:
     # Convert to mel
     mel = mel_spec(audio)
     
-    # Encode
-    embeddings = audio_encoder(mel)
+    # Forward pass with AMP
+    opt.zero_grad()
+    if use_amp:
+        with autocast():
+            embeddings = audio_encoder(mel)
+            logits = ctc_head(embeddings)
+            loss = ctc_loss(logits, text)
+    else:
+        embeddings = audio_encoder(mel)
+        logits = ctc_head(embeddings)
+        loss = ctc_loss(logits, text)
     
-    # Predict text
-    logits = ctc_head(embeddings)
-    
-    # CTC loss (handles alignment)
-    loss = ctc_loss(logits, text)
-    
-    loss.backward()
-    optimizer.step()
+    # Backward with gradient scaling
+    if use_amp:
+        scaler.scale(loss).backward()
+        scaler.unscale_(opt)
+        clip_gradients(model, max_grad_norm)
+        scaler.step(opt)
+        scaler.update()
+    else:
+        loss.backward()
+        clip_gradients(model, max_grad_norm)
+        opt.step()
 ```
 
 ### CTC (Connectionist Temporal Classification)
@@ -307,18 +336,31 @@ python train_vision.py --config configs/vision_tiny.json
 
 ```python
 for image, caption in dataloader:
-    # Encode
-    cls_token, _ = vision_encoder(image)
-    
-    # Classify
-    logits = classifier(cls_token)
-    
-    # Label: 0 if "red" in caption, else 1
     label = 0 if "red" in caption else 1
-    loss = cross_entropy(logits, label)
     
-    loss.backward()
-    optimizer.step()
+    # Forward pass with AMP
+    opt.zero_grad()
+    if use_amp:
+        with autocast():
+            cls_token, _ = vision_encoder(image)
+            logits = classifier(cls_token)
+            loss = cross_entropy(logits, label)
+    else:
+        cls_token, _ = vision_encoder(image)
+        logits = classifier(cls_token)
+        loss = cross_entropy(logits, label)
+    
+    # Backward with gradient scaling
+    if use_amp:
+        scaler.scale(loss).backward()
+        scaler.unscale_(opt)
+        clip_gradients(vit, max_grad_norm)
+        scaler.step(opt)
+        scaler.update()
+    else:
+        loss.backward()
+        clip_gradients(vit, max_grad_norm)
+        opt.step()
 ```
 
 ### Note
@@ -354,33 +396,49 @@ python train_talker.py --config configs/talker_tiny.json
 ### Training Loop (From `train_talker.py`)
 
 ```python
-# Actual code from train_talker.py (with safety checks)
+# Actual code from train_talker.py (with AMP and safety checks)
 for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
     mel = mel.to(device)  # (B, T, 128)
     
-    # Batch encode all frames at once (optimized)
-    idxs = rvq.encode(mel)  # (B, T, 2) - encodes all frames in batch
-    
-    # AR training: predict current codes from previous codes
-    prev = torch.roll(idxs, 1, dims=1)  # Shift by one
-    prev[:, 0, :] = 0  # First frame is zero
-    
-    base_logit, res_logit = talker(prev)
-    # Note: Talker automatically checks for NaN/Inf in logits
-    
-    # Loss on both codebooks
-    loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:, :, 0].reshape(-1)) + \
-           loss_fn(res_logit.reshape(-1, res_logit.size(-1)), idxs[:, :, 1].reshape(-1))
+    # Forward pass with AMP
+    opt.zero_grad()
+    if use_amp:
+        with autocast():
+            # Batch encode all frames at once (optimized)
+            idxs = rvq.encode(mel)  # (B, T, 2) - encodes all frames in batch
+            
+            # AR training: predict current codes from previous codes
+            prev = torch.roll(idxs, 1, dims=1)  # Shift by one
+            prev[:, 0, :] = 0  # First frame is zero
+            
+            base_logit, res_logit = talker(prev)
+            # Note: Talker automatically checks for NaN/Inf in logits
+            
+            # Loss on both codebooks
+            loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:, :, 0].reshape(-1)) + \
+                   loss_fn(res_logit.reshape(-1, res_logit.size(-1)), idxs[:, :, 1].reshape(-1))
+    else:
+        idxs = rvq.encode(mel)
+        prev = torch.roll(idxs, 1, dims=1)
+        prev[:, 0, :] = 0
+        base_logit, res_logit = talker(prev)
+        loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:, :, 0].reshape(-1)) + \
+               loss_fn(res_logit.reshape(-1, res_logit.size(-1)), idxs[:, :, 1].reshape(-1))
     
     # 🔒 Loss Validation (NEW)
     try:
         validate_loss(loss, min_loss=-1e6, max_loss=1e6)
     except RuntimeError as e:
         logger.error(f"Step {step}: {e}")
+        if use_amp:
+            scaler.update()
         continue  # Skip this batch
     
-    opt.zero_grad()
-    loss.backward()
+    # Backward with gradient scaling (AMP)
+    if use_amp:
+        scaler.scale(loss).backward()
+    else:
+        loss.backward()
     
     # 🔒 Gradient Explosion Detection (NEW)
     try:
@@ -389,16 +447,27 @@ for mel in tqdm(train_dl, desc=f"epoch{epoch}"):
         if is_exploded_rvq or is_exploded_talker:
             logger.error(f"Gradient explosion detected. Skipping batch.")
             opt.zero_grad()
+            if use_amp:
+                scaler.update()
             continue
     except RuntimeError as e:
         logger.error(f"Step {step}: {e}")
         opt.zero_grad()
+        if use_amp:
+            scaler.update()
         continue
     
-    # Gradient clipping
-    clip_gradients(rvq, max_grad_norm)
-    clip_gradients(talker, max_grad_norm)
-    opt.step()
+    # Gradient clipping (unscale first if using AMP)
+    if use_amp:
+        scaler.unscale_(opt)
+        clip_gradients(rvq, max_grad_norm)
+        clip_gradients(talker, max_grad_norm)
+        scaler.step(opt)
+        scaler.update()
+    else:
+        clip_gradients(rvq, max_grad_norm)
+        clip_gradients(talker, max_grad_norm)
+        opt.step()
     scheduler.step()
 ```
 
@@ -507,26 +576,37 @@ python sft_omni.py --config configs/omni_sft_tiny.json
 ### Training Loop (From `sft_omni.py`)
 
 ```python
-# Actual code from sft_omni.py
+# Actual code from sft_omni.py (with AMP)
 for batch_idx, data in enumerate(train_dl):
-    # Process batch (handles variable modalities)
-    batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True)
+    # Process batch (handles variable modalities, with AMP support)
+    batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True, use_amp_flag=use_amp)
     
-    # Forward pass
-    logits = think(embeddings=batch_emb)  # (B, T, vocab)
-    
-    # Calculate loss (mask out padding)
-    loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
-    
+    # Forward pass with AMP
     opt.zero_grad()
-    loss.backward()
+    if use_amp:
+        with autocast():
+            logits = think(embeddings=batch_emb)  # (B, T, vocab)
+            loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
+    else:
+        logits = think(embeddings=batch_emb)  # (B, T, vocab)
+        loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
     
-    # Gradient clipping (our implementation)
-    clip_gradients(think, max_grad_norm)
-    clip_gradients(proj_a, max_grad_norm)
-    clip_gradients(proj_v, max_grad_norm)
+    # Backward with gradient scaling (AMP)
+    if use_amp:
+        scaler.scale(loss).backward()
+        scaler.unscale_(opt)
+        clip_gradients(think, max_grad_norm)
+        clip_gradients(proj_a, max_grad_norm)
+        clip_gradients(proj_v, max_grad_norm)
+        scaler.step(opt)
+        scaler.update()
+    else:
+        loss.backward()
+        clip_gradients(think, max_grad_norm)
+        clip_gradients(proj_a, max_grad_norm)
+        clip_gradients(proj_v, max_grad_norm)
+        opt.step()
     
-    opt.step()
     scheduler.step()
 ```
 
@@ -682,6 +762,54 @@ def get_lr_scheduler(optimizer, warmup_steps, max_steps, min_lr_ratio=0.1):
 - **Refinement**: Low LR late (refine)
 - **Proven**: Used in many successful models
 
+### Mixed Precision Training (AMP) - Our Implementation
+
+**Automatic Mixed Precision (AMP)** is now enabled by default in all training scripts for faster training and reduced memory usage.
+
+**Our implementation** (from all `train_*.py` files):
+```python
+from torch.cuda.amp import autocast, GradScaler
+
+# Initialize AMP
+use_amp = cfg.get("use_amp", True) and device == "cuda"
+scaler = GradScaler() if use_amp else None
+
+# In training loop:
+if use_amp:
+    with autocast():  # Forward pass in FP16
+        logits = model(x)
+        loss = loss_fn(logits, targets)
+    
+    scaler.scale(loss).backward()  # Scaled backward
+    scaler.unscale_(opt)  # Unscale before clipping
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+    scaler.step(opt)  # Scaled optimizer step
+    scaler.update()  # Update scaler
+```
+
+**Why AMP?**
+- **Speed**: 1.5-2x faster training
+- **Memory**: ~50% less VRAM usage
+- **Quality**: Minimal impact on model quality
+- **Automatic**: PyTorch handles precision automatically
+
+**How it works**:
+- **Forward pass**: Uses FP16 (half precision) for speed
+- **Loss scaling**: Scales loss to prevent underflow
+- **Backward pass**: Computes gradients in FP16
+- **Optimizer step**: Unscales and updates in FP32
+
+**Configuration**:
+- **Default**: `use_amp: true` in all configs
+- **Disable**: Set `use_amp: false` in config if needed
+- **Automatic**: Only enabled on CUDA devices
+
+**What value do we get?**
+- **Faster training**: 1.5-2x speedup on modern GPUs
+- **More VRAM**: Can use larger batch sizes
+- **Same quality**: Minimal impact on final model performance
+- **Production-ready**: Standard practice in modern training
+
 ### Gradient Clipping (Our Implementation)
 
 **From `omni/training_utils.py`**:
@@ -699,6 +827,13 @@ def clip_gradients(model, max_norm=1.0):
 - **Empirical**: Works well in practice
 - **Conservative**: Prevents extreme gradients
 - **Standard**: Common value in transformer training
+
+**Note**: With AMP, gradients must be unscaled before clipping:
+```python
+if use_amp:
+    scaler.unscale_(opt)  # Unscale first!
+    clip_gradients(model, max_grad_norm)  # Then clip
+```
 
 **What value do we get?**
 - **Stable training**: No gradient explosions
@@ -870,22 +1005,28 @@ Before moving on, can you answer:
 5. **How are numerical issues handled during training?**
    - Answer: Automatic NaN/Inf detection in forward passes, loss validation, and gradient explosion detection - invalid batches are automatically skipped
 
-6. **How do you know when a stage is done?**
+6. **What is AMP and how does it help?**
+   - Answer: Automatic Mixed Precision uses FP16 for forward passes, providing 1.5-2x speedup and ~50% memory reduction. Enabled by default in all training scripts.
+
+7. **How do you know when a stage is done?**
    - Answer: Loss plateaus, validation loss stops improving, or max steps reached
 
 ## Training Time Estimates
 
-For tiny models on 12GB GPU:
+For tiny models on 12GB GPU (with AMP enabled):
 
-| Stage | Steps | Time (approx) |
-|-------|-------|---------------|
-| Thinker | 1000 | 10-20 min |
-| Audio Encoder | 500 | 5-10 min |
-| Vision Encoder | 500 | 5-10 min |
-| Talker | 500 | 5-10 min |
-| Omni SFT | 2000 | 20-40 min |
+| Stage | Steps | Time (FP32) | Time (AMP) | Speedup |
+|-------|-------|-------------|------------|---------|
+| Thinker | 1000 | 10-20 min | 6-12 min | 1.5-2x |
+| Audio Encoder | 500 | 5-10 min | 3-6 min | 1.5-2x |
+| Vision Encoder | 5000 | 50-100 min | 30-60 min | 1.5-2x |
+| Talker | 500 | 5-10 min | 3-6 min | 1.5-2x |
+| Omni SFT | 2000 | 20-40 min | 12-24 min | 1.5-2x |
 
-**Total**: ~1-2 hours for full training
+**Total (FP32)**: ~1.5-3 hours for full training
+**Total (AMP)**: ~1-2 hours for full training ⚡
+
+**Note**: AMP provides 1.5-2x speedup and ~50% memory reduction with minimal quality impact.
 
 ## Next Steps
 

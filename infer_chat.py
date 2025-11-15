@@ -1,6 +1,7 @@
 
 import argparse, os, torch, torchaudio, json
 from PIL import Image
+from torch.cuda.amp import autocast
 from torchvision import transforms
 import torchvision.io as tvio
 from omni.thinker import ThinkerLM
@@ -24,7 +25,7 @@ def extract_video_frames(video_path, num_frames=4):
         print(f"Warning: Could not extract frames from video: {e}")
         return []
 
-def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_cache=True):
+def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_cache=True, use_amp=True):
     """
     Generate text from prompt, optionally with multimodal embeddings prepended.
     Uses KV caching for faster autoregressive generation.
@@ -57,7 +58,11 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         combined_emb = torch.cat([multimodal_emb, text_emb], dim=1)
         
         # First forward pass with full prompt
-        logits = model(embeddings=combined_emb)
+        if use_amp and device == "cuda":
+            with autocast():
+                logits = model(embeddings=combined_emb)
+        else:
+            logits = model(embeddings=combined_emb)
         next_id = int(torch.argmax(logits[0, -1]))
         generated_ids = ids + [next_id]
         
@@ -65,7 +70,11 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         for _ in range(max_new - 1):
             # Only process new token
             next_emb = model.tok_emb(torch.tensor([[next_id]], dtype=torch.long, device=device))
-            logits = model(embeddings=next_emb)
+            if use_amp and device == "cuda":
+                with autocast():
+                    logits = model(embeddings=next_emb)
+            else:
+                logits = model(embeddings=next_emb)
             next_id = int(torch.argmax(logits[0, -1]))
             generated_ids.append(next_id)
             if next_id == 2: break  # EOS
@@ -74,7 +83,11 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         x = torch.tensor(ids, dtype=torch.long, device=device)[None, :]
         
         # First forward pass with full prompt
-        logits = model(x)
+        if use_amp and device == "cuda":
+            with autocast():
+                logits = model(x)
+        else:
+            logits = model(x)
         next_id = int(torch.argmax(logits[0, -1]))
         generated_ids = ids + [next_id]
         
@@ -82,7 +95,11 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         for _ in range(max_new - 1):
             # Only process new token
             x = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            logits = model(x)
+            if use_amp and device == "cuda":
+                with autocast():
+                    logits = model(x)
+            else:
+                logits = model(x)
             next_id = int(torch.argmax(logits[0, -1]))
             generated_ids.append(next_id)
             if next_id == 2: break  # EOS
@@ -479,9 +496,20 @@ def main():
                 frame = (frame * 255).astype('uint8')
                 img = Image.fromarray(frame).convert("RGB")
                 img_tensor = tf(img).unsqueeze(0).to(device)
-                cls, _ = vis(img_tensor)
-                if proj_v is not None:
-                    img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+                if device == "cuda":
+                    with autocast():
+                        cls, _ = vis(img_tensor)
+                        if proj_v is not None:
+                            img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+                        else:
+                            img_emb = None
+                else:
+                    cls, _ = vis(img_tensor)
+                    if proj_v is not None:
+                        img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+                    else:
+                        img_emb = None
+                if img_emb is not None:
                     multimodal_embeddings.append(img_emb)
                     print("Integrated video frame features")
         
@@ -489,9 +517,18 @@ def main():
             print(f"Processing image: {args.image}")
             img = Image.open(args.image).convert("RGB")
             img_tensor = tf(img).unsqueeze(0).to(device)
-            cls, _ = vis(img_tensor)
+            if device == "cuda":
+                with autocast():
+                    cls, _ = vis(img_tensor)
+            else:
+                cls, _ = vis(img_tensor)
+            
             if proj_v is not None:
-                img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+                if device == "cuda":
+                    with autocast():
+                        img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+                else:
+                    img_emb = proj_v(cls)  # (1,1,thinker_d_model)
                 multimodal_embeddings.append(img_emb)
                 print("Integrated image features")
         
@@ -503,9 +540,17 @@ def main():
                 wav = torchaudio.functional.resample(wav, sr, 16000)
             print(f"Audio loaded: {wav.shape}, sample rate: {sr}")
             mel = mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
-            audio_emb = aud(mel)  # (1, T', audio_dim)
-            if proj_a is not None:
-                audio_emb = proj_a(audio_emb)  # (1, T', thinker_d_model)
+            if device == "cuda":
+                with autocast():
+                    audio_emb = aud(mel)  # (1, T', audio_dim)
+                    if proj_a is not None:
+                        audio_emb = proj_a(audio_emb)  # (1, T', thinker_d_model)
+            else:
+                audio_emb = aud(mel)  # (1, T', audio_dim)
+                if proj_a is not None:
+                    audio_emb = proj_a(audio_emb)  # (1, T', thinker_d_model)
+            
+            if proj_a is not None and audio_emb is not None:
                 # Limit audio length
                 max_audio_tokens = min(audio_emb.shape[1], ctx_len // 4)
                 audio_emb = audio_emb[:, :max_audio_tokens, :]

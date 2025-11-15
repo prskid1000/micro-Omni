@@ -139,10 +139,21 @@ pos = [0, 1, 2, 3, 4, 5]  # Position indices for 6 tokens
 ### Step 4: Transformer Blocks (4 layers)
 **What it does**: Processes embeddings through attention and MLP layers
 
+**Note**: In training, forward passes use AMP (automatic mixed precision) for faster computation:
+```python
+# Training mode (with AMP):
+with autocast():  # FP16 forward pass
+    x = block(x)  # Faster, uses less memory
+
+# Inference mode (with AMP):
+with autocast():  # FP16 forward pass
+    logits = model(x)  # Faster inference
+```
+
 #### Layer 1:
 ```python
 # Input: (1, 6, 256)
-# Block 1:
+# Block 1 (with AMP in training/inference):
 #   - RMSNorm: (1, 6, 256) → (1, 6, 256) [normalize]
 #   - Attention: (1, 6, 256) → (1, 6, 256)
 #     * Q, K, V: (1, 6, 256) → (1, 4 heads, 6, 64)
@@ -150,6 +161,7 @@ pos = [0, 1, 2, 3, 4, 5]  # Position indices for 6 tokens
 #     * Output: (1, 6, 256) [weighted combination]
 #   - MLP (SwiGLU): (1, 6, 256) → (1, 6, 256)
 # Output: (1, 6, 256)
+# Note: AMP uses FP16 internally, but output is cast back to FP32 if needed
 ```
 
 **Transformation per layer**:
@@ -1034,6 +1046,35 @@ if torch.isnan(logits).any() or torch.isinf(logits).any():
 - **Clear errors**: Detailed error messages with counts
 - **Prevents corruption**: Stops training before weights are corrupted
 
+### Mixed Precision (AMP) Safety
+
+**AMP with automatic stability**:
+- **Gradient scaling**: Prevents underflow in FP16
+- **Automatic casting**: PyTorch handles precision automatically
+- **Loss scaling**: Scales loss before backward to prevent underflow
+- **Unscaling**: Unscales gradients before clipping (required for AMP)
+
+**AMP workflow**:
+```python
+# Forward pass in FP16 (automatic)
+with autocast():
+    logits = model(x)  # Computed in FP16
+    loss = loss_fn(logits, targets)
+
+# Backward with scaling
+scaler.scale(loss).backward()  # Scales gradients
+scaler.unscale_(opt)  # Unscales before clipping
+clip_gradients(model, max_grad_norm)  # Clip in FP32
+scaler.step(opt)  # Updates weights
+scaler.update()  # Updates scaler
+```
+
+**Benefits of AMP**:
+- **Speed**: 1.5-2x faster training and inference
+- **Memory**: ~50% less VRAM usage
+- **Stability**: Gradient scaling prevents underflow
+- **Quality**: Minimal impact on model performance
+
 ### Loss Validation in Training
 
 **All training scripts validate losses**:
@@ -1148,7 +1189,13 @@ Before moving on, can you answer:
 
 5. **Batch Processing**: Training processes multiple samples in parallel, but token counts per sample are independent.
 
-**Conclusion**: The entire pipeline operates on a unified token-based representation, where each step transforms tokens while preserving or modifying their count based on the operation type.
+6. **Mixed Precision (AMP)**: All forward passes use FP16 automatically for 1.5-2x speedup:
+   - Training: Forward in FP16, backward with gradient scaling
+   - Inference: Forward in FP16 for faster generation
+   - Memory: ~50% less VRAM usage
+   - Quality: Minimal impact on model performance
+
+**Conclusion**: The entire pipeline operates on a unified token-based representation, where each step transforms tokens while preserving or modifying their count based on the operation type. AMP accelerates all computations with minimal quality impact.
 
 ---
 

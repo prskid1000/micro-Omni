@@ -1,6 +1,7 @@
 
 import argparse, json, os, torch, json as js
 from torch import nn
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
@@ -44,6 +45,12 @@ def main(cfg):
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
+    
+    # Mixed precision training (AMP)
+    use_amp = cfg.get("use_amp", True) and device == "cuda"
+    scaler = GradScaler() if use_amp else None
+    if use_amp:
+        print("Mixed precision training (AMP) enabled")
 
     words = ["red","blue","square","background","big","small","roughly","pixel"]
 
@@ -73,11 +80,20 @@ def main(cfg):
     for epoch in range(max_epochs):
         for img, cap in tqdm(train_dl, desc=f"epoch{epoch}"):
             img = img.to(device)
-            cls,_ = vit(img)  # (B,1,d)
-            logit = head(cls.squeeze(1))  # (B,64)
             # make a toy label: predict 'red'(0) if 'red' in caption else 'blue'(1)
             labels = torch.tensor([0 if "red" in c else 1 for c in cap], dtype=torch.long, device=device)
-            loss = loss_fn(logit, labels)
+            
+            # Forward pass with mixed precision
+            opt.zero_grad()
+            if use_amp:
+                with autocast():
+                    cls,_ = vit(img)  # (B,1,d)
+                    logit = head(cls.squeeze(1))  # (B,64)
+                    loss = loss_fn(logit, labels)
+            else:
+                cls,_ = vit(img)  # (B,1,d)
+                logit = head(cls.squeeze(1))  # (B,64)
+                loss = loss_fn(logit, labels)
             
             # Validate loss value
             try:
@@ -87,8 +103,11 @@ def main(cfg):
                 logger.error("Skipping this batch due to invalid loss")
                 continue
             
-            opt.zero_grad()
-            loss.backward()
+            # Backward pass with gradient scaling
+            if use_amp:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             
             # Check for gradient explosion before clipping
             try:
@@ -97,17 +116,27 @@ def main(cfg):
                 if is_exploded_vit or is_exploded_head:
                     logger.error(f"Step {step}: Gradient explosion detected (vit={grad_norm_vit:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
                     opt.zero_grad()  # Clear gradients
+                    if use_amp:
+                        scaler.update()
                     continue
             except RuntimeError as e:
                 logger.error(f"Step {step}: {e}")
                 opt.zero_grad()  # Clear gradients
+                if use_amp:
+                    scaler.update()
                 continue
             
-            # Gradient clipping
-            clip_gradients(vit, max_grad_norm)
-            clip_gradients(head, max_grad_norm)
-            
-            opt.step()
+            # Gradient clipping (unscale first if using AMP)
+            if use_amp:
+                scaler.unscale_(opt)
+                clip_gradients(vit, max_grad_norm)
+                clip_gradients(head, max_grad_norm)
+                scaler.step(opt)
+                scaler.update()
+            else:
+                clip_gradients(vit, max_grad_norm)
+                clip_gradients(head, max_grad_norm)
+                opt.step()
             scheduler.step()
             step+=1
             if step % print_freq == 0:
@@ -129,10 +158,16 @@ def main(cfg):
                 with torch.no_grad():
                     for val_img, val_cap in val_dl:
                         val_img = val_img.to(device)
-                        val_cls, _ = vit(val_img)
-                        val_logit = head(val_cls.squeeze(1))
                         val_labels = torch.tensor([0 if "red" in c else 1 for c in val_cap], dtype=torch.long, device=device)
-                        val_loss = loss_fn(val_logit, val_labels)
+                        if use_amp:
+                            with autocast():
+                                val_cls, _ = vit(val_img)
+                                val_logit = head(val_cls.squeeze(1))
+                                val_loss = loss_fn(val_logit, val_labels)
+                        else:
+                            val_cls, _ = vit(val_img)
+                            val_logit = head(val_cls.squeeze(1))
+                            val_loss = loss_fn(val_logit, val_labels)
                         
                         # Validate validation loss
                         try:
@@ -172,10 +207,16 @@ def main(cfg):
         with torch.no_grad():
             for val_img, val_cap in val_dl:
                 val_img = val_img.to(device)
-                val_cls, _ = vit(val_img)
-                val_logit = head(val_cls.squeeze(1))
                 val_labels = torch.tensor([0 if "red" in c else 1 for c in val_cap], dtype=torch.long, device=device)
-                val_loss = loss_fn(val_logit, val_labels)
+                if use_amp:
+                    with autocast():
+                        val_cls, _ = vit(val_img)
+                        val_logit = head(val_cls.squeeze(1))
+                        val_loss = loss_fn(val_logit, val_labels)
+                else:
+                    val_cls, _ = vit(val_img)
+                    val_logit = head(val_cls.squeeze(1))
+                    val_loss = loss_fn(val_logit, val_labels)
                 
                 # Validate validation loss
                 try:

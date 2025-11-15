@@ -1,6 +1,7 @@
 
 import argparse, json, os, torch, torchaudio, csv
 from torch import nn
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from omni.audio_encoder import AudioEncoderTiny
 from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
@@ -67,6 +68,12 @@ def main(cfg):
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
+    
+    # Mixed precision training (AMP)
+    use_amp = cfg.get("use_amp", True) and device == "cuda"
+    scaler = GradScaler() if use_amp else None
+    if use_amp:
+        print("Mixed precision training (AMP) enabled")
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -94,8 +101,7 @@ def main(cfg):
     for epoch in range(max_epochs):
         for mel, text in tqdm(train_dl, desc=f"epoch{epoch}"):
             mel = mel.to(device)
-            x = model(mel)  # (B, T', d)
-            logit = head(x)  # (B,T',V)
+            
             # fabricate tiny targets: map chars to 1..63
             max_text_len = cfg.get("max_text_len", 16)
             tgt = []
@@ -104,9 +110,22 @@ def main(cfg):
                 tgt.append(torch.tensor(ids, dtype=torch.long))
             tgt_lens = torch.tensor([len(t) for t in tgt], dtype=torch.long)
             tgt = torch.cat(tgt)
-            log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
-            inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
-            loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+            
+            # Forward pass with mixed precision
+            opt.zero_grad()
+            if use_amp:
+                with autocast():
+                    x = model(mel)  # (B, T', d)
+                    logit = head(x)  # (B,T',V)
+                    log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
+                    inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
+                    loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+            else:
+                x = model(mel)  # (B, T', d)
+                logit = head(x)  # (B,T',V)
+                log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
+                inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
+                loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
             
             # Validate loss value
             try:
@@ -116,8 +135,11 @@ def main(cfg):
                 logger.error("Skipping this batch due to invalid loss")
                 continue
             
-            opt.zero_grad()
-            loss.backward()
+            # Backward pass with gradient scaling
+            if use_amp:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             
             # Check for gradient explosion before clipping
             try:
@@ -126,17 +148,27 @@ def main(cfg):
                 if is_exploded_model or is_exploded_head:
                     logger.error(f"Step {step}: Gradient explosion detected (model={grad_norm_model:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
                     opt.zero_grad()  # Clear gradients
+                    if use_amp:
+                        scaler.update()
                     continue
             except RuntimeError as e:
                 logger.error(f"Step {step}: {e}")
                 opt.zero_grad()  # Clear gradients
+                if use_amp:
+                    scaler.update()
                 continue
             
-            # Gradient clipping
-            clip_gradients(model, max_grad_norm)
-            clip_gradients(head, max_grad_norm)
-            
-            opt.step()
+            # Gradient clipping (unscale first if using AMP)
+            if use_amp:
+                scaler.unscale_(opt)
+                clip_gradients(model, max_grad_norm)
+                clip_gradients(head, max_grad_norm)
+                scaler.step(opt)
+                scaler.update()
+            else:
+                clip_gradients(model, max_grad_norm)
+                clip_gradients(head, max_grad_norm)
+                opt.step()
             scheduler.step()
             step+=1
             if step % print_freq == 0:
@@ -158,17 +190,25 @@ def main(cfg):
                 with torch.no_grad():
                     for val_mel, val_text in val_dl:
                         val_mel = val_mel.to(device)
-                        val_x = model(val_mel)
-                        val_logit = head(val_x)
                         val_tgt = []
                         for t in val_text:
                             ids = [ (ord(c)%63)+1 for c in t[:max_text_len] ]
                             val_tgt.append(torch.tensor(ids, dtype=torch.long))
                         val_tgt_lens = torch.tensor([len(t) for t in val_tgt], dtype=torch.long)
                         val_tgt = torch.cat(val_tgt)
-                        val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                        val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
-                        val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                        if use_amp:
+                            with autocast():
+                                val_x = model(val_mel)
+                                val_logit = head(val_x)
+                                val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
+                                val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                                val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                        else:
+                            val_x = model(val_mel)
+                            val_logit = head(val_x)
+                            val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
+                            val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                            val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
                         
                         # Validate validation loss
                         try:
@@ -208,17 +248,25 @@ def main(cfg):
         with torch.no_grad():
             for val_mel, val_text in val_dl:
                 val_mel = val_mel.to(device)
-                val_x = model(val_mel)
-                val_logit = head(val_x)
                 val_tgt = []
                 for t in val_text:
                     ids = [ (ord(c)%63)+1 for c in t[:max_text_len] ]
                     val_tgt.append(torch.tensor(ids, dtype=torch.long))
                 val_tgt_lens = torch.tensor([len(t) for t in val_tgt], dtype=torch.long)
                 val_tgt = torch.cat(val_tgt)
-                val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
-                val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                if use_amp:
+                    with autocast():
+                        val_x = model(val_mel)
+                        val_logit = head(val_x)
+                        val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
+                        val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                        val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                else:
+                    val_x = model(val_mel)
+                    val_logit = head(val_x)
+                    val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
+                    val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                    val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
                 
                 # Validate validation loss
                 try:

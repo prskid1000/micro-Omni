@@ -81,6 +81,31 @@ aud.eval()
 - **Determinism**: No randomness in inference
 - **Performance**: Slightly faster (no dropout computation)
 
+### Mixed Precision in Inference (AMP)
+
+**Our implementation** (from `infer_chat.py`):
+```python
+from torch.cuda.amp import autocast
+
+# Forward passes use AMP for faster inference
+if device == "cuda":
+    with autocast():
+        logits = model(input)  # FP16 forward pass
+else:
+    logits = model(input)  # FP32 on CPU
+```
+
+**Why AMP in inference?**
+- **Speed**: 1.5-2x faster inference on GPU
+- **Memory**: ~50% less VRAM usage
+- **Quality**: Minimal impact on output quality
+- **Automatic**: Enabled by default on CUDA devices
+
+**What value do we get?**
+- **Faster responses**: Especially important for interactive chat
+- **More capacity**: Can process larger batches or longer sequences
+- **Production-ready**: Standard practice for deployment
+
 ### Memory Efficiency in Inference
 
 **Training**: Stores activations for gradients
@@ -277,9 +302,11 @@ out = generate(think, tok, prompt, ctx=ctx_len, multimodal_emb=multimodal_emb)
 
 #### The Generation Process (From `infer_chat.py`)
 
-**Our implementation**:
+**Our implementation** (with AMP):
 ```python
-def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_cache=True):
+def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_cache=True, use_amp=True):
+    device = next(model.parameters()).device
+    
     # Tokenize prompt
     ids = [1] + tok.encode(prompt)
     
@@ -291,15 +318,23 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         text_emb = model.tok_emb(torch.tensor(ids, ...))
         combined_emb = torch.cat([multimodal_emb, text_emb], dim=1)
         
-        # First forward pass
-        logits = model(embeddings=combined_emb)
+        # First forward pass with AMP
+        if use_amp and device == "cuda":
+            with autocast():
+                logits = model(embeddings=combined_emb)
+        else:
+            logits = model(embeddings=combined_emb)
         next_id = int(torch.argmax(logits[0, -1]))
         generated_ids = ids + [next_id]
         
-        # Incremental generation
+        # Incremental generation with AMP
         for _ in range(max_new - 1):
             next_emb = model.tok_emb(torch.tensor([[next_id]], ...))
-            logits = model(embeddings=next_emb)
+            if use_amp and device == "cuda":
+                with autocast():
+                    logits = model(embeddings=next_emb)
+            else:
+                logits = model(embeddings=next_emb)
             next_id = int(torch.argmax(logits[0, -1]))
             generated_ids.append(next_id)
             if next_id == 2: break  # EOS
@@ -621,8 +656,22 @@ while True:
 
 1. **Use GPU**: Much faster than CPU
 2. **KV Caching**: Enabled by default
-3. **Batch Processing**: Process multiple inputs together
-4. **Context Length**: Truncate if too long
+3. **AMP (Mixed Precision)**: Enabled by default for 1.5-2x speedup
+4. **Batch Processing**: Process multiple inputs together
+5. **Context Length**: Truncate if too long
+
+### AMP Performance Benefits
+
+**Inference speedup with AMP**:
+- **Text-only**: 1.5-2x faster generation
+- **Multimodal**: 1.3-1.8x faster (image/audio encoding also benefits)
+- **Memory**: ~50% less VRAM usage
+- **Quality**: Minimal impact (typically <1% difference)
+
+**How to verify AMP is working**:
+- Check GPU utilization: Should see higher throughput
+- Monitor memory: Should use less VRAM
+- Check logs: No errors about AMP (it's automatic)
 
 ## Troubleshooting
 

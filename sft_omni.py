@@ -1,6 +1,7 @@
 
 import argparse, json, os, torch, csv, json as js
 from torch import nn
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
@@ -138,6 +139,12 @@ def main(cfg):
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
+    
+    # Mixed precision training (AMP)
+    use_amp = cfg.get("use_amp", True) and device == "cuda"
+    scaler = GradScaler() if use_amp else None
+    if use_amp:
+        print("Mixed precision training (AMP) enabled")
 
     mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=160, win_length=400, n_mels=128).to(device)
     tok_model = os.path.join(cfg["thinker_ckpt"], "tokenizer.model")
@@ -167,7 +174,7 @@ def main(cfg):
     print(f"Starting training: max_epochs={max_epochs}, max_steps={cfg['max_steps']}, batch_size={cfg.get('batch_size', 2)}")
     print(f"Train samples: {train_size}, Val samples: {val_size}")
     
-    def process_batch(data, is_training=True):
+    def process_batch(data, is_training=True, use_amp_flag=False):
         """Process a batch of multimodal data efficiently"""
         B = len(data["text"])
         
@@ -194,8 +201,13 @@ def main(cfg):
                 if img_tensors:
                     img_batch = torch.stack(img_tensors).to(device)  # (N, 3, 224, 224)
                     with torch.set_grad_enabled(is_training):
-                        cls_batch, _ = vis(img_batch)  # (N, 1, d_vision)
-                        img_emb_batch = proj_v(cls_batch)  # (N, 1, thinker_d_model)
+                        if use_amp_flag and is_training:
+                            with autocast():
+                                cls_batch, _ = vis(img_batch)  # (N, 1, d_vision)
+                                img_emb_batch = proj_v(cls_batch)  # (N, 1, thinker_d_model)
+                        else:
+                            cls_batch, _ = vis(img_batch)  # (N, 1, d_vision)
+                            img_emb_batch = proj_v(cls_batch)  # (N, 1, thinker_d_model)
                     
                     # Store embeddings for valid indices
                     for idx, emb in zip(valid_indices, img_emb_batch):
@@ -234,8 +246,13 @@ def main(cfg):
                     mel_batch = torch.stack(mel_batch)  # (N, T, 128)
                     
                     with torch.set_grad_enabled(is_training):
-                        audio_emb_batch = aud(mel_batch)  # (N, T', d_audio)
-                        audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
+                        if use_amp_flag and is_training:
+                            with autocast():
+                                audio_emb_batch = aud(mel_batch)  # (N, T', d_audio)
+                                audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
+                        else:
+                            audio_emb_batch = aud(mel_batch)  # (N, T', d_audio)
+                            audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
                     
                     # Limit audio length and store
                     max_audio_tokens = cfg["ctx_len"] // 4
@@ -351,13 +368,19 @@ def main(cfg):
         proj_v.train()
         
         for batch_idx, data in enumerate(train_dl):
-            batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True)
+            batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True, use_amp_flag=use_amp)
             
-            # Forward pass
-            logits = think(embeddings=batch_emb)  # (B, T, vocab)
-            
-            # Calculate loss (mask out padding)
-            loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
+            # Forward pass with mixed precision
+            opt.zero_grad()
+            if use_amp:
+                with autocast():
+                    logits = think(embeddings=batch_emb)  # (B, T, vocab)
+                    # Calculate loss (mask out padding)
+                    loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
+            else:
+                logits = think(embeddings=batch_emb)  # (B, T, vocab)
+                # Calculate loss (mask out padding)
+                loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
             
             # Validate loss value
             try:
@@ -367,8 +390,11 @@ def main(cfg):
                 logger.error("Skipping this batch due to invalid loss")
                 continue
             
-            opt.zero_grad()
-            loss.backward()
+            # Backward pass with gradient scaling
+            if use_amp:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             
             # Check for gradient explosion before clipping
             try:
@@ -378,18 +404,29 @@ def main(cfg):
                 if is_exploded_think or is_exploded_proj_a or is_exploded_proj_v:
                     logger.error(f"Step {step}: Gradient explosion detected (think={grad_norm_think:.2f}, proj_a={grad_norm_proj_a:.2f}, proj_v={grad_norm_proj_v:.2f}). Skipping this batch.")
                     opt.zero_grad()  # Clear gradients
+                    if use_amp:
+                        scaler.update()
                     continue
             except RuntimeError as e:
                 logger.error(f"Step {step}: {e}")
                 opt.zero_grad()  # Clear gradients
+                if use_amp:
+                    scaler.update()
                 continue
             
-            # Gradient clipping
-            clip_gradients(think, max_grad_norm)
-            clip_gradients(proj_a, max_grad_norm)
-            clip_gradients(proj_v, max_grad_norm)
-            
-            opt.step()
+            # Gradient clipping (unscale first if using AMP)
+            if use_amp:
+                scaler.unscale_(opt)
+                clip_gradients(think, max_grad_norm)
+                clip_gradients(proj_a, max_grad_norm)
+                clip_gradients(proj_v, max_grad_norm)
+                scaler.step(opt)
+                scaler.update()
+            else:
+                clip_gradients(think, max_grad_norm)
+                clip_gradients(proj_a, max_grad_norm)
+                clip_gradients(proj_v, max_grad_norm)
+                opt.step()
             scheduler.step()
             step += 1  # Increment global step counter
             
@@ -407,9 +444,14 @@ def main(cfg):
                 
                 with torch.no_grad():
                     for val_data in val_dl:
-                        val_emb, val_targets, val_mask = process_batch(val_data, is_training=False)
-                        val_logits = think(embeddings=val_emb)
-                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                        val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
+                        if use_amp:
+                            with autocast():
+                                val_logits = think(embeddings=val_emb)
+                                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                        else:
+                            val_logits = think(embeddings=val_emb)
+                            val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                         
                         # Validate validation loss
                         try:
@@ -463,9 +505,14 @@ def main(cfg):
         val_count = 0
         with torch.no_grad():
             for val_data in val_dl:
-                val_emb, val_targets, val_mask = process_batch(val_data, is_training=False)
-                val_logits = think(embeddings=val_emb)
-                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
+                if use_amp:
+                    with autocast():
+                        val_logits = think(embeddings=val_emb)
+                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                else:
+                    val_logits = think(embeddings=val_emb)
+                    val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                 
                 # Validate validation loss
                 try:
