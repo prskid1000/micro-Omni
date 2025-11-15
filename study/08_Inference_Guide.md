@@ -1,5 +1,7 @@
 # Inference Guide: Using Trained Models
 
+> **💡 Technical terms explained**: Terms like "inference", "tokenization", "autoregressive", "KV cache" are explained in the [Glossary](GLOSSARY.md)!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: Using trained models to make predictions (no training, just forward pass)

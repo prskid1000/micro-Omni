@@ -1,5 +1,7 @@
 # Training Workflow
 
+> **💡 Technical terms explained**: Terms like "AMP", "gradient accumulation", "checkpoint", "scheduler", "optimizer" are explained in the [Glossary](GLOSSARY.md)!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: Staged training - train components separately, then combine

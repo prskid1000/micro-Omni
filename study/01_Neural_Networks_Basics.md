@@ -1,5 +1,7 @@
 # Neural Networks Basics
 
+> **💡 New to neural networks?** This document explains the fundamentals. For definitions of specific terms, see the [Glossary](GLOSSARY.md)!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: Neural networks learn patterns from data (like our brains)

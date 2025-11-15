@@ -1,5 +1,7 @@
 # Talker & Codec: Generating Speech
 
+> **💡 Technical terms explained**: Terms like "RVQ", "vocoder", "mel spectrogram", "quantization", "codebook" are explained in the [Glossary](GLOSSARY.md)!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: Talker generates speech codes, RVQ converts codes ↔ audio

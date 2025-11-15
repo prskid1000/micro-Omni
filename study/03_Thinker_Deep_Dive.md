@@ -1,5 +1,7 @@
 # Thinker: The Core Language Model
 
+> **💡 Technical terms explained**: This document uses advanced terms like "RoPE", "GQA", "SwiGLU", "MoE", "autoregressive", etc. See the [Glossary](GLOSSARY.md) for explanations!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: Thinker is a decoder-only transformer (like GPT)

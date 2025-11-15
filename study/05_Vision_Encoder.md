@@ -1,5 +1,7 @@
 # Vision Encoder: Understanding Images
 
+> **💡 Technical terms explained**: Terms like "CLIP", "contrastive learning", "CLS token", "patches" are explained in the [Glossary](GLOSSARY.md)!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: Converts images to embeddings Thinker can understand

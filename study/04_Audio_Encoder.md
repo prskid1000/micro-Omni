@@ -1,5 +1,7 @@
 # Audio Encoder: Understanding Speech
 
+> **💡 Technical terms explained**: This document uses terms like "mel spectrogram", "CTC", "downsampling", etc. Check the [Glossary](GLOSSARY.md) for beginner-friendly explanations!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: Converts audio waveforms to embeddings Thinker can understand

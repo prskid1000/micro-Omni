@@ -1,5 +1,7 @@
 # μOmni Architecture Overview
 
+> **💡 New to AI terminology?** This document uses technical terms like "embedding", "projector", "token", etc. If you encounter unfamiliar terms, check the [Glossary](GLOSSARY.md) for simple explanations!
+
 ## 🎯 Key Takeaways (TL;DR)
 
 - **What**: μOmni is a multimodal AI with Thinker-Talker architecture
@@ -110,7 +112,9 @@ graph TB
 
 ### 1. Input Encoders
 
-**Purpose**: Convert raw data into embeddings
+**Purpose**: Convert raw data into embeddings (vectors of numbers that represent the data)
+
+> **What is an embedding?** An embedding converts discrete items (like words or image patches) into continuous vectors (lists of numbers). Think of it like translating words into a universal language of numbers. See [Glossary: Embedding](GLOSSARY.md#e) for more details.
 
 #### Vision Encoder (ViT-Tiny)
 - **Input**: Image (224×224 pixels)

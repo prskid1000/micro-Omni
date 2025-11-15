@@ -1,5 +1,7 @@
 # Quick Reference Guide
 
+> **💡 Don't understand a term?** Check the [Glossary](GLOSSARY.md) for simple explanations of technical terms!
+
 ## File Structure
 
 ```
@@ -34,13 +36,13 @@ study/
 - **Position Encoding**: Handle sequence order
 
 ### μOmni Components
-- **Thinker**: Core language model
-- **Audio Encoder**: Processes speech (ASR with 98-char vocabulary)
-- **Vision Encoder**: Processes images (contrastive learning, CLIP-style)
-- **Talker**: Generates speech
-- **RVQ Codec**: Audio quantization
-- **Vocoder**: Improved Griffin-Lim (mel filterbank inversion)
-- **Projectors**: Align modalities
+- **Thinker**: Core language model (see [Glossary](GLOSSARY.md) for "transformer", "autoregressive")
+- **Audio Encoder**: Processes speech (ASR with 98-char vocabulary) - see [Glossary](GLOSSARY.md) for "ASR", "CTC"
+- **Vision Encoder**: Processes images (contrastive learning, CLIP-style) - see [Glossary](GLOSSARY.md) for "CLIP", "contrastive learning"
+- **Talker**: Generates speech (see [Glossary](GLOSSARY.md) for "TTS")
+- **RVQ Codec**: Audio quantization (see [Glossary](GLOSSARY.md) for "RVQ", "quantization", "codebook")
+- **Vocoder**: Improved Griffin-Lim (mel filterbank inversion) - see [Glossary](GLOSSARY.md) for "vocoder", "mel spectrogram"
+- **Projectors**: Align modalities (see [Glossary](GLOSSARY.md) for "projector", "embedding")
 
 ## Training Commands
 

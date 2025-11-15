@@ -157,11 +157,13 @@ graph TD
 
 ## Key Concepts You'll Learn
 
-1. **Neural Networks** - How computers "learn"
-2. **Transformers** - The architecture powering modern AI
-3. **Multimodal Fusion** - Combining different data types
-4. **Training** - Teaching the model with examples
-5. **Inference** - Using the trained model
+1. **Neural Networks** - How computers "learn" (see [Glossary](GLOSSARY.md) for detailed explanations)
+2. **Transformers** - The architecture powering modern AI (uses attention mechanisms to process sequences)
+3. **Multimodal Fusion** - Combining different data types (text, images, audio) into a unified representation
+4. **Training** - Teaching the model with examples (adjusting weights to minimize errors)
+5. **Inference** - Using the trained model to make predictions on new data
+
+> **💡 New to AI?** Don't worry about technical terms! Check the [Glossary](GLOSSARY.md) for simple explanations of terms like "embedding", "attention", "tokenization", and more.
 
 ## Project Structure
 
@@ -257,6 +259,7 @@ If you're comfortable with these, you're ready!
 **Next:** [01_Neural_Networks_Basics.md](01_Neural_Networks_Basics.md) - Learn the fundamentals
 
 **See Also:**
+- [Glossary](GLOSSARY.md) - Simple explanations of technical terms
 - [Architecture Overview](02_Architecture_Overview.md)
 - [Main README](../README.md)
 
