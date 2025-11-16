@@ -28,7 +28,7 @@ python train_text.py --config configs/thinker_tiny.json
 
 # Expected time: 8-12 hours
 # Expected result: Perplexity < 10
-# Output: checkpoints/thinker_tiny/thinker_best.pt
+# Output: checkpoints/thinker_tiny/thinker_step_*.pt (every 1000 steps)
 ```
 
 **Monitor:**
@@ -73,11 +73,7 @@ python train_talker.py --config configs/talker_tiny.json
 ### Stage E: Multimodal SFT
 
 ```bash
-python sft_omni.py --config configs/omni_sft_tiny.json \
-  --thinker checkpoints/thinker_tiny/thinker_best.pt \
-  --audio_encoder checkpoints/audio_enc_tiny/audio_enc.pt \
-  --vision_encoder checkpoints/vision_tiny/vision.pt \
-  --talker checkpoints/talker_tiny/talker.pt
+python sft_omni.py --config configs/omni_sft_tiny.json
 
 # Time: 6-12 hours
 # Target: Good multimodal Q&A
@@ -132,7 +128,7 @@ python train_text.py --config configs/thinker_tiny.json \
 ✅ **Run stages in parallel** (if multiple GPUs)  
 ✅ **Start with small data** to verify pipeline  
 ✅ **Monitor GPU memory** with `nvidia-smi`  
-✅ **Save checkpoints frequently** (every 500-1000 steps)  
+✅ **Save checkpoints frequently** (every 1000 steps)  
 ✅ **Use tmux/screen** for long training sessions
 
 ---

@@ -274,7 +274,7 @@ WER 10-20% = Good for proof-of-concept! ✓
   "learning_rate": 1e-4,    // 0.0001 (lower than Stage A)
                             // Audio training needs stability
   
-  "save_every": 500         // Checkpoint frequency
+  "checkpoint_freq": 1000  // Checkpoint frequency (every 1000 steps)
 }
 ```
 
@@ -342,21 +342,16 @@ data/audio/wav/sample3.wav,"the cat sat on the mat"
 checkpoints/audio_enc_tiny/
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-├── audio_enc_best.pt        # Best WER model
-│   Contains:
-│   - Audio Encoder weights (~10M parameters)
-│   - Optimizer state
-│   - Best WER: 12.3%
-│
-├── audio_enc_step_500.pt    # Periodic checkpoints
-├── audio_enc_step_1000.pt
+├── audio_enc_step_1000.pt    # Periodic checkpoints (every 1000 steps)
+├── audio_enc_step_2000.pt
 │
 └── training_log.json        # Metrics history
 
 Load for Stage E:
 ```python
-checkpoint = torch.load('checkpoints/audio_enc_tiny/audio_enc_best.pt')
-audio_encoder.load_state_dict(checkpoint['model_state_dict'])
+# Load the latest checkpoint
+checkpoint = torch.load('checkpoints/audio_enc_tiny/audio_enc_step_2000.pt')
+audio_encoder.load_state_dict(checkpoint['enc'])
 ```
 ```
 
@@ -381,17 +376,17 @@ Starting ASR training with CTC loss...
 
 Epoch 1/20:
 [Step 100/2500] ctc_loss=45.23 wer=78.5% | 3.5s/step
-[Step 500/2500] ctc_loss=18.67 wer=45.2% | 3.2s/step
-✓ Saved checkpoint: audio_enc_step_500.pt
+[Step 1000/2500] ctc_loss=18.67 wer=45.2% | 3.2s/step
+✓ Saved checkpoint: audio_enc_step_1000.pt
 
 ...
 
 Epoch 20/20:
 [Step 2500/2500] ctc_loss=8.45 wer=12.3% | 3.0s/step
-✓ Saved best model: audio_enc_best.pt
+✓ Saved checkpoint: audio_enc_step_2000.pt
 
 Training complete! Time: 8h 15m
-Best WER: 12.3%
+Final WER: 12.3%
 
 Ready for Stage E! 🎉
 ```

@@ -84,11 +84,9 @@ Epoch 25: loss=2.1, ppl=8 (good generation!)
 ## 🎓 Output
 
 ```
-checkpoints/rvq_codec/
-├── rvq_best.pt          # RVQ Codec
-
 checkpoints/talker_tiny/
-├── talker_best.pt       # Talker model
+├── talker_step_1000.pt   # Periodic checkpoints (every 1000 steps)
+└── talker_step_2000.pt
 ```
 
 Enables text-to-speech in final system!

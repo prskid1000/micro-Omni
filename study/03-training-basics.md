@@ -663,11 +663,14 @@ print(f"  Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
 ### 2. **Save Checkpoints**
 
 ```python
-# Save best model
-if val_loss < best_loss:
-    torch.save(model.state_dict(), 'best_model.pt')
-    best_loss = val_loss
-    print("✓ Saved new best model!")
+# Save periodic checkpoints
+if step % checkpoint_freq == 0:
+    torch.save({
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'step': step
+    }, f'checkpoint_step_{step}.pt')
+    print(f"✓ Saved checkpoint at step {step}")
 ```
 
 ### 3. **Use Validation Set**

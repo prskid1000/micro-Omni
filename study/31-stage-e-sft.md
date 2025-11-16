@@ -27,9 +27,9 @@ Train on mixed batches with different modality combinations:
 ```json
 {
   // Load pretrained checkpoints
-  "thinker_ckpt": "checkpoints/thinker_tiny/thinker_best.pt",
-  "audio_ckpt": "checkpoints/audio_enc_tiny/audio_enc.pt",
-  "vision_ckpt": "checkpoints/vision_tiny/vision.pt",
+  "thinker_ckpt": "checkpoints/thinker_tiny",
+  "audio_ckpt": "checkpoints/audio_enc_tiny",
+  "vision_ckpt": "checkpoints/vision_tiny",
   
   // Training strategy
   "freeze_encoders": true,  // Only fine-tune Thinker

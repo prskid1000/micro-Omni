@@ -59,8 +59,8 @@ After 15 epochs → ~75-85% accuracy (good understanding!)
 
 ```
 checkpoints/vision_encoder_tiny/
-├── vision_best.pt       # Best accuracy model
-└── vision_step_500.pt   # Checkpoints
+├── vision_step_1000.pt   # Periodic checkpoints (every 1000 steps)
+└── vision_step_2000.pt
 ```
 
 Used in Stage E for multimodal image understanding!

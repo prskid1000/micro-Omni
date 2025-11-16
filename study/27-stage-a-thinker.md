@@ -445,14 +445,7 @@ READY FOR STAGE E! ✓
 checkpoints/thinker_tiny/
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-├── thinker_best.pt          # Best model (lowest validation loss)
-│   Contains:
-│   - Model weights (all 15M parameters)
-│   - Optimizer state
-│   - Training step number
-│   - Best validation loss
-│
-├── thinker_step_1000.pt     # Periodic checkpoints
+├── thinker_step_1000.pt     # Periodic checkpoints (every 1000 steps)
 ├── thinker_step_2000.pt     # (Resume if crash!)
 ├── thinker_step_3000.pt
 │
@@ -465,8 +458,9 @@ checkpoints/thinker_tiny/
 
 Load for Stage E:
 ```python
-checkpoint = torch.load('checkpoints/thinker_tiny/thinker_best.pt')
-thinker.load_state_dict(checkpoint['model_state_dict'])
+# Load the latest checkpoint
+checkpoint = torch.load('checkpoints/thinker_tiny/thinker_step_3000.pt')
+thinker.load_state_dict(checkpoint['model'])
 ```
 ```
 
@@ -494,19 +488,19 @@ Starting training...
 
 Epoch 1/10:
 [Step 100/5000] loss=4.234 ppl=68.9 lr=0.00030 | 2.3s/step
-[Step 500/5000] loss=3.156 ppl=23.4 lr=0.00030 | 2.1s/step
+[Step 1000/5000] loss=3.156 ppl=23.4 lr=0.00030 | 2.1s/step
 → Validation: loss=3.201 ppl=24.5
-✓ Saved checkpoint: thinker_step_500.pt
+✓ Saved checkpoint: thinker_step_1000.pt
 
 ...
 
 Epoch 10/10:
 [Step 5000/5000] loss=1.987 ppl=7.3 lr=0.00030 | 2.0s/step
 → Final validation: loss=2.012 ppl=7.5
-✓ Saved best model: thinker_best.pt
+✓ Saved checkpoint: thinker_step_5000.pt
 
 Training complete! Time: 10h 24m
-Best validation PPL: 7.5
+Final validation PPL: 7.5
 
 Ready for Stage E! 🎉
 ```
@@ -521,7 +515,7 @@ Ready for Stage E! 🎉
 ✅ **~10 hours** on 12GB GPU for tiny model  
 ✅ **Foundation** for all multimodal capabilities  
 ✅ **Cross-entropy loss** measures prediction accuracy  
-✅ **Checkpoints** enable resuming and selecting best model
+✅ **Checkpoints** enable resuming training (saved every 1000 steps)
 
 ---
 

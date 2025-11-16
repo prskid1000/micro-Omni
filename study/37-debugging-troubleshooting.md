@@ -110,7 +110,7 @@ tensorboard --logdir checkpoints/
 ✅ **Start small:** Test on 10 samples first  
 ✅ **Check loss:** Should decrease steadily  
 ✅ **Monitor GPU:** Watch `nvidia-smi`  
-✅ **Save often:** Checkpoints every 500 steps  
+✅ **Save often:** Checkpoints every 1000 steps  
 ✅ **Log everything:** Use tensorboard/wandb
 
 ---
