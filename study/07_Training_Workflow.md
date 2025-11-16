@@ -630,10 +630,28 @@ loss = loss_base + loss_residual
 
 - `talker.pt` - Talker weights + RVQ codebooks
 
-## Stage E: Multimodal SFT
+## Stage E: Multimodal SFT (Supervised Fine-Tuning)
+
+### What is SFT?
+
+**SFT (Supervised Fine-Tuning)** is the **final critical stage** that teaches all pre-trained components to work together as a unified multimodal system.
+
+**Think of it this way:**
+- **Stages A-D**: Each component learns individual skills
+  - Thinker → Language understanding
+  - Vision → See images
+  - Audio → Hear speech
+  - Talker → Generate speech
+- **Stage E (SFT)**: Components learn to collaborate
+  - Answer questions about images
+  - Transcribe and respond to audio
+  - Generate appropriate multimodal responses
+  - Follow instructions across modalities
+
+**Analogy:** Like a sports team - individual training (Stages A-D) vs team practice (Stage E/SFT).
 
 ### Goal
-Fine-tune Thinker with multimodal data, train projectors.
+Fine-tune Thinker with multimodal data, train projectors to align all modalities.
 
 ### Process
 
@@ -644,11 +662,11 @@ python sft_omni.py --config configs/omni_sft_tiny.json
 ### What Happens
 
 1. **Load Components**: Thinker, Audio Encoder, Vision Encoder (frozen)
-2. **Load Data**: Mixed text, images, audio
+2. **Load Data**: Mixed text, images, audio in same batch
 3. **Encode Modalities**: Each encoder processes its modality
-4. **Project**: Align to Thinker dimension
-5. **Fuse**: Concatenate embeddings
-6. **Train**: Thinker + projectors (encoders frozen)
+4. **Project**: Align vision/audio features to Thinker's embedding space
+5. **Fuse**: Concatenate embeddings into unified sequence
+6. **Train**: Thinker + projectors learn multimodal alignment (encoders frozen)
 
 ### Training Loop (From `sft_omni.py`)
 
@@ -778,6 +796,41 @@ y_ids = torch.cat([multimodal_padding, y_ids], dim=0)
 3. **Integration**: Thinker learns to process multimodal sequences
 4. **Efficiency**: Frozen encoders = faster training
 5. **Flexibility**: Handles any combination of modalities
+
+#### SFT Coverage and Quality
+
+**Dataset Coverage** matters significantly for SFT quality:
+
+| Coverage | Examples Seen | Quality | Use Case |
+|----------|---------------|---------|----------|
+| **10%** | 860K of 8.6M | Basic alignment | Quick testing |
+| **30%** | 2.6M of 8.6M | Acceptable | Demos, POCs |
+| **100%** | All 8.6M once | Good alignment ✅ | Internal tools, MVPs |
+| **300%** | All 8.6M 3× | Strong alignment | Production |
+
+**Why coverage matters:**
+- **More data** = Better cross-modal understanding
+- **Multiple epochs** = Stronger alignment patterns
+- **Full coverage** = Sees all multimodal combinations
+
+**Current config:** With `batch_size=2` and `gradient_accumulation_steps=4`, effective batch is 8. At 1.29M steps, this achieves **~120% coverage** (1.2 epochs through the full dataset).
+
+#### What's Trained vs Frozen in SFT
+
+**Trainable (updated by optimizer):**
+- ✅ Thinker (language model)
+- ✅ Audio projector (`proj_a`)
+- ✅ Vision projector (`proj_v`)
+
+**Frozen (not updated):**
+- ❌ Vision encoder (already trained in Stage C)
+- ❌ Audio encoder (already trained in Stage B)
+
+**Why freeze encoders?**
+- Already learned good representations
+- Focus SFT on alignment, not re-learning encoding
+- More stable and faster training
+- Prevents catastrophic forgetting
 
 ### Key Points
 

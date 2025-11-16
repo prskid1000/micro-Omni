@@ -282,6 +282,54 @@ def calculate_perplexity(loss):
     loss_val = min(loss_val, 10.0)  # exp(10) ≈ 22026
     return math.exp(loss_val)
 
+def cleanup_old_checkpoints(save_dir, checkpoint_prefix, keep_last_n=1):
+    """
+    Keep only the last N step checkpoints and delete older ones.
+    Always preserves *_best.pt and final checkpoints (without "step_" in name).
+    
+    Args:
+        save_dir: Directory containing checkpoints
+        checkpoint_prefix: Prefix for checkpoint files (e.g., "thinker_step_", "audio_enc_step_")
+        keep_last_n: Number of most recent checkpoints to keep (default: 1)
+    """
+    import os
+    import glob
+    
+    if not os.path.exists(save_dir):
+        return
+    
+    # Find all step checkpoints
+    pattern = os.path.join(save_dir, f"{checkpoint_prefix}*.pt")
+    checkpoint_files = glob.glob(pattern)
+    
+    # Extract step numbers
+    step_checkpoints = []
+    for f in checkpoint_files:
+        basename = os.path.basename(f)
+        # Skip best and final checkpoints
+        if "best" in basename:
+            continue
+        try:
+            step_num = int(basename.replace(checkpoint_prefix, "").replace(".pt", ""))
+            step_checkpoints.append((step_num, f))
+        except:
+            continue
+    
+    # Sort by step number (newest first)
+    step_checkpoints.sort(key=lambda x: x[0], reverse=True)
+    
+    # Delete old checkpoints (keep only the last N)
+    deleted_count = 0
+    for step_num, checkpoint_path in step_checkpoints[keep_last_n:]:
+        try:
+            os.remove(checkpoint_path)
+            deleted_count += 1
+        except Exception as e:
+            print(f"  Warning: Could not delete {checkpoint_path}: {e}")
+    
+    if deleted_count > 0:
+        print(f"  Cleaned up {deleted_count} old checkpoint(s), keeping last {min(keep_last_n, len(step_checkpoints))}")
+
 def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, model, opt=None, scheduler=None, scaler=None):
     """
     Reload from the last saved checkpoint in the save directory.

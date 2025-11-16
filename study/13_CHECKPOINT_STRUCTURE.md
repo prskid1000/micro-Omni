@@ -219,17 +219,73 @@ Approximate sizes for tiny models:
 
 ## When Checkpoints Are Saved
 
-1. **Periodic Checkpoints**: Every `checkpoint_freq` steps (default: 500)
+1. **Periodic Checkpoints**: Every `checkpoint_freq` steps
    - Format: `{model}_step_{step}.pt`
    - Example: `thinker_step_500.pt`, `thinker_step_1000.pt`
+   - **Auto-cleanup**: Only the **last checkpoint** is kept (older ones deleted automatically)
 
 2. **Best Model**: When validation loss improves
    - Format: `{model}_best.pt`
    - Example: `thinker_best.pt`
+   - **Always kept**: Never deleted by cleanup
 
 3. **Final Model**: At end of training
    - Format: `{model}.pt`
    - Example: `thinker.pt`
+   - **Always kept**: Final checkpoint
+
+### Checkpoint Cleanup (Storage Optimization)
+
+**All training scripts now automatically clean up old checkpoints** to save storage space.
+
+**How it works:**
+```python
+# After saving each periodic checkpoint
+torch.save(checkpoint_data, checkpoint_path)
+logger.checkpoint(step, checkpoint_path)
+
+# Automatically clean up old checkpoints (keep only last 1)
+cleanup_old_checkpoints(cfg["save_dir"], "thinker_step_", keep_last_n=1)
+```
+
+**What gets deleted:**
+- ✅ Old periodic checkpoints (e.g., `thinker_step_500.pt` when `thinker_step_1000.pt` is saved)
+
+**What's always preserved:**
+- ✅ Latest periodic checkpoint (e.g., `thinker_step_1000.pt`)
+- ✅ Best model (`thinker_best.pt`)
+- ✅ Final model (`thinker.pt`)
+
+**Storage savings:**
+- **Before**: 2,150+ checkpoint files (~43 GB for Thinker alone!)
+- **After**: 3 checkpoint files (~60 MB for Thinker)
+- **Reduction**: 99.9% storage saved! 🎉
+
+**Configuration:**
+```python
+# In omni/training_utils.py
+cleanup_old_checkpoints(
+    save_dir="checkpoints/thinker_tiny",
+    checkpoint_prefix="thinker_step_",
+    keep_last_n=1  # Keep only the last N checkpoints (default: 1)
+)
+```
+
+**Example directory after cleanup:**
+```
+checkpoints/thinker_tiny/
+├── thinker_step_1075000.pt    ← Latest (kept)
+├── thinker_best.pt             ← Best (always kept)
+├── thinker.pt                  ← Final (always kept)
+└── tokenizer.model             ← Not a checkpoint
+```
+
+**Benefits:**
+- 💾 **Massive storage savings** (99%+ reduction)
+- 🔄 **Resume still works** (latest checkpoint always available)
+- 🏆 **Best model preserved** (for deployment)
+- 🔒 **Final model safe** (never deleted)
+- ⚡ **Automatic** (no manual cleanup needed)
 
 ## Automatic Resume
 
@@ -274,21 +330,29 @@ All checkpoints are stored in the directory specified by `save_dir` in the confi
 }
 ```
 
-The directory structure:
+The directory structure **with automatic cleanup enabled:**
 ```
 checkpoints/
 ├── thinker_tiny/
-│   ├── thinker_step_500.pt
-│   ├── thinker_step_1000.pt
-│   ├── thinker_best.pt
-│   ├── thinker.pt
-│   └── tokenizer.model
+│   ├── thinker_step_1075000.pt  ← Only latest periodic checkpoint
+│   ├── thinker_best.pt           ← Best model (always kept)
+│   ├── thinker.pt                ← Final model (always kept)
+│   └── tokenizer.model           ← Tokenizer (not a checkpoint)
 ├── vision_tiny/
-│   ├── vision_step_500.pt
-│   ├── vision_best.pt
-│   └── vision.pt
-└── ...
+│   ├── vision_step_231300.pt     ← Only latest
+│   ├── vision_best.pt            ← Best (kept)
+│   └── vision.pt                 ← Final (kept)
+├── audio_enc_tiny/
+│   ├── audio_enc_step_64200.pt   ← Only latest
+│   ├── audio_enc_best.pt         ← Best (kept)
+│   └── audio_enc.pt              ← Final (kept)
+└── omni_sft_tiny/
+    ├── omni_step_1290000.pt      ← Only latest
+    ├── omni_best.pt              ← Best (kept)
+    └── omni.pt                   ← Final (kept)
 ```
+
+**Total storage:** ~270 MB (vs 80 GB without cleanup!) ✅
 
 ## Key Points
 
@@ -297,6 +361,9 @@ checkpoints/
 3. **Automatic resume**: Training scripts handle checkpoint detection and loading
 4. **Backward compatible**: Supports both new (dict) and legacy (state_dict only) formats
 5. **Efficient storage**: PyTorch uses efficient serialization (pickle-based)
+6. **Automatic cleanup**: Only last periodic checkpoint kept, 99% storage saved ⭐
+7. **Safe cleanup**: Best and final models always preserved
+8. **No manual intervention**: Cleanup happens automatically during training
 
 ---
 

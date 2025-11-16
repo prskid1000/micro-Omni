@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchaudio
 from omni.codec import RVQ
 from omni.talker import TalkerTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, cleanup_old_checkpoints
 from tqdm import tqdm
 
 def collate_mel_fn(batch):
@@ -286,6 +286,8 @@ def main(cfg):
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
+                # Clean up old checkpoints (keep only last one + best)
+                cleanup_old_checkpoints(cfg["save_dir"], "talker_step_", keep_last_n=1)
             
             # Validation
             if step % val_freq == 0 and step > 0:

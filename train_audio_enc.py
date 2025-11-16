@@ -305,6 +305,8 @@ def main(cfg):
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
+                # Clean up old checkpoints (keep only last one + best)
+                cleanup_old_checkpoints(cfg["save_dir"], "audio_enc_step_", keep_last_n=1)
             
             # Validation
             if step % val_freq == 0 and step > 0:

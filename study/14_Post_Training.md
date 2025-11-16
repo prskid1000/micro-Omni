@@ -168,6 +168,7 @@ python post_train.py \
 This will:
 - Auto-detect model type from config
 - Load the checkpoint
+- **Automatic resumption**: If interrupted, automatically resumes from latest `{model}_post_step_*.pt`
 - Continue optimizer/scheduler state
 - Continue step counter
 - Train on the new dataset
@@ -463,6 +464,61 @@ python post_train.py \
   - **Full state recovery**: Model, optimizer, scheduler, and scaler states are restored
   - **Logging**: Recovery actions are logged with checkpoint paths and step numbers
   - **Resume behavior**: Training resumes from the exact step of the recovered checkpoint
+
+### Feature: Automatic Resumption After Interruption
+
+**All model types** now support automatic resumption if training is interrupted (Ctrl+C, crash, power loss, etc.):
+
+**How it works:**
+1. On startup, `post_train.py` scans `save_dir` for existing `{model}_post_step_*.pt` files
+2. If found, automatically loads the **latest checkpoint** (highest step number)
+3. Resumes training from that exact step (skips already-processed batches)
+4. Preserves all training state: model, optimizer, scheduler, scaler, best_val_loss
+
+**Example scenario:**
+```bash
+# Start post-training
+python post_train.py \
+    --config configs/thinker_tiny.json \
+    --checkpoint checkpoints/thinker_tiny/thinker.pt \
+    --new_dataset data/post_training/text.txt
+
+# Training runs... saves at step 500, 1000, 1500...
+# At step 1823: Training interrupted (Ctrl+C / crash)
+
+# Simply re-run the same command:
+python post_train.py \
+    --config configs/thinker_tiny.json \
+    --checkpoint checkpoints/thinker_tiny/thinker.pt \
+    --new_dataset data/post_training/text.txt
+
+# Output:
+# 🔄 Found existing post-training checkpoint: thinker_post_step_1500.pt
+# Resuming from step 1500...
+# ✓ Model state resumed
+# ✓ Optimizer state resumed
+# ✓ Scheduler state resumed
+# ✓ Successfully resumed from step 1500
+# Training continues from step 1500...
+```
+
+**Benefits:**
+- ✅ **Zero configuration**: No special flags needed, just re-run the same command
+- ✅ **Safe**: Never loses progress beyond last checkpoint interval
+- ✅ **Efficient**: Skips already-processed batches automatically
+- ✅ **Smart**: Only resumes if post-training checkpoints exist (not initial checkpoint)
+- ✅ **Overridable**: Use `--reset_step` to force restart from initial checkpoint
+
+**To force restart** (ignore existing post-training checkpoints):
+```bash
+python post_train.py \
+    --config configs/thinker_tiny.json \
+    --checkpoint checkpoints/thinker_tiny/thinker.pt \
+    --new_dataset data/post_training/text.txt \
+    --reset_step  # ← Forces restart from step 0
+```
+
+**Checkpoint cleanup:** Only the **last** periodic checkpoint is kept (plus best and final), saving 99%+ disk space!
 
 ### Issue: Checkpoint Loading Fails
 

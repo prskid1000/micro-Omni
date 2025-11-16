@@ -58,7 +58,7 @@ from omni.vision_encoder import ViTTiny
 from omni.talker import TalkerTiny
 from omni.codec import RVQ
 from omni.tokenizer import BPETokenizer
-from omni.training_utils import set_seed, get_lr_scheduler, validate_loss, check_gradient_explosion, SimpleLogger, reload_from_last_checkpoint
+from omni.training_utils import set_seed, get_lr_scheduler, validate_loss, check_gradient_explosion, SimpleLogger, reload_from_last_checkpoint, cleanup_old_checkpoints
 from tqdm import tqdm
 
 # ============================================================================
@@ -545,34 +545,108 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
     max_steps = cfg.get("max_steps", 5000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
-    # Load optimizer/scheduler state if not resetting
-    step = 0
-    best_val_loss = float('inf')
+    # Initialize logger early for resumption detection
+    logger = SimpleLogger("PostTrain")
     
-    if not args.reset_optimizer and "optimizer" in checkpoint_meta:
+    # Check for existing post-training checkpoints for automatic resumption
+    checkpoint_prefix = f"{model_type}_post_step_"
+    existing_checkpoints = []
+    if os.path.exists(cfg["save_dir"]):
+        for fname in os.listdir(cfg["save_dir"]):
+            if fname.startswith(checkpoint_prefix) and fname.endswith(".pt"):
+                try:
+                    step_num = int(fname.replace(checkpoint_prefix, "").replace(".pt", ""))
+                    existing_checkpoints.append((step_num, fname))
+                except ValueError:
+                    continue
+    
+    # If post-training checkpoints exist, resume from the latest one
+    if existing_checkpoints and not args.reset_step:
+        existing_checkpoints.sort(reverse=True)
+        latest_step, latest_fname = existing_checkpoints[0]
+        latest_checkpoint_path = os.path.join(cfg["save_dir"], latest_fname)
+        
+        logger.info(f"🔄 Found existing post-training checkpoint: {latest_fname}")
+        logger.info(f"Resuming from step {latest_step}...")
+        
         try:
-            opt.load_state_dict(checkpoint_meta["optimizer"])
-            print("✓ Optimizer state loaded")
+            resume_checkpoint = torch.load(latest_checkpoint_path, map_location=device)
+            
+            # Load model state
+            model_key = {"thinker": "model", "audio_enc": "enc", "vision": "vit", "talker": "talker"}[model_type]
+            if model_key in resume_checkpoint:
+                model.load_state_dict(resume_checkpoint[model_key])
+                logger.info("✓ Model state resumed")
+            
+            # Load additional components
+            if model_type == "audio_enc" and head and "head" in resume_checkpoint:
+                head.load_state_dict(resume_checkpoint["head"])
+                logger.info("✓ Head state resumed")
+            elif model_type == "vision" and img_proj and text_proj:
+                if "img_proj" in resume_checkpoint:
+                    img_proj.load_state_dict(resume_checkpoint["img_proj"])
+                if "text_proj" in resume_checkpoint:
+                    text_proj.load_state_dict(resume_checkpoint["text_proj"])
+                if "text_embed" in resume_checkpoint and text_embed_encode:
+                    text_embed_encode[0].load_state_dict(resume_checkpoint["text_embed"])
+                logger.info("✓ Projectors state resumed")
+            elif model_type == "talker" and rvq and "rvq" in resume_checkpoint:
+                rvq.load_state_dict(resume_checkpoint["rvq"])
+                logger.info("✓ RVQ state resumed")
+            
+            # Load training state
+            if not args.reset_optimizer and "optimizer" in resume_checkpoint:
+                opt.load_state_dict(resume_checkpoint["optimizer"])
+                logger.info("✓ Optimizer state resumed")
+            
+            if not args.reset_scheduler and "scheduler" in resume_checkpoint:
+                scheduler.load_state_dict(resume_checkpoint["scheduler"])
+                logger.info("✓ Scheduler state resumed")
+            
+            step = resume_checkpoint.get("step", latest_step)
+            best_val_loss = resume_checkpoint.get("best_val_loss", float('inf'))
+            
+            logger.info(f"✓ Successfully resumed from step {step}")
+            logger.info(f"✓ Best validation loss so far: {best_val_loss:.4f}")
+            
+            # Override checkpoint_meta with resumed checkpoint
+            checkpoint_meta = resume_checkpoint
+            
         except Exception as e:
-            print(f"⚠ Could not load optimizer state: {e}")
-    
-    if not args.reset_scheduler and "scheduler" in checkpoint_meta:
-        try:
-            scheduler.load_state_dict(checkpoint_meta["scheduler"])
-            print("✓ Scheduler state loaded")
-        except Exception as e:
-            print(f"⚠ Could not load scheduler state: {e}")
-    
-    if not args.reset_step and "step" in checkpoint_meta:
-        step = checkpoint_meta["step"]
-        print(f"✓ Resuming from step {step}")
+            logger.warning(f"⚠ Could not resume from checkpoint: {e}")
+            logger.info("Starting fresh from initial checkpoint instead")
+            # Fall back to initial checkpoint loading below
+            step = 0
+            best_val_loss = float('inf')
     else:
+        # Load optimizer/scheduler state from initial checkpoint if not resetting
         step = 0
-        print("Starting from step 0")
-    
-    if "best_val_loss" in checkpoint_meta:
-        best_val_loss = checkpoint_meta["best_val_loss"]
-        print(f"✓ Previous best validation loss: {best_val_loss:.4f}")
+        best_val_loss = float('inf')
+        
+        if not args.reset_optimizer and "optimizer" in checkpoint_meta:
+            try:
+                opt.load_state_dict(checkpoint_meta["optimizer"])
+                print("✓ Optimizer state loaded from initial checkpoint")
+            except Exception as e:
+                print(f"⚠ Could not load optimizer state: {e}")
+        
+        if not args.reset_scheduler and "scheduler" in checkpoint_meta:
+            try:
+                scheduler.load_state_dict(checkpoint_meta["scheduler"])
+                print("✓ Scheduler state loaded from initial checkpoint")
+            except Exception as e:
+                print(f"⚠ Could not load scheduler state: {e}")
+        
+        if not args.reset_step and "step" in checkpoint_meta:
+            step = checkpoint_meta["step"]
+            print(f"✓ Resuming from step {step}")
+        else:
+            step = 0
+            print("Starting from step 0")
+        
+        if "best_val_loss" in checkpoint_meta:
+            best_val_loss = checkpoint_meta["best_val_loss"]
+            print(f"✓ Previous best validation loss: {best_val_loss:.4f}")
     
     # Setup mixed precision
     use_amp = cfg.get("use_amp", True) and device == "cuda"
@@ -592,8 +666,7 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
     if accumulation_steps > 1:
         print(f"Gradient accumulation: {accumulation_steps} steps")
     
-    # Initialize logger
-    logger = SimpleLogger("PostTrain")
+    # Logger already initialized above for resumption
     train_size = len(train_dl.dataset)
     val_size = len(val_dl.dataset)
     logger.training_start(max_steps, train_size, val_size)
@@ -854,6 +927,15 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
+                
+                # Clean up old checkpoints (keep only last one + best)
+                prefix_map = {
+                    "thinker": "thinker_step_",
+                    "audio_enc": "audio_enc_step_",
+                    "vision": "vision_step_",
+                    "talker": "talker_step_"
+                }
+                cleanup_old_checkpoints(cfg["save_dir"], prefix_map[model_type], keep_last_n=1)
             
             if step % val_freq == 0 and step > 0:
                 model.eval()

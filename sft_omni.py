@@ -10,7 +10,7 @@ import torchaudio
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints
 
 class MixDataset(Dataset):
     def __init__(self, text_path, image_manifest, image_root, asr_csv, ctx=1024):
@@ -677,6 +677,8 @@ def main(cfg):
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
+                # Clean up old checkpoints (keep only last one + best)
+                cleanup_old_checkpoints(cfg["save_dir"], "omni_step_", keep_last_n=1)
             
             if step >= cfg["max_steps"]:
                 os.makedirs(cfg["save_dir"], exist_ok=True)

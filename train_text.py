@@ -5,7 +5,7 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints
 from tqdm import tqdm
 
 class TextDataset(Dataset):
@@ -311,6 +311,8 @@ def main(cfg):
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
+                # Clean up old checkpoints (keep only last one + best)
+                cleanup_old_checkpoints(cfg["save_dir"], "thinker_step_", keep_last_n=1)
             
             # Validation
             if step % val_freq == 0 and step > 0:
