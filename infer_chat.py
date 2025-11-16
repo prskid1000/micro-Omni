@@ -1,4 +1,7 @@
 
+# Apply Triton compatibility patch before importing torch
+from scripts import monkey_patch
+
 import argparse, os, torch, torchaudio, json
 from PIL import Image
 from torch.cuda.amp import autocast

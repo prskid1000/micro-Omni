@@ -38,6 +38,9 @@ Usage:
 For detailed documentation, see: study/14_Post_Training.md
 """
 
+# Apply Triton compatibility patch before importing torch
+from scripts import monkey_patch
+
 import argparse
 import json
 import os
