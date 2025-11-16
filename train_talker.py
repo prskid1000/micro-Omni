@@ -120,7 +120,6 @@ def main(cfg):
     print_freq = cfg.get("print_freq", 50)
     checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
     val_freq = cfg.get("val_freq", 200)  # Validate every N steps
-    best_val_loss = float('inf')
     
     # Resume from checkpoint if available
     resume_from = None
@@ -155,9 +154,7 @@ def main(cfg):
                         scaler.load_state_dict(checkpoint["scaler"])
                     if "step" in checkpoint:
                         step = checkpoint["step"]
-                    if "best_val_loss" in checkpoint:
-                        best_val_loss = checkpoint["best_val_loss"]
-                    logger.info(f"Resumed from step {step}, best_val_loss={best_val_loss:.4f}")
+                    logger.info(f"Resumed from step {step}")
                 else:
                     # Legacy checkpoint format
                     if "rvq" in checkpoint:
@@ -301,14 +298,13 @@ def main(cfg):
                     "talker": talker.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "best_val_loss": best_val_loss
+                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one + best)
+                # Clean up old checkpoints (keep only last one)
                 cleanup_old_checkpoints(cfg["save_dir"], "talker_step_", keep_last_n=1)
             
             # Validation
@@ -350,23 +346,6 @@ def main(cfg):
                 avg_val_loss = val_loss_sum / val_count
                 logger.val_step(step, avg_val_loss, epoch)
                 
-                # Save best model
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
-                    best_path = os.path.join(cfg["save_dir"], "talker_best.pt")
-                    checkpoint_data = {
-                        "rvq": rvq.state_dict(),
-                        "talker": talker.state_dict(),
-                        "optimizer": opt.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "step": step,
-                        "best_val_loss": best_val_loss
-                    }
-                    if scaler is not None:
-                        checkpoint_data["scaler"] = scaler.state_dict()
-                    torch.save(checkpoint_data, best_path)
-                    logger.checkpoint(step, best_path, is_best=True)
-                
                 rvq.train()
                 talker.train()
             
@@ -377,8 +356,7 @@ def main(cfg):
                     "talker": talker.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "best_val_loss": best_val_loss
+                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
@@ -436,8 +414,7 @@ def main(cfg):
                 "talker": talker.state_dict(),
                 "optimizer": opt.state_dict(),
                 "scheduler": scheduler.state_dict(),
-                "step": step,
-                "best_val_loss": best_val_loss
+                "step": step
             }
             if scaler is not None:
                 checkpoint_data["scaler"] = scaler.state_dict()

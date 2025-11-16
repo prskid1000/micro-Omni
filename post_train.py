@@ -633,10 +633,8 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                 logger.info("✓ Scheduler state resumed")
             
             step = resume_checkpoint.get("step", latest_step)
-            best_val_loss = resume_checkpoint.get("best_val_loss", float('inf'))
             
             logger.info(f"✓ Successfully resumed from step {step}")
-            logger.info(f"✓ Best validation loss so far: {best_val_loss:.4f}")
             
             # Override checkpoint_meta with resumed checkpoint
             checkpoint_meta = resume_checkpoint
@@ -646,11 +644,9 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
             logger.info("Starting fresh from initial checkpoint instead")
             # Fall back to initial checkpoint loading below
             step = 0
-            best_val_loss = float('inf')
     else:
         # Load optimizer/scheduler state from initial checkpoint if not resetting
         step = 0
-        best_val_loss = float('inf')
         
         if not args.reset_optimizer and "optimizer" in checkpoint_meta:
             try:
@@ -672,10 +668,6 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
         else:
             step = 0
             print("Starting from step 0")
-        
-        if "best_val_loss" in checkpoint_meta:
-            best_val_loss = checkpoint_meta["best_val_loss"]
-            print(f"✓ Previous best validation loss: {best_val_loss:.4f}")
     
     # Setup mixed precision
     use_amp = cfg.get("use_amp", True) and device == "cuda"
@@ -846,12 +838,11 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                     logger.error("Reloading from last checkpoint...")
                     # Reload from last checkpoint
                     checkpoint_prefix = f"{model_type}_post_step_"
-                    reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                    reloaded_step = reload_from_last_checkpoint(
                         cfg["save_dir"], checkpoint_prefix, device, logger, model, opt, scheduler, scaler
                     )
                     if reloaded_step > 0:
                         step = reloaded_step
-                        best_val_loss = reloaded_best_val_loss
                         # Recalculate start_epoch and initial_step for resuming
                         start_epoch = step // steps_per_epoch
                         initial_step = step
@@ -955,7 +946,6 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                     "step": step,
-                    "best_val_loss": best_val_loss,
                     "source_checkpoint": args.checkpoint,
                     "post_training": True
                 }
@@ -978,7 +968,7 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
                 
-                # Clean up old checkpoints (keep only last one + best)
+                # Clean up old checkpoints (keep only last one)
                 prefix_map = {
                     "thinker": "thinker_step_",
                     "audio_enc": "audio_enc_step_",
@@ -1068,35 +1058,6 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                 
                 avg_val_loss = val_loss_sum / max(val_batches, 1)
                 logger.val_step(step, avg_val_loss, epoch)
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
-                    best_path = os.path.join(cfg["save_dir"], f"{model_type}_post_best.pt")
-                    best_checkpoint = {
-                        "model": model.state_dict(),
-                        "optimizer": opt.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "step": step,
-                        "best_val_loss": best_val_loss,
-                        "source_checkpoint": args.checkpoint,
-                        "post_training": True
-                    }
-                    if model_type == "thinker":
-                        best_checkpoint["model"] = model.state_dict()
-                    elif model_type == "audio_enc":
-                        best_checkpoint["enc"] = model.state_dict()
-                        best_checkpoint["head"] = head.state_dict()
-                    elif model_type == "vision":
-                        best_checkpoint["vit"] = model.state_dict()
-                        best_checkpoint["img_proj"] = img_proj.state_dict()
-                        best_checkpoint["text_proj"] = text_proj.state_dict()
-                        best_checkpoint["text_embed"] = text_embed_encode[0].state_dict()
-                    elif model_type == "talker":
-                        best_checkpoint["talker"] = model.state_dict()
-                        best_checkpoint["rvq"] = rvq.state_dict()
-                    if scaler is not None:
-                        best_checkpoint["scaler"] = scaler.state_dict()
-                    torch.save(best_checkpoint, best_path)
-                    logger.checkpoint(step, best_path, is_best=True)
                 
                 model.train()
                 if head:
@@ -1119,7 +1080,6 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                     "step": step,
-                    "best_val_loss": best_val_loss,
                     "source_checkpoint": args.checkpoint,
                     "post_training": True
                 }

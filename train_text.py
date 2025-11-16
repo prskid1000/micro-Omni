@@ -95,7 +95,6 @@ def main(cfg):
     print_freq = cfg.get("print_freq", 1)
     checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
     val_freq = cfg.get("val_freq", 200)  # Validate every N steps
-    best_val_loss = float('inf')
     
     # Resume from checkpoint if available
     resume_from = None
@@ -127,9 +126,7 @@ def main(cfg):
                     scaler.load_state_dict(checkpoint["scaler"])
                 if "step" in checkpoint:
                     step = checkpoint["step"]
-                if "best_val_loss" in checkpoint:
-                    best_val_loss = checkpoint["best_val_loss"]
-                logger.info(f"Resumed from step {step}, best_val_loss={best_val_loss:.4f}")
+                logger.info(f"Resumed from step {step}")
             else:
                 # Legacy checkpoint format (just model weights)
                 model.load_state_dict(checkpoint)
@@ -188,12 +185,11 @@ def main(cfg):
                     logger.error(f"Step {step}: {e}")
                     logger.error("Reloading from last checkpoint...")
                     # Reload from last checkpoint
-                    reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                    reloaded_step = reload_from_last_checkpoint(
                         cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
                     )
                     if reloaded_step > 0:
                         step = reloaded_step
-                        best_val_loss = reloaded_best_val_loss
                         # Recalculate start_epoch and initial_step for resuming
                         start_epoch = step // steps_per_epoch
                         initial_step = step
@@ -336,14 +332,13 @@ def main(cfg):
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "best_val_loss": best_val_loss
+                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one + best)
+                # Clean up old checkpoints (keep only last one)
                 cleanup_old_checkpoints(cfg["save_dir"], "thinker_step_", keep_last_n=1)
             
             # Validation
@@ -388,12 +383,11 @@ def main(cfg):
                                 logger.error(f"Step {step}: {e}")
                                 logger.error("Reloading from last checkpoint...")
                                 # Reload from last checkpoint
-                                reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                                reloaded_step = reload_from_last_checkpoint(
                                     cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
                                 )
                                 if reloaded_step > 0:
                                     step = reloaded_step
-                                    best_val_loss = reloaded_best_val_loss
                                     start_epoch = step // steps_per_epoch
                                     initial_step = step
                                     logger.info(f"Resuming from step {step}, epoch {start_epoch}")
@@ -410,22 +404,6 @@ def main(cfg):
                 avg_val_loss = val_loss_sum / val_count
                 logger.val_step(step, avg_val_loss, epoch)
                 
-                # Save best model
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
-                    best_path = os.path.join(cfg["save_dir"], "thinker_best.pt")
-                    checkpoint_data = {
-                        "model": model.state_dict(),
-                        "optimizer": opt.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "step": step,
-                        "best_val_loss": best_val_loss
-                    }
-                    if scaler is not None:
-                        checkpoint_data["scaler"] = scaler.state_dict()
-                    torch.save(checkpoint_data, best_path)
-                    logger.checkpoint(step, best_path, is_best=True)
-                
                 model.train()
             
             if step >= max_steps:
@@ -434,8 +412,7 @@ def main(cfg):
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "best_val_loss": best_val_loss
+                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
@@ -484,12 +461,11 @@ def main(cfg):
                             logger.error(f"Epoch {epoch}: {e}")
                             logger.error("Reloading from last checkpoint...")
                             # Reload from last checkpoint
-                            reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                            reloaded_step = reload_from_last_checkpoint(
                                 cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
                             )
                             if reloaded_step > 0:
                                 step = reloaded_step
-                                best_val_loss = reloaded_best_val_loss
                                 start_epoch = step // steps_per_epoch
                                 initial_step = step
                                 logger.info(f"Resuming from step {step}, epoch {start_epoch}")
@@ -512,8 +488,7 @@ def main(cfg):
                 "model": model.state_dict(),
                 "optimizer": opt.state_dict(),
                 "scheduler": scheduler.state_dict(),
-                "step": step,
-                "best_val_loss": best_val_loss
+                "step": step
             }
             if scaler is not None:
                 checkpoint_data["scaler"] = scaler.state_dict()

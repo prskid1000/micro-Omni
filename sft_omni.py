@@ -363,7 +363,6 @@ def main(cfg):
     # Initialize logger
     logger = SimpleLogger("OmniSFT")
     
-    best_val_loss = float('inf')
     val_freq = cfg.get("val_freq", 100)  # Validate every N steps
     checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
     
@@ -405,9 +404,7 @@ def main(cfg):
                         scaler.load_state_dict(checkpoint["scaler"])
                     if "step" in checkpoint:
                         step = checkpoint["step"]
-                    if "best_val_loss" in checkpoint:
-                        best_val_loss = checkpoint["best_val_loss"]
-                    logger.info(f"Resumed from step {step}, best_val_loss={best_val_loss:.4f}")
+                    logger.info(f"Resumed from step {step}")
                 else:
                     # Legacy checkpoint format
                     logger.info(f"Loaded model weights from checkpoint (legacy format)")
@@ -461,12 +458,11 @@ def main(cfg):
                     logger.error(f"Step {step}: {e}")
                     logger.error("Reloading from last checkpoint...")
                     # Reload from last checkpoint
-                    reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                    reloaded_step = reload_from_last_checkpoint(
                         cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
                     )
                     if reloaded_step > 0:
                         step = reloaded_step
-                        best_val_loss = reloaded_best_val_loss
                         # Also reload proj_a and proj_v from checkpoint
                         checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
                         if checkpoint_files:
@@ -619,12 +615,11 @@ def main(cfg):
                                 logger.error(f"Step {step}: {e}")
                                 logger.error("Reloading from last checkpoint...")
                                 # Reload from last checkpoint
-                                reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                                reloaded_step = reload_from_last_checkpoint(
                                     cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
                                 )
                                 if reloaded_step > 0:
                                     step = reloaded_step
-                                    best_val_loss = reloaded_best_val_loss
                                     # Also reload proj_a and proj_v from checkpoint
                                     checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
                                     if checkpoint_files:
@@ -660,25 +655,6 @@ def main(cfg):
                 avg_val_loss = val_loss_sum / val_count
                 logger.val_step(step, avg_val_loss, epoch)
                 
-                # Save best model
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
-                    best_path = os.path.join(cfg["save_dir"], "omni_best.pt")
-                    os.makedirs(cfg["save_dir"], exist_ok=True)
-                    checkpoint_data = {
-                        "thinker": think.state_dict(),
-                        "proj_a": proj_a.state_dict(),
-                        "proj_v": proj_v.state_dict(),
-                        "optimizer": opt.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "step": step,
-                        "best_val_loss": best_val_loss
-                    }
-                    if scaler is not None:
-                        checkpoint_data["scaler"] = scaler.state_dict()
-                    torch.save(checkpoint_data, best_path)
-                    logger.checkpoint(step, best_path, is_best=True)
-                
                 think.train()
                 proj_a.train()
                 proj_v.train()
@@ -693,14 +669,13 @@ def main(cfg):
                     "proj_v": proj_v.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "best_val_loss": best_val_loss
+                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one + best)
+                # Clean up old checkpoints (keep only last one)
                 cleanup_old_checkpoints(cfg["save_dir"], "omni_step_", keep_last_n=1)
             
             if step >= cfg["max_steps"]:
@@ -712,8 +687,7 @@ def main(cfg):
                     "proj_v": proj_v.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "best_val_loss": best_val_loss
+                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
@@ -752,12 +726,11 @@ def main(cfg):
                         logger.error(f"Epoch {epoch}: {e}")
                         logger.error("Reloading from last checkpoint...")
                         # Reload from last checkpoint
-                        reloaded_step, reloaded_best_val_loss = reload_from_last_checkpoint(
+                        reloaded_step = reload_from_last_checkpoint(
                             cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
                         )
                         if reloaded_step > 0:
                             step = reloaded_step
-                            best_val_loss = reloaded_best_val_loss
                             # Also reload proj_a and proj_v from checkpoint
                             checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
                             if checkpoint_files:
@@ -801,8 +774,7 @@ def main(cfg):
                 "proj_v": proj_v.state_dict(),
                 "optimizer": opt.state_dict(),
                 "scheduler": scheduler.state_dict(),
-                "step": step,
-                "best_val_loss": best_val_loss
+                "step": step
             }
             if scaler is not None:
                 checkpoint_data["scaler"] = scaler.state_dict()

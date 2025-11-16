@@ -345,18 +345,18 @@ def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, mod
         scaler: GradScaler to load state into (optional)
     
     Returns:
-        tuple: (step, best_val_loss) from checkpoint, or (0, float('inf')) if no checkpoint found
+        int: step from checkpoint, or 0 if no checkpoint found
     """
     import os
     
     if not os.path.exists(save_dir):
         logger.error(f"Save directory does not exist: {save_dir}")
-        return 0, float('inf')
+        return 0
     
     checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith(checkpoint_prefix) and f.endswith(".pt")]
     if not checkpoint_files:
         logger.error(f"No checkpoint files found with prefix '{checkpoint_prefix}' in {save_dir}")
-        return 0, float('inf')
+        return 0
     
     # Extract step numbers and find latest
     step_numbers = []
@@ -369,7 +369,7 @@ def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, mod
     
     if not step_numbers:
         logger.error(f"Could not parse step numbers from checkpoint files")
-        return 0, float('inf')
+        return 0
     
     step_numbers.sort(key=lambda x: x[0], reverse=True)
     last_checkpoint = os.path.join(save_dir, step_numbers[0][1])
@@ -403,18 +403,17 @@ def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, mod
             if scaler is not None and "scaler" in checkpoint:
                 scaler.load_state_dict(checkpoint["scaler"])
             
-            # Get step and best_val_loss
+            # Get step
             loaded_step = checkpoint.get("step", step)
-            best_val_loss = checkpoint.get("best_val_loss", float('inf'))
             
-            logger.info(f"Successfully reloaded from step {loaded_step}, best_val_loss={best_val_loss:.4f}")
-            return loaded_step, best_val_loss
+            logger.info(f"Successfully reloaded from step {loaded_step}")
+            return loaded_step
         else:
             # Legacy format - just model weights
             model.load_state_dict(checkpoint)
             logger.info(f"Loaded model weights from checkpoint (legacy format)")
-            return step, float('inf')
+            return step
     except Exception as e:
         logger.error(f"Failed to reload from checkpoint: {e}")
-        return 0, float('inf')
+        return 0
 
