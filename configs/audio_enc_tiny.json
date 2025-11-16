@@ -25,7 +25,7 @@
   "max_epochs": 4,
   "val_split": 0.1,
   "val_freq": 500,
-  "checkpoint_freq": 1000,
+  "checkpoint_freq": 5000,
   "max_grad_norm": 1.0,
   "seed": 42,
   "ctc_vocab_size": 98,

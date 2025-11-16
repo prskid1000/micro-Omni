@@ -274,7 +274,7 @@ WER 10-20% = Good for proof-of-concept! ✓
   "learning_rate": 1e-4,    // 0.0001 (lower than Stage A)
                             // Audio training needs stability
   
-  "checkpoint_freq": 1000  // Checkpoint frequency (every 1000 steps)
+  "checkpoint_freq": 5000  // Checkpoint frequency (every 1000 steps)
 }
 ```
 

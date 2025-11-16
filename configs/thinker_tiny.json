@@ -28,7 +28,7 @@
   "max_epochs": 5,
   "val_split": 0.1,
   "val_freq": 500,
-  "checkpoint_freq": 1000,
+  "checkpoint_freq": 5000,
   "max_grad_norm": 1.0,
   "seed": 42,
   "train_text": "data/text/dialogstudio.txt",
