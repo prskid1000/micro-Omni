@@ -1196,16 +1196,44 @@ After training:
 
 1. **Evaluate**: Test on validation set
 2. **Inference**: Try generating outputs
-3. **Fine-tune**: Adjust hyperparameters
-4. **Deploy**: Use in applications
+3. **Post-Training**: Continue training on custom data (see below)
+4. **Fine-tune**: Adjust hyperparameters
+5. **Deploy**: Use in applications
+
+### Post-Training / Fine-Tuning
+
+After completing the main training stages, you can continue training any model on new data using `post_train.py`:
+
+```bash
+# Post-train on new data
+python post_train.py \
+    --config configs/thinker_tiny.json \
+    --checkpoint checkpoints/thinker_tiny/thinker.pt \
+    --new_dataset data/post_training/text.txt
+```
+
+**Post-training checkpoints are saved separately** to `checkpoints/post_training/`:
+- Periodic: `checkpoints/post_training/{model_type}_post_step_{step}.pt`
+- Best: `checkpoints/post_training/{model_type}_post_best.pt`
+- Final: `checkpoints/post_training/{model_type}_post_final.pt`
+
+This keeps post-trained models separate from the original pretrained models, making it easy to:
+- Compare post-trained vs pretrained performance
+- Roll back to pretrained if needed
+- Run multiple post-training experiments
+- Keep organized checkpoint directories
+
+**See [14_Post_Training.md](14_Post_Training.md) for complete post-training documentation.**
 
 ---
 
 **Next:**
 - [08_Inference_Guide.md](08_Inference_Guide.md) - Using trained models
 - [09_Hands_On_Exercises.md](09_Hands_On_Exercises.md) - Practice exercises
+- [14_Post_Training.md](14_Post_Training.md) - Post-training and fine-tuning
 
 **See Also:**
 - [Architecture Overview](02_Architecture_Overview.md)
 - [Thinker Deep Dive](03_Thinker_Deep_Dive.md)
+- [Checkpoint Structure](13_CHECKPOINT_STRUCTURE.md) - Understanding checkpoints
 

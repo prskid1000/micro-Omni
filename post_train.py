@@ -255,9 +255,20 @@ def load_checkpoint(checkpoint_path, device, model_type):
 
 def train_thinker(cfg, checkpoint_path, new_dataset, args, device):
     """Post-train Thinker model"""
-    # Load tokenizer
-    spm_model = os.path.join(cfg["save_dir"], "tokenizer.model")
-    if not os.path.exists(spm_model):
+    # Load tokenizer (check both original and post-training directories)
+    original_save_dir = os.path.dirname(checkpoint_path)
+    spm_model_original = os.path.join(original_save_dir, "tokenizer.model")
+    spm_model_post = os.path.join(cfg["save_dir"], "tokenizer.model")
+    
+    if os.path.exists(spm_model_original):
+        spm_model = spm_model_original
+        print(f"Using existing tokenizer from: {spm_model}")
+    elif os.path.exists(spm_model_post):
+        spm_model = spm_model_post
+        print(f"Using existing tokenizer from: {spm_model}")
+    else:
+        # Train new tokenizer in post-training directory
+        spm_model = spm_model_post
         print(f"Training new tokenizer from {new_dataset}...")
         BPETokenizer.train_new(new_dataset, spm_model, vocab_size=cfg["vocab_size"])
     tok = BPETokenizer(spm_model)
@@ -1112,7 +1123,13 @@ def main():
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Override save_dir for post-training (use dedicated post_training directory)
+    original_save_dir = cfg["save_dir"]
+    cfg["save_dir"] = "checkpoints/post_training"
     os.makedirs(cfg["save_dir"], exist_ok=True)
+    print(f"Post-training checkpoints will be saved to: {cfg['save_dir']}")
+    print(f"Original model directory: {original_save_dir}")
     
     # Setup model based on type
     if model_type == "thinker":

@@ -96,24 +96,28 @@ python scripts/prep_post_training_data.py \
 **Post-train models:**
 ```bash
 # Post-train Thinker (text)
+# Saves to: checkpoints/post_training/thinker_post_*.pt
 python post_train.py \
     --config configs/thinker_tiny.json \
     --checkpoint checkpoints/thinker_tiny/thinker.pt \
     --new_dataset data/post_training/text.txt
 
 # Post-train Audio Encoder (ASR)
+# Saves to: checkpoints/post_training/audio_enc_post_*.pt
 python post_train.py \
     --config configs/audio_enc_tiny.json \
     --checkpoint checkpoints/audio_enc_tiny/audio_enc.pt \
     --new_dataset data/post_training/asr.csv
 
 # Post-train Vision Encoder
+# Saves to: checkpoints/post_training/vision_post_*.pt
 python post_train.py \
     --config configs/vision_tiny.json \
     --checkpoint checkpoints/vision_tiny/vision.pt \
     --new_dataset data/post_training/images.json
 
 # Post-train Talker (TTS)
+# Saves to: checkpoints/post_training/talker_post_*.pt
 python post_train.py \
     --config configs/talker_tiny.json \
     --checkpoint checkpoints/talker_tiny/talker.pt \
@@ -127,6 +131,8 @@ python post_train.py \
     --reset_optimizer \
     --lr 0.0001
 ```
+
+**Note:** All post-training checkpoints are saved to `checkpoints/post_training/` directory to keep them separate from original pretrained models.
 
 **See [Post-Training Guide](14_Post_Training.md) for detailed documentation.**
 

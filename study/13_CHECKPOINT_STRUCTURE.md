@@ -124,6 +124,42 @@ checkpoint = {
 - Best model: `checkpoints/omni_sft_tiny/omni_best.pt`
 - Final: `checkpoints/omni_sft_tiny/omni.pt`
 
+### Post-Training (`post_train.py`)
+
+```python
+checkpoint = {
+    # Model-specific key (e.g., "model", "enc", "vit", "talker")
+    "model": model.state_dict(),  # or "enc", "vit", "talker" depending on model type
+    
+    # Additional components (model-specific)
+    "head": head.state_dict(),  # for audio_enc
+    "rvq": rvq.state_dict(),  # for talker
+    "img_proj": img_proj.state_dict(),  # for vision
+    "text_proj": text_proj.state_dict(),  # for vision
+    "text_embed": text_embed.state_dict(),  # for vision
+    
+    # Training state
+    "optimizer": optimizer.state_dict(),
+    "scheduler": scheduler.state_dict(),
+    "step": step,
+    "best_val_loss": best_val_loss,
+    "source_checkpoint": "path/to/original/checkpoint.pt",  # tracks where model came from
+    "post_training": True,  # flag to identify post-training checkpoints
+    "scaler": scaler.state_dict()  # if use_amp=True
+}
+```
+
+**File locations:**
+- Periodic: `checkpoints/post_training/{model_type}_post_step_{step}.pt`
+- Best model: `checkpoints/post_training/{model_type}_post_best.pt`
+- Final: `checkpoints/post_training/{model_type}_post_final.pt`
+
+**Examples:**
+- `checkpoints/post_training/thinker_post_step_1000.pt`
+- `checkpoints/post_training/audio_enc_post_best.pt`
+- `checkpoints/post_training/vision_post_final.pt`
+- `checkpoints/post_training/talker_post_step_500.pt`
+
 ## How to Inspect a Checkpoint
 
 ```python
@@ -346,10 +382,15 @@ checkpoints/
 │   ├── audio_enc_step_64200.pt   ← Only latest
 │   ├── audio_enc_best.pt         ← Best (kept)
 │   └── audio_enc.pt              ← Final (kept)
-└── omni_sft_tiny/
-    ├── omni_step_1290000.pt      ← Only latest
-    ├── omni_best.pt              ← Best (kept)
-    └── omni.pt                   ← Final (kept)
+├── omni_sft_tiny/
+│   ├── omni_step_1290000.pt      ← Only latest
+│   ├── omni_best.pt              ← Best (kept)
+│   └── omni.pt                   ← Final (kept)
+└── post_training/                ← Post-training checkpoints
+    ├── thinker_post_step_2000.pt ← Latest post-training checkpoint
+    ├── thinker_post_best.pt      ← Best post-trained model
+    ├── audio_enc_post_step_500.pt← Audio encoder post-training
+    └── vision_post_final.pt      ← Vision encoder final
 ```
 
 **Total storage:** ~270 MB (vs 80 GB without cleanup!) ✅

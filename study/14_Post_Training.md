@@ -296,6 +296,33 @@ python post_train.py \
 
 ## Checkpoint Structure
 
+### Save Location
+
+**All post-training checkpoints are saved to a dedicated directory:** `checkpoints/post_training/`
+
+This keeps post-trained models separate from original pretrained models, with benefits:
+- ✅ Easy comparison between pretrained and post-trained models
+- ✅ Safe rollback to pretrained if needed
+- ✅ Multiple post-training experiments can coexist
+- ✅ Organized checkpoint management
+
+**Checkpoint files:**
+- Periodic: `checkpoints/post_training/{model_type}_post_step_{step}.pt`
+- Best: `checkpoints/post_training/{model_type}_post_best.pt`
+- Final: `checkpoints/post_training/{model_type}_post_final.pt`
+
+**Examples:**
+```
+checkpoints/post_training/
+├── thinker_post_step_2000.pt      ← Latest periodic checkpoint
+├── thinker_post_best.pt           ← Best validation loss
+├── thinker_post_final.pt          ← Final checkpoint
+├── audio_enc_post_step_500.pt     ← Audio encoder post-training
+└── vision_post_best.pt            ← Vision encoder best model
+```
+
+### Checkpoint Contents
+
 Post-training checkpoints include metadata about the source:
 
 ```python
@@ -306,10 +333,12 @@ Post-training checkpoints include metadata about the source:
     "scaler": {...},             # AMP scaler state
     "step": 5000,                # Current step
     "best_val_loss": 2.345,      # Best validation loss
-    "source_checkpoint": "checkpoints/thinker_tiny/thinker_best.pt",
+    "source_checkpoint": "checkpoints/thinker_tiny/thinker_best.pt",  # Original checkpoint
     "post_training": True        # Flag indicating post-training
 }
 ```
+
+**Note:** The `source_checkpoint` field tracks which pretrained model was used, making it easy to trace the lineage of post-trained models.
 
 ## Best Practices
 
