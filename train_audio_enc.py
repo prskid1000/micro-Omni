@@ -47,13 +47,17 @@ def main(cfg):
     ds = ASRDataset(cfg["train_csv"], sr=sr, n_mels=n_mels, cfg=cfg)
     dl = DataLoader(ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn)
     downsample_factor = cfg.get("downsample_time", 8)  # 8x for 12.5 Hz (16000/160/8 = 12.5)
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
     model = AudioEncoderTiny(
         cfg["d_model"], 
         cfg["n_heads"], 
         cfg["d_ff"], 
         cfg["n_layers"], 
         cfg["dropout"],
-        downsample_factor=downsample_factor
+        downsample_factor=downsample_factor,
+        compile_model=use_compile
     ).to(device)
     # Improved CTC head: proper character vocabulary
     # Build character vocabulary (printable ASCII + special tokens)

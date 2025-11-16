@@ -61,7 +61,11 @@ def main(cfg):
     ds = TTSDataset(cfg["tts_csv"], sr=sr, n_mels=n_mels, frame_ms=frame_ms, cfg=cfg)
     # Use module-level collate function for Windows multiprocessing compatibility
     dl = DataLoader(ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_mel_fn)
-    rvq = RVQ(cfg["codebooks"], cfg["codebook_size"], d=64).to(device)
+    
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
+    rvq = RVQ(cfg["codebooks"], cfg["codebook_size"], d=64, compile_model=use_compile).to(device)
     talker = TalkerTiny(
         cfg["d_model"], 
         cfg["n_layers"], 
@@ -72,7 +76,8 @@ def main(cfg):
         cfg["dropout"],
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
-        rope_theta=cfg.get("rope_theta", 10000.0)
+        rope_theta=cfg.get("rope_theta", 10000.0),
+        compile_model=use_compile
     ).to(device)
     opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
     loss_fn = nn.CrossEntropyLoss()

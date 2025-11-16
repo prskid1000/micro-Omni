@@ -289,12 +289,16 @@ def train_thinker(cfg, checkpoint_path, new_dataset, args, device):
                        num_workers=cfg.get("num_workers", 2), drop_last=False)
     
     # Create model
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
     model = ThinkerLM(
         cfg["vocab_size"], cfg["n_layers"], cfg["d_model"], cfg["n_heads"],
         cfg["d_ff"], cfg["dropout"], cfg["rope_theta"], cfg["ctx_len"],
         use_gqa=cfg.get("use_gqa", False), use_swiglu=cfg.get("use_swiglu", True),
         use_moe=cfg.get("use_moe", False), num_experts=cfg.get("num_experts", 8),
-        num_experts_per_tok=cfg.get("num_experts_per_tok", 2)
+        num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
+        compile_model=use_compile
     ).to(device)
     
     # Load checkpoint
@@ -336,9 +340,13 @@ def train_audio_enc(cfg, checkpoint_path, new_dataset, args, device):
     
     # Create model
     downsample_factor = cfg.get("downsample_time", 8)
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
     model = AudioEncoderTiny(
         cfg["d_model"], cfg["n_heads"], cfg["d_ff"], cfg["n_layers"],
-        cfg["dropout"], downsample_factor=downsample_factor
+        cfg["dropout"], downsample_factor=downsample_factor,
+        compile_model=use_compile
     ).to(device)
     
     # Build character vocabulary for CTC
@@ -403,9 +411,13 @@ def train_vision(cfg, checkpoint_path, new_dataset, args, device):
                        num_workers=cfg.get("num_workers", 2), drop_last=False)
     
     # Create model
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
     model = ViTTiny(
         cfg["img_size"], cfg["patch"], cfg["d_model"], cfg["n_layers"],
-        cfg["n_heads"], cfg["d_ff"], cfg["dropout"]
+        cfg["n_heads"], cfg["d_ff"], cfg["dropout"],
+        compile_model=use_compile
     ).to(device)
     
     # Projectors for contrastive learning
@@ -511,12 +523,17 @@ def train_talker(cfg, checkpoint_path, new_dataset, args, device):
                        collate_fn=collate_fn_tts)
     
     # Create models
-    rvq = RVQ(cfg["codebooks"], cfg["codebook_size"], d=64).to(device)
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
+    rvq = RVQ(cfg["codebooks"], cfg["codebook_size"], d=64, compile_model=use_compile).to(device)
+    
     model = TalkerTiny(
         cfg["d_model"], cfg["n_layers"], cfg["n_heads"], cfg["d_ff"],
         cfg["codebooks"], cfg["codebook_size"], cfg["dropout"],
         use_gqa=cfg.get("use_gqa", False), use_swiglu=cfg.get("use_swiglu", True),
-        rope_theta=cfg.get("rope_theta", 10000.0)
+        rope_theta=cfg.get("rope_theta", 10000.0),
+        compile_model=use_compile
     ).to(device)
     
     # Load checkpoint

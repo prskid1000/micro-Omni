@@ -32,7 +32,10 @@ def main(cfg):
     os.makedirs(cfg["save_dir"], exist_ok=True)
     ds = ImgCapDataset(cfg["train_manifest"], cfg["image_root"], cfg["img_size"])
     dl = DataLoader(ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
-    vit = ViTTiny(cfg["img_size"], cfg["patch"], cfg["d_model"], cfg["n_layers"], cfg["n_heads"], cfg["d_ff"], cfg["dropout"]).to(device)
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
+    vit = ViTTiny(cfg["img_size"], cfg["patch"], cfg["d_model"], cfg["n_layers"], cfg["n_heads"], cfg["d_ff"], cfg["dropout"], compile_model=use_compile).to(device)
     
     # Use contrastive learning (CLIP-style) for proper vision-language alignment
     # Project image CLS token to embedding space for contrastive learning

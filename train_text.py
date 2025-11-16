@@ -35,6 +35,10 @@ def main(cfg):
     tok = BPETokenizer(spm_model)
     ds = TextDataset(cfg["train_text"], tok, cfg["ctx_len"])
     dl = DataLoader(ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
     model = ThinkerLM(
         cfg["vocab_size"], 
         cfg["n_layers"], 
@@ -48,7 +52,8 @@ def main(cfg):
         use_swiglu=cfg.get("use_swiglu", True),
         use_moe=cfg.get("use_moe", False),
         num_experts=cfg.get("num_experts", 8),
-        num_experts_per_tok=cfg.get("num_experts_per_tok", 2)
+        num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
+        compile_model=use_compile
     ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["wd"])
     loss_fn = nn.CrossEntropyLoss(ignore_index=0)

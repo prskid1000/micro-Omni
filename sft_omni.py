@@ -68,6 +68,9 @@ def main(cfg):
     print(f"DataLoader created, starting training...")
 
     # load components
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    
     thinker_cfg = cfg.get("thinker", {})
     think = ThinkerLM(
         thinker_cfg.get("vocab_size", 5000),
@@ -82,7 +85,8 @@ def main(cfg):
         use_swiglu=thinker_cfg.get("use_swiglu", True),
         use_moe=thinker_cfg.get("use_moe", False),
         num_experts=thinker_cfg.get("num_experts", 8),
-        num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2)
+        num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2),
+        compile_model=use_compile
     ).to(device)
     if os.path.exists(os.path.join(cfg["thinker_ckpt"], "thinker.pt")):
         think.load_state_dict(torch.load(os.path.join(cfg["thinker_ckpt"], "thinker.pt"), map_location=device))
