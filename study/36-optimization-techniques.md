@@ -102,30 +102,94 @@ model = torch.quantization.quantize_dynamic(
 ### 1. Lazy Dataset Loading
 
 **What:** Load data on-demand instead of pre-loading into RAM  
-**Benefit:** Reduces RAM usage by 90%+ for large datasets
+**Benefit:** Reduces RAM usage by 90%+ for large datasets  
+**Status:** ✅ Implemented in all μOmni training scripts (2024 optimization)
 
-**Implemented in all μOmni datasets:**
-- **TextDataset**: File offset indexing (stores ~8 bytes/line vs full text)
-- **ASRDataset/TTSDataset**: CSV row offset indexing (stores ~8 bytes/row vs full dicts)
-- **ImgCapDataset**: JSON object offset indexing (stores ~16 bytes/object vs full JSON)
+**Technical Approach:**
+- Uses binary file mode (`'rb'`) for accurate byte offset tracking
+- Manually tracks file positions instead of relying on `f.tell()` (which can be unreliable)
+- Stores only integer offsets, not actual data content
+- Reads specific items on-demand in `__getitem__` using `f.seek()`
 
-**Before:**
+**Optimized Datasets (All Training Scripts):**
+
+| Dataset | Files | Optimization | Memory Savings |
+|---------|-------|--------------|----------------|
+| **TextDataset** | `train_text.py`, `post_train.py` | File offset indexing | ~8 bytes/line vs full text |
+| **ASRDataset** | `train_audio_enc.py`, `post_train.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
+| **TTSDataset** | `train_talker.py`, `post_train.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
+| **ImgCapDataset** | `train_vision.py`, `post_train.py` | JSON object offset indexing | ~16 bytes/object vs full JSON |
+| **MixDataset** | `sft_omni.py` | All three types (text, CSV, JSON) | Combined savings |
+
+**Implementation Details:**
+
+**Text Files:**
 ```python
-# Loads entire file into RAM
+# Before: Loads entire file into RAM
 self.lines = [l.strip() for l in open(path) if l.strip()]  # Could be GB!
-```
 
-**After:**
-```python
-# Only stores file positions (integers)
+# After: Only stores file positions (integers)
 self.line_offsets = []  # Just 8 bytes per line
-# Reads specific line on-demand in __getitem__
+with open(path, 'rb') as f:
+    offset = 0
+    while True:
+        line_start = offset
+        line_bytes = f.readline()
+        if not line_bytes:
+            break
+        if line_bytes.decode('utf-8').strip():
+            self.line_offsets.append(line_start)
+        offset += len(line_bytes)  # Manual tracking
+
+# Reads on-demand in __getitem__
+def __getitem__(self, i):
+    with open(self.path, 'rb') as f:
+        f.seek(self.line_offsets[i])
+        text = f.readline().decode('utf-8').strip()
 ```
 
-**Memory savings example:**
-- 10M line text file: ~500MB → ~80MB (6x reduction)
-- 1M row CSV: ~200MB → ~8MB (25x reduction)
-- 100K image JSON: ~50MB → ~1.6MB (30x reduction)
+**CSV Files:**
+```python
+# Before: Loads all rows into RAM
+self.rows = []
+for r in csv.DictReader(open(csv_path)):
+    self.rows.append(r)  # Could be hundreds of MB!
+
+# After: Stores row offsets + header fieldnames
+self.row_offsets = []  # Just 8 bytes per row
+self.fieldnames = header_line.decode('utf-8').strip().split(',')
+# Reads specific row on-demand with proper CSV parsing
+```
+
+**JSON Files:**
+```python
+# Before: Parses entire JSON array into RAM
+self.items = json.load(open(manifest))  # Could be large!
+
+# After: Custom JSON parser finds object boundaries
+self.item_offsets = []  # 8 bytes per offset
+self.item_lengths = []  # 8 bytes per length
+# Parses JSON byte-by-byte to find { } boundaries
+# Falls back to full load if parsing fails (robust)
+```
+
+**Memory Savings Examples:**
+- **10M line text file**: ~500MB → ~80MB (6x reduction)
+- **1M row CSV**: ~200MB → ~8MB (25x reduction)
+- **100K image JSON**: ~50MB → ~1.6MB (30x reduction)
+- **Combined (MixDataset)**: All three optimizations applied simultaneously
+
+**Key Benefits:**
+- ✅ RAM usage now typically **lower than VRAM** (was opposite before)
+- ✅ Can train on systems with limited RAM (8GB+)
+- ✅ No code changes needed - automatic in all datasets
+- ✅ Robust fallback for malformed JSON files
+- ✅ Maintains same training speed (minimal I/O overhead)
+
+**Related Optimizations:**
+- Removed `gc.collect()` calls (Python's GC handles this automatically)
+- Removed `torch.cuda.empty_cache()` calls (PyTorch manages CUDA memory efficiently)
+- These manual calls were unnecessary and could actually hurt performance
 
 ### 2. DataLoader Workers
 
@@ -151,15 +215,15 @@ self.line_offsets = []  # Just 8 bytes per line
 
 ```json
 {
-  "batch_size": 8,  // Start here
-  "gradient_accumulation_steps": 4  // Simulate batch_size=32
+  "batch_size": 4,  // Start conservatively
+  "gradient_accumulation_steps": 4  // Simulate batch_size=16
 }
 ```
 
 **Strategy:**
-1. Start with `batch_size: 4`
-2. Increase until you hit OOM
-3. Use gradient accumulation to simulate larger batches
+1. Start with `batch_size: 4` (conservative, works on most GPUs)
+2. Increase gradually (8, 16, 32) until you hit OOM
+3. Use gradient accumulation to simulate larger batches without OOM
 
 ---
 
