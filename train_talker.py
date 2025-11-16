@@ -1,7 +1,4 @@
 
-# Apply Triton compatibility patch before importing torch
-from scripts import monkey_patch
-
 import argparse, json, os, csv, torch
 from torch import nn
 from torch.cuda.amp import autocast, GradScaler

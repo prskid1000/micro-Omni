@@ -4,13 +4,76 @@
 
 ---
 
-## 🎯 Overview
+## 🎯 Learning Objectives
 
-The **Thinker** is μOmni's central reasoning engine - a decoder-only transformer that processes unified multimodal embeddings.
+By the end of this chapter, you will understand:
+- What the Thinker is and why it's the "brain" of μOmni
+- Detailed architecture breakdown
+- How multimodal embeddings flow through the model
+- All the optimizations working together
+- Step-by-step inference process
+- Why this design is effective
 
 ---
 
-## 🏗️ Architecture
+## 💡 What is the Thinker?
+
+### The Central Reasoning Engine
+
+**Analogy: The Brain of the Operation**
+
+```
+Think of μOmni as a complete sensory system:
+
+EYES (Vision Encoder):
+"I see a cat in the image"
+→ Converts image to embeddings
+
+EARS (Audio Encoder):
+"I hear someone saying 'meow'"
+→ Converts audio to embeddings
+
+BRAIN (Thinker): ⭐ THIS IS WHAT WE'RE LEARNING NOW!
+Receives all sensory input and:
+- Processes all information together
+- Understands relationships
+- Reasons about the world
+- Generates intelligent responses
+
+MOUTH (Talker):
+Speaks the response
+→ Converts text to speech codes
+
+The THINKER is the brain - it's where all the magic happens!
+```
+
+**Why "Thinker"?**
+
+```
+The name represents its role:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+THINK about the inputs:
+- Text: "What animal is this?"
+- Image: [cat photo embeddings]
+- Audio: [meow sound embeddings]
+
+REASON about relationships:
+- The image shows a furry animal
+- The audio sounds like a cat
+- The question asks about animals
+- Connect: This must be a cat!
+
+GENERATE intelligent response:
+"This is a cat. The image shows a feline, 
+ and the meow sound confirms it's a cat."
+
+All of this complex reasoning happens in the Thinker!
+```
+
+---
+
+## 🏗️ Detailed Architecture Breakdown
 
 ```
 Token/Embeddings Input (B, T, 256)

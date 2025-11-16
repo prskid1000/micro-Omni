@@ -1,9 +1,5 @@
 
 import math
-
-# Apply Triton compatibility patch before importing torch
-from scripts import monkey_patch
-
 import torch
 from torch import nn
 from typing import Optional, Tuple, Dict, List, Union
