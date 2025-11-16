@@ -185,6 +185,10 @@ def main(cfg):
                     continue
             mel = mel.to(device)  # (B,T,128)
             
+            # Mark step begin for CUDAGraphs optimization
+            if device == "cuda":
+                torch.compiler.cudagraph_mark_step_begin()
+            
             # Forward pass with mixed precision
             if use_amp:
                 with autocast(device_type='cuda'):

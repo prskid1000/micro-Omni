@@ -191,6 +191,10 @@ def main(cfg):
             img = img.to(device)
             B = img.shape[0]
             
+            # Mark step begin for CUDAGraphs optimization
+            if device == "cuda":
+                torch.compiler.cudagraph_mark_step_begin()
+            
             # Encode images and captions
             if use_amp:
                 with autocast(device_type='cuda'):

@@ -779,6 +779,10 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                 prev = torch.roll(codes, 1, dims=1)
                 prev[:, 0, :] = 0
             
+            # Mark step begin for CUDAGraphs optimization
+            if device == "cuda":
+                torch.compiler.cudagraph_mark_step_begin()
+            
             # Forward pass
             try:
                 if use_amp:

@@ -436,6 +436,10 @@ def main(cfg):
                     continue
             batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True, use_amp_flag=use_amp)
             
+            # Mark step begin for CUDAGraphs optimization
+            if device == "cuda":
+                torch.compiler.cudagraph_mark_step_begin()
+            
             # Forward pass with mixed precision
             try:
                 if use_amp:

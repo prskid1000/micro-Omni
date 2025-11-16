@@ -155,6 +155,10 @@ def main(cfg):
                     continue
             x,y = x.to(device), y.to(device)
             
+            # Mark step begin for CUDAGraphs optimization
+            if device == "cuda":
+                torch.compiler.cudagraph_mark_step_begin()
+            
             # Forward pass with mixed precision
             try:
                 if use_amp:
