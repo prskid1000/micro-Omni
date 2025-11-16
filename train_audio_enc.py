@@ -1,7 +1,7 @@
 
 import argparse, json, os, torch, torchaudio, csv
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from omni.audio_encoder import AudioEncoderTiny
 from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion
@@ -112,7 +112,7 @@ def main(cfg):
     
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler('cuda') if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
     if accumulation_steps > 1:
@@ -208,7 +208,7 @@ def main(cfg):
             
             # Forward pass with mixed precision
             if use_amp:
-                with autocast():
+                with autocast(device_type='cuda'):
                     x = model(mel)  # (B, T', d)
                     logit = head(x)  # (B,T',V)
                     log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
@@ -325,7 +325,7 @@ def main(cfg):
                         val_tgt = val_tgt.to(device)
                         val_tgt_lens = val_tgt_lens.to(device)
                         if use_amp:
-                            with autocast():
+                            with autocast(device_type='cuda'):
                                 val_x = model(val_mel)
                                 val_logit = head(val_x)
                                 val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
@@ -401,7 +401,7 @@ def main(cfg):
                 val_tgt = val_tgt.to(device)
                 val_tgt_lens = val_tgt_lens.to(device)
                 if use_amp:
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         val_x = model(val_mel)
                         val_logit = head(val_x)
                         val_log_prob = val_logit.log_softmax(-1).transpose(0,1)

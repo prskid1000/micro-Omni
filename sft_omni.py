@@ -1,7 +1,7 @@
 
 import argparse, json, os, torch, csv, json as js
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
@@ -149,7 +149,7 @@ def main(cfg):
     
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler('cuda') if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
     if accumulation_steps > 1:
@@ -211,7 +211,7 @@ def main(cfg):
                     img_batch = torch.stack(img_tensors).to(device)  # (N, 3, 224, 224)
                     with torch.set_grad_enabled(is_training):
                         if use_amp_flag and is_training:
-                            with autocast():
+                            with autocast(device_type='cuda'):
                                 cls_batch, _ = vis(img_batch)  # (N, 1, d_vision)
                                 img_emb_batch = proj_v(cls_batch)  # (N, 1, thinker_d_model)
                         else:
@@ -256,7 +256,7 @@ def main(cfg):
                     
                     with torch.set_grad_enabled(is_training):
                         if use_amp_flag and is_training:
-                            with autocast():
+                            with autocast(device_type='cuda'):
                                 audio_emb_batch = aud(mel_batch)  # (N, T', d_audio)
                                 audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
                         else:
@@ -583,7 +583,7 @@ def main(cfg):
                         val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
                         try:
                             if use_amp:
-                                with autocast():
+                                with autocast(device_type='cuda'):
                                     val_logits = think(embeddings=val_emb)
                                     val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                             else:

@@ -44,7 +44,7 @@ import os
 import csv
 import torch
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
@@ -678,7 +678,7 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
     
     # Setup mixed precision
     use_amp = cfg.get("use_amp", True) and device == "cuda"
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler('cuda') if use_amp else None
     if use_amp:
         if not args.reset_optimizer and "scaler" in checkpoint_meta and scaler is not None:
             try:
@@ -782,7 +782,7 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
             # Forward pass
             try:
                 if use_amp:
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         if model_type == "thinker":
                             logits = model(x)
                             loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))

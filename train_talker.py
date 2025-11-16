@@ -1,7 +1,7 @@
 
 import argparse, json, os, csv, torch
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 import torchaudio
 from omni.codec import RVQ
@@ -95,7 +95,7 @@ def main(cfg):
     
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler('cuda') if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
     if accumulation_steps > 1:
@@ -187,7 +187,7 @@ def main(cfg):
             
             # Forward pass with mixed precision
             if use_amp:
-                with autocast():
+                with autocast(device_type='cuda'):
                     # Batch encode all frames at once (optimized)
                     idxs = rvq.encode(mel)  # (B,T,2) - encodes all frames in batch
                     # AR training: predict current codes from previous codes

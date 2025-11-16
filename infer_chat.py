@@ -1,7 +1,7 @@
 
 import argparse, os, torch, torchaudio, json
 from PIL import Image
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from torchvision import transforms
 import torchvision.io as tvio
 from omni.thinker import ThinkerLM
@@ -59,7 +59,7 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         
         # First forward pass with full prompt
         if use_amp and device == "cuda":
-            with autocast():
+            with autocast(device_type='cuda'):
                 logits = model(embeddings=combined_emb)
         else:
             logits = model(embeddings=combined_emb)
@@ -71,7 +71,7 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
             # Only process new token
             next_emb = model.tok_emb(torch.tensor([[next_id]], dtype=torch.long, device=device))
             if use_amp and device == "cuda":
-                with autocast():
+                with autocast(device_type='cuda'):
                     logits = model(embeddings=next_emb)
             else:
                 logits = model(embeddings=next_emb)
@@ -84,7 +84,7 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         
         # First forward pass with full prompt
         if use_amp and device == "cuda":
-            with autocast():
+            with autocast(device_type='cuda'):
                 logits = model(x)
         else:
             logits = model(x)
@@ -96,7 +96,7 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
             # Only process new token
             x = torch.tensor([[next_id]], dtype=torch.long, device=device)
             if use_amp and device == "cuda":
-                with autocast():
+                with autocast(device_type='cuda'):
                     logits = model(x)
             else:
                 logits = model(x)
@@ -497,7 +497,7 @@ def main():
                 img = Image.fromarray(frame).convert("RGB")
                 img_tensor = tf(img).unsqueeze(0).to(device)
                 if device == "cuda":
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         cls, _ = vis(img_tensor)
                         if proj_v is not None:
                             img_emb = proj_v(cls)  # (1,1,thinker_d_model)
@@ -518,14 +518,14 @@ def main():
             img = Image.open(args.image).convert("RGB")
             img_tensor = tf(img).unsqueeze(0).to(device)
             if device == "cuda":
-                with autocast():
+                with autocast(device_type='cuda'):
                     cls, _ = vis(img_tensor)
             else:
                 cls, _ = vis(img_tensor)
             
             if proj_v is not None:
                 if device == "cuda":
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         img_emb = proj_v(cls)  # (1,1,thinker_d_model)
                 else:
                     img_emb = proj_v(cls)  # (1,1,thinker_d_model)
@@ -541,7 +541,7 @@ def main():
             print(f"Audio loaded: {wav.shape}, sample rate: {sr}")
             mel = mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
             if device == "cuda":
-                with autocast():
+                with autocast(device_type='cuda'):
                     audio_emb = aud(mel)  # (1, T', audio_dim)
                     if proj_a is not None:
                         audio_emb = proj_a(audio_emb)  # (1, T', thinker_d_model)

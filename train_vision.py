@@ -1,7 +1,7 @@
 
 import argparse, json, os, torch, json as js
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
@@ -67,7 +67,7 @@ def main(cfg):
     
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler('cuda') if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
     if accumulation_steps > 1:
@@ -193,7 +193,7 @@ def main(cfg):
             
             # Encode images and captions
             if use_amp:
-                with autocast():
+                with autocast(device_type='cuda'):
                     cls, _ = vit(img)  # (B,1,d)
                     img_emb = img_proj(cls.squeeze(1))  # (B, embed_dim)
                     img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
@@ -330,7 +330,7 @@ def main(cfg):
                         val_img = val_img.to(device)
                         val_B = val_img.shape[0]
                         if use_amp:
-                            with autocast():
+                            with autocast(device_type='cuda'):
                                 val_cls, _ = vit(val_img)
                                 val_img_emb = img_proj(val_cls.squeeze(1))
                                 val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
@@ -424,7 +424,7 @@ def main(cfg):
                 val_img = val_img.to(device)
                 val_B = val_img.shape[0]
                 if use_amp:
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         val_cls, _ = vit(val_img)
                         val_img_emb = img_proj(val_cls.squeeze(1))
                         val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)

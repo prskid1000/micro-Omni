@@ -1,7 +1,7 @@
 
 import argparse, json, torch, os, random
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
@@ -71,7 +71,7 @@ def main(cfg):
     
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler('cuda') if use_amp else None
     if use_amp:
         print("Mixed precision training (AMP) enabled")
     if accumulation_steps > 1:
@@ -158,14 +158,25 @@ def main(cfg):
             # Forward pass with mixed precision
             try:
                 if use_amp:
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         logits = model(x)  # (B,T,V)
                         loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
                 else:
                     logits = model(x)  # (B,T,V)
                     loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
-            except RuntimeError as e:
+            except (RuntimeError, Exception) as e:
                 error_msg = str(e)
+                error_type = type(e).__name__
+                # Check for Triton/Inductor compilation errors
+                if ("Triton compilation failed" in error_msg or 
+                    "failed to translate module to LLVM IR" in error_msg or 
+                    "InductorError" in error_type or
+                    "could not find LLVM intrinsic" in error_msg):
+                    logger.error(f"Step {step}: Triton compilation error detected")
+                    logger.error(f"Error type: {error_type}")
+                    logger.error("This is often caused by GPU compatibility issues (e.g., RTX 50 series with compute capability 12.0).")
+                    logger.error("Solution: Set 'use_compile': false in your training config to disable torch.compile()")
+                    raise  # Re-raise to stop training
                 if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
                     logger.error(f"Step {step}: {e}")
                     logger.error("Reloading from last checkpoint...")
@@ -342,7 +353,7 @@ def main(cfg):
                         val_x, val_y = val_x.to(device), val_y.to(device)
                         try:
                             if use_amp:
-                                with autocast():
+                                with autocast(device_type='cuda'):
                                     val_logits = model(val_x)
                                     val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
                             else:
@@ -436,7 +447,7 @@ def main(cfg):
                     val_x, val_y = val_x.to(device), val_y.to(device)
                     try:
                         if use_amp:
-                            with autocast():
+                            with autocast(device_type='cuda'):
                                 val_logits = model(val_x)
                                 val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
                         else:

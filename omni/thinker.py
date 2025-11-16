@@ -490,17 +490,20 @@ class ThinkerLM(nn.Module):
         try:
             # Compile individual blocks for better compilation efficiency
             # Using 'default' mode for better stability across platforms
+            # Note: 'reduce-overhead' or 'max-autotune' modes may cause Triton compilation issues
+            # on some GPUs (especially newer architectures like RTX 50 series)
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, mode='default')
+                self.blocks[i] = torch.compile(block, mode='default', fullgraph=False)
             
             # Compile embedding and output head
-            self.tok_emb = torch.compile(self.tok_emb, mode='default')
-            self.lm_head = torch.compile(self.lm_head, mode='default')
+            self.tok_emb = torch.compile(self.tok_emb, mode='default', fullgraph=False)
+            self.lm_head = torch.compile(self.lm_head, mode='default', fullgraph=False)
             
             self._compiled = True
             print(f"✓ Model compiled successfully with torch.compile()")
         except Exception as e:
             warnings.warn(f"Failed to compile model: {e}. Continuing without compilation.")
+            warnings.warn("If you encounter Triton compilation errors during training, set 'use_compile': false in your config.")
     
     def reset_kv_cache(self) -> None:
         """Reset KV cache (call before new generation)"""
