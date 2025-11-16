@@ -37,23 +37,18 @@ class RVQ(nn.Module):
             warnings.warn("torch.compile() not available. Requires PyTorch 2.0+. Skipping compilation.")
             return
         
-        # Windows has a bug with inductor backend causing OverflowError
-        # Use 'default' mode instead of 'reduce-overhead' on Windows
-        import platform
-        compile_mode = 'default' if platform.system() == 'Windows' else 'reduce-overhead'
-        
         try:
             # Compile projection layers
-            self.proj_in = torch.compile(self.proj_in, mode=compile_mode)
-            self.proj_out = torch.compile(self.proj_out, mode=compile_mode)
+            # Using 'default' mode for better stability across platforms
+            self.proj_in = torch.compile(self.proj_in, mode='default')
+            self.proj_out = torch.compile(self.proj_out, mode='default')
             
             # Compile codebook embeddings
             for i in range(len(self.codebooks)):
-                self.codebooks[i] = torch.compile(self.codebooks[i], mode=compile_mode)
+                self.codebooks[i] = torch.compile(self.codebooks[i], mode='default')
             
             self._compiled = True
-            compile_info = " (using 'default' mode on Windows)" if platform.system() == 'Windows' else ""
-            print(f"✓ RVQ compiled successfully with torch.compile(){compile_info}")
+            print(f"✓ RVQ compiled successfully with torch.compile()")
         except Exception as e:
             warnings.warn(f"Failed to compile RVQ: {e}. Continuing without compilation.")
 
