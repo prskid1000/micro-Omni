@@ -1,5 +1,5 @@
 
-import argparse, json, torch, os, random
+import argparse, json, torch, os, random, gc
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -168,6 +168,9 @@ def main(cfg):
                 else:
                     logits = model(x)  # (B,T,V)
                     loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+                
+                # Free logits after loss computation (loss keeps its own graph)
+                del logits
             except (RuntimeError, Exception) as e:
                 error_msg = str(e)
                 error_type = type(e).__name__
@@ -204,13 +207,17 @@ def main(cfg):
                     raise
             
             # Scale loss for gradient accumulation
-            loss = loss / accumulation_steps
+            loss_scaled = loss / accumulation_steps
             
             # Backward pass with gradient scaling
             if use_amp:
-                scaler.scale(loss).backward()
+                scaler.scale(loss_scaled).backward()
             else:
-                loss.backward()
+                loss_scaled.backward()
+            
+            # Detach loss for logging (free computation graph)
+            loss_val = loss.detach()
+            del loss
             
             # Gradient accumulation: only step optimizer every N steps
             if (step + 1) % accumulation_steps == 0:
@@ -219,7 +226,7 @@ def main(cfg):
                     scaler.unscale_(opt)
                 
                 # Validate loss value (unscaled)
-                unscaled_loss = loss * accumulation_steps
+                unscaled_loss = loss_val * accumulation_steps
                 try:
                     validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
                 except RuntimeError as e:
@@ -296,9 +303,14 @@ def main(cfg):
                     continue
                 
                 opt.zero_grad()  # Clear gradients after stepping
+                
+                # Periodic memory cleanup
+                if step % 100 == 0 and device == "cuda":
+                    torch.cuda.empty_cache()
+                    gc.collect()
             else:
                 # Not accumulation step - just validate loss
-                unscaled_loss = loss * accumulation_steps
+                unscaled_loss = loss_val * accumulation_steps
                 try:
                     validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
                 except RuntimeError as e:
@@ -310,10 +322,10 @@ def main(cfg):
             
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                unscaled_loss = loss * accumulation_steps
+                unscaled_loss = loss_val * accumulation_steps
                 # Calculate perplexity for evaluation
                 perplexity = torch.exp(unscaled_loss).item() if unscaled_loss.item() < 10 else float('inf')
-                logger.train_step(step, float(unscaled_loss.detach()), current_lr, epoch)
+                logger.train_step(step, float(unscaled_loss), current_lr, epoch)
                 if step % (print_freq * 10) == 0:  # Log perplexity less frequently
                     logger.info(f"Perplexity: {perplexity:.2f}")
             
@@ -368,6 +380,8 @@ def main(cfg):
                             validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                             val_loss_sum += float(val_loss.detach())
                             val_count += 1
+                            # Free validation tensors
+                            del val_logits, val_loss
                         except RuntimeError as e:
                             error_msg = str(e)
                             if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
@@ -462,6 +476,8 @@ def main(cfg):
                         validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                         val_loss_sum += float(val_loss.detach())
                         val_count += 1
+                        # Free validation tensors
+                        del val_logits, val_loss
                     except RuntimeError as e:
                         error_msg = str(e)
                         if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:

@@ -1,5 +1,5 @@
 
-import argparse, json, os, torch, torchaudio, csv
+import argparse, json, os, torch, torchaudio, csv, gc
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -218,21 +218,29 @@ def main(cfg):
                     log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
                     inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
                     loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+                    # Free intermediate tensors
+                    del x, logit, log_prob
             else:
                 x = model(mel)  # (B, T', d)
                 logit = head(x)  # (B,T',V)
                 log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
                 inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
                 loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+                # Free intermediate tensors
+                del x, logit, log_prob
             
             # Scale loss for gradient accumulation
-            loss = loss / accumulation_steps
+            loss_scaled = loss / accumulation_steps
             
             # Backward pass with gradient scaling
             if use_amp:
-                scaler.scale(loss).backward()
+                scaler.scale(loss_scaled).backward()
             else:
-                loss.backward()
+                loss_scaled.backward()
+            
+            # Detach loss for logging (free computation graph)
+            loss_val = loss.detach()
+            del loss
             
             # Gradient accumulation: only step optimizer every N steps
             if (step + 1) % accumulation_steps == 0:
@@ -241,7 +249,7 @@ def main(cfg):
                     scaler.unscale_(opt)
                 
                 # Validate loss value (unscaled)
-                unscaled_loss = loss * accumulation_steps
+                unscaled_loss = loss_val * accumulation_steps
                 try:
                     validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
                 except RuntimeError as e:
@@ -281,9 +289,14 @@ def main(cfg):
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping
+                
+                # Periodic memory cleanup
+                if step % 100 == 0 and device == "cuda":
+                    torch.cuda.empty_cache()
+                    gc.collect()
             else:
                 # Not accumulation step - just validate loss
-                unscaled_loss = loss * accumulation_steps
+                unscaled_loss = loss_val * accumulation_steps
                 try:
                     validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
                 except RuntimeError as e:
@@ -295,8 +308,8 @@ def main(cfg):
             step+=1
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                unscaled_loss = loss * accumulation_steps
-                logger.train_step(step, float(unscaled_loss.detach()), current_lr, epoch)
+                unscaled_loss = loss_val * accumulation_steps
+                logger.train_step(step, float(unscaled_loss), current_lr, epoch)
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
@@ -347,6 +360,8 @@ def main(cfg):
                             validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                             val_loss_sum += float(val_loss.detach())
                             val_count += 1
+                            # Free validation tensors
+                            del val_x, val_logit, val_log_prob, val_loss
                         except RuntimeError as e:
                             logger.warning(f"Step {step}: Invalid validation loss: {e}")
                             # Continue with other validation batches
@@ -423,9 +438,12 @@ def main(cfg):
                     validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                     val_loss_sum += float(val_loss.detach())
                     val_count += 1
+                    # Free validation tensors
+                    del val_x, val_logit, val_log_prob, val_loss
                 except RuntimeError as e:
                     logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
                     # Continue with other validation batches
+                    del val_x, val_logit, val_log_prob, val_loss
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

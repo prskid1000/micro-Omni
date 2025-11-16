@@ -43,6 +43,7 @@ import json
 import os
 import csv
 import torch
+import gc
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -790,46 +791,54 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                         if model_type == "thinker":
                             logits = model(x)
                             loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+                            del logits
                         elif model_type == "audio_enc":
                             out = model(mels)
                             logits = head(out)
                             log_prob = logits.log_softmax(-1).transpose(0, 1)
                             inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
                             loss = loss_fn(log_prob, targets, inp_lens, target_lens)
+                            del out, logits, log_prob
                         elif model_type == "vision":
                             cls, _ = model(imgs)
                             img_feat = img_proj(cls.squeeze(1))
                             text_feats = torch.stack([text_embed_encode[1](cap) for cap in captions]).to(device)
                             text_feat = text_proj(text_feats)
                             loss = loss_fn(img_feat, text_feat)
+                            del cls, img_feat, text_feats, text_feat
                         elif model_type == "talker":
                             base_logits, res_logits = model(prev, use_cache=False)
                             loss = (
                                 loss_fn(base_logits.reshape(-1, base_logits.size(-1)), codes[:, :, 0].reshape(-1)) +
                                 loss_fn(res_logits.reshape(-1, res_logits.size(-1)), codes[:, :, 1].reshape(-1))
                             )
+                            del base_logits, res_logits
                 else:
                     if model_type == "thinker":
                         logits = model(x)
                         loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+                        del logits
                     elif model_type == "audio_enc":
                         out = model(mels)
                         logits = head(out)
                         log_prob = logits.log_softmax(-1).transpose(0, 1)
                         inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
                         loss = loss_fn(log_prob, targets, inp_lens, target_lens)
+                        del out, logits, log_prob
                     elif model_type == "vision":
                         cls, _ = model(imgs)
                         img_feat = img_proj(cls.squeeze(1))
                         text_feats = torch.stack([text_embed_encode[1](cap) for cap in captions]).to(device)
                         text_feat = text_proj(text_feats)
                         loss = loss_fn(img_feat, text_feat)
+                        del cls, img_feat, text_feats, text_feat
                     elif model_type == "talker":
                         base_logits, res_logits = model(prev, use_cache=False)
                         loss = (
                             loss_fn(base_logits.reshape(-1, base_logits.size(-1)), codes[:, :, 0].reshape(-1)) +
                             loss_fn(res_logits.reshape(-1, res_logits.size(-1)), codes[:, :, 1].reshape(-1))
                         )
+                        del base_logits, res_logits
             except RuntimeError as e:
                 error_msg = str(e)
                 if ("NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg) and model_type == "thinker":
@@ -856,20 +865,24 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                     raise
             
             # Scale loss for gradient accumulation
-            loss = loss / accumulation_steps
+            loss_scaled = loss / accumulation_steps
             
             # Backward pass
             if use_amp:
-                scaler.scale(loss).backward()
+                scaler.scale(loss_scaled).backward()
             else:
-                loss.backward()
+                loss_scaled.backward()
+            
+            # Detach loss for logging (free computation graph)
+            loss_val = loss.detach()
+            del loss
             
             # Gradient accumulation
             if (step + 1) % accumulation_steps == 0:
                 if use_amp:
                     scaler.unscale_(opt)
                 
-                unscaled_loss = loss * accumulation_steps
+                unscaled_loss = loss_val * accumulation_steps
                 try:
                     validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
                 except RuntimeError as e:
@@ -913,8 +926,13 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                         continue
                 
                 opt.zero_grad()
+                
+                # Periodic memory cleanup
+                if step % 100 == 0 and device == "cuda":
+                    torch.cuda.empty_cache()
+                    gc.collect()
             else:
-                unscaled_loss = loss * accumulation_steps
+                unscaled_loss = loss_val * accumulation_steps
                 try:
                     validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
                 except RuntimeError as e:
@@ -926,8 +944,8 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
             # Logging
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                unscaled_loss = loss * accumulation_steps
-                logger.train_step(step, float(unscaled_loss.detach()), current_lr, epoch)
+                unscaled_loss = loss_val * accumulation_steps
+                logger.train_step(step, float(unscaled_loss), current_lr, epoch)
             
             # Checkpointing
             if step % checkpoint_freq == 0 and step > 0:
@@ -1036,6 +1054,15 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                         
                         val_loss_sum += float(val_loss.detach())
                         val_batches += 1
+                        # Free validation tensors based on model type
+                        if model_type == "thinker":
+                            del val_logits, val_loss
+                        elif model_type == "audio_enc":
+                            del val_out, val_logits, val_log_prob, val_loss
+                        elif model_type == "vision":
+                            del val_cls, val_img_feat, val_text_feats, val_text_feat, val_logits, val_loss
+                        elif model_type == "talker":
+                            del val_base_logits, val_res_logits, val_codes, val_prev, val_loss
                         if val_batches >= 20:
                             break
                 
