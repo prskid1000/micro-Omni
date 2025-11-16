@@ -439,20 +439,20 @@ def train_vision(cfg, checkpoint_path, new_dataset, args, device):
         try:
             img_proj.load_state_dict(extra_states["img_proj"], strict=True)
             print("✓ Image projector loaded")
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠ Warning: Could not load image projector: {e}")
     if extra_states["text_proj"] is not None:
         try:
             text_proj.load_state_dict(extra_states["text_proj"], strict=True)
             print("✓ Text projector loaded")
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠ Warning: Could not load text projector: {e}")
     if extra_states["text_embed"] is not None:
         try:
             text_embed.load_state_dict(extra_states["text_embed"], strict=True)
             print("✓ Text embeddings loaded")
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠ Warning: Could not load text embeddings: {e}")
     
     # Setup optimizer
     opt = torch.optim.AdamW(
