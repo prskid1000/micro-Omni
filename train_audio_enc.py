@@ -21,16 +21,45 @@ def collate_fn(batch):
 
 class ASRDataset(Dataset):
     def __init__(self, csv_path, sr=16000, n_mels=128, cfg=None):
-        self.rows = []
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            rd = csv.DictReader(f)
-            for r in rd: self.rows.append(r)
+        self.csv_path = csv_path
         self.sr = sr
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=160, win_length=400, n_mels=n_mels)
+        # Build row offset index (stores file positions, not content)
+        self.row_offsets = []
+        self.fieldnames = None
+        with open(csv_path, 'rb') as f:
+            # Read header
+            header_line = f.readline()
+            if not header_line:
+                raise ValueError("CSV file is empty")
+            self.fieldnames = header_line.decode('utf-8').strip().split(',')
+            # Build offset index for data rows
+            offset = f.tell()
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                try:
+                    decoded = line_bytes.decode('utf-8').strip()
+                    if decoded:
+                        self.row_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    pass
+                offset += len(line_bytes)
 
-    def __len__(self): return len(self.rows)
+    def __len__(self): return len(self.row_offsets)
     def __getitem__(self, i):
-        path, text = self.rows[i]["wav"], self.rows[i]["text"]
+        # Read only the specific row using file offset
+        with open(self.csv_path, 'rb') as f:
+            f.seek(self.row_offsets[i])
+            line_bytes = f.readline()
+            line = line_bytes.decode('utf-8').strip()
+        # Parse CSV row properly (handles quoted fields)
+        import io
+        reader = csv.DictReader(io.StringIO(line), fieldnames=self.fieldnames)
+        row = next(reader)
+        path, text = row["wav"], row["text"]
         wav, sr = torchaudio.load(path); assert sr==self.sr
         mel = self.melspec(wav)[0].T  # (T, n_mels)
         return mel, text

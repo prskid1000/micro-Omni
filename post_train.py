@@ -67,16 +67,40 @@ from tqdm import tqdm
 
 class TextDataset(Dataset):
     def __init__(self, path, tokenizer, ctx):
-        with open(path, 'r', encoding='utf-8') as f:
-            self.lines = [l.strip() for l in f if l.strip()]
+        self.path = path
         self.tok = tokenizer
         self.ctx = ctx
+        # Build line offset index (stores file positions, not content)
+        # Read in binary mode and manually track offsets
+        self.line_offsets = []
+        with open(path, 'rb') as f:
+            offset = 0
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                # Decode to check if line is non-empty
+                try:
+                    decoded = line_bytes.decode('utf-8')
+                    if decoded.strip():
+                        self.line_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    # Skip invalid UTF-8 lines
+                    pass
+                # Manually track offset by adding line length
+                offset += len(line_bytes)
     
     def __len__(self):
-        return len(self.lines)
+        return len(self.line_offsets)
     
     def __getitem__(self, i):
-        ids = self.tok.encode(self.lines[i])[:self.ctx-1]
+        # Read only the specific line using file offset
+        with open(self.path, 'rb') as f:
+            f.seek(self.line_offsets[i])
+            line_bytes = f.readline()
+            text = line_bytes.decode('utf-8').strip()
+        ids = self.tok.encode(text)[:self.ctx-1]
         ids = [1] + ids  # BOS=1
         pad = [0] * (self.ctx - len(ids))
         x = torch.tensor(ids + pad, dtype=torch.long)
@@ -87,21 +111,50 @@ class TextDataset(Dataset):
 
 class ASRDataset(Dataset):
     def __init__(self, csv_path, sr=16000, n_mels=128, cfg=None):
-        self.rows = []
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            rd = csv.DictReader(f)
-            for r in rd:
-                self.rows.append(r)
+        self.csv_path = csv_path
         self.sr = sr
         self.melspec = torchaudio.transforms.MelSpectrogram(
             sample_rate=sr, n_fft=1024, hop_length=160, win_length=400, n_mels=n_mels
         )
+        # Build row offset index (stores file positions, not content)
+        self.row_offsets = []
+        self.fieldnames = None
+        with open(csv_path, 'rb') as f:
+            # Read header
+            header_line = f.readline()
+            if not header_line:
+                raise ValueError("CSV file is empty")
+            self.fieldnames = header_line.decode('utf-8').strip().split(',')
+            # Build offset index for data rows
+            offset = f.tell()
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                # Check if line is non-empty
+                try:
+                    decoded = line_bytes.decode('utf-8').strip()
+                    if decoded:
+                        self.row_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    pass
+                offset += len(line_bytes)
     
     def __len__(self):
-        return len(self.rows)
+        return len(self.row_offsets)
     
     def __getitem__(self, i):
-        path, text = self.rows[i]["wav"], self.rows[i]["text"]
+        # Read only the specific row using file offset (binary mode for consistency)
+        with open(self.csv_path, 'rb') as f:
+            f.seek(self.row_offsets[i])
+            line_bytes = f.readline()
+            line = line_bytes.decode('utf-8').strip()
+        # Parse CSV row properly (handles quoted fields)
+        import io
+        reader = csv.DictReader(io.StringIO(line), fieldnames=self.fieldnames)
+        row = next(reader)
+        path, text = row["wav"], row["text"]
         wav, sr = torchaudio.load(path)
         assert sr == self.sr
         mel = self.melspec(wav)[0].T  # (T, n_mels)
@@ -122,29 +175,114 @@ def collate_fn_asr(batch):
 
 class ImgCapDataset(Dataset):
     def __init__(self, manifest, image_root, img_size=224):
-        self.items = js.load(open(manifest, 'r', encoding='utf-8'))
+        self.manifest_path = manifest
         self.root = image_root
         self.tf = transforms.Compose([
             transforms.Resize((img_size, img_size)),
             transforms.ToTensor()
         ])
+        # Build item offset index for JSON array
+        # JSON arrays are structured, so we'll parse and store offsets to each object
+        self.item_offsets = []
+        self.item_lengths = []  # Store approximate lengths for seeking
+        try:
+            with open(manifest, 'rb') as f:
+                content = f.read()
+                # Find array start
+                start_pos = content.find(b'[')
+                if start_pos == -1:
+                    raise ValueError("JSON manifest must be an array")
+                # Parse JSON to find object boundaries (handle commas and whitespace)
+                pos = start_pos + 1
+                depth = 0
+                obj_start = None
+                in_string = False
+                escape_next = False
+                while pos < len(content):
+                    byte = content[pos:pos+1]
+                    if escape_next:
+                        escape_next = False
+                    elif byte == b'\\':
+                        escape_next = True
+                    elif byte == b'"' and not escape_next:
+                        in_string = not in_string
+                    elif not in_string:
+                        if byte == b'{':
+                            if depth == 0:
+                                obj_start = pos
+                            depth += 1
+                        elif byte == b'}':
+                            depth -= 1
+                            if depth == 0 and obj_start is not None:
+                                # Found complete object
+                                self.item_offsets.append(obj_start)
+                                self.item_lengths.append(pos - obj_start + 1)
+                                obj_start = None
+                    pos += 1
+        except Exception:
+            # If parsing fails, fall back to loading entire JSON
+            pass
+        
+        # Fallback: if parsing failed, load entire JSON (for malformed JSON)
+        if not self.item_offsets:
+            self.items = js.load(open(manifest, 'r', encoding='utf-8'))
+            self._use_fallback = True
+        else:
+            self._use_fallback = False
     
     def __len__(self):
-        return len(self.items)
+        if self._use_fallback:
+            return len(self.items)
+        return len(self.item_offsets)
     
     def __getitem__(self, i):
-        it = self.items[i]
+        if self._use_fallback:
+            it = self.items[i]
+        else:
+            # Read specific JSON object using offset
+            with open(self.manifest_path, 'rb') as f:
+                f.seek(self.item_offsets[i])
+                # Read the object, handling potential trailing comma/whitespace
+                obj_bytes = f.read(self.item_lengths[i])
+                # Try to parse, if it fails due to trailing comma, read a bit more
+                try:
+                    it = js.loads(obj_bytes.decode('utf-8'))
+                except:
+                    # Read until next object or end of array
+                    chunk = obj_bytes
+                    while True:
+                        next_byte = f.read(1)
+                        if not next_byte or next_byte in [b'{', b']']:
+                            break
+                        chunk += next_byte
+                    # Try to find and parse the JSON object in the chunk
+                    chunk_str = chunk.decode('utf-8')
+                    # Find first { and matching }
+                    start = chunk_str.find('{')
+                    if start != -1:
+                        depth = 0
+                        end = start
+                        for j, char in enumerate(chunk_str[start:], start):
+                            if char == '{':
+                                depth += 1
+                            elif char == '}':
+                                depth -= 1
+                                if depth == 0:
+                                    end = j + 1
+                                    break
+                        it = js.loads(chunk_str[start:end])
+                    else:
+                        # Fallback: load entire JSON
+                        self.items = js.load(open(self.manifest_path, 'r', encoding='utf-8'))
+                        self._use_fallback = True
+                        it = self.items[i]
         img_path = it["image"] if os.path.isabs(it["image"]) else os.path.join(self.root, it["image"])
         img = Image.open(img_path).convert("RGB")
         return self.tf(img), it["caption"]
 
 class TTSDataset(Dataset):
     def __init__(self, csv_path, sr=16000, n_mels=128, frame_ms=80, cfg=None):
-        self.rows = []
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            rd = csv.DictReader(f)
-            for r in rd:
-                self.rows.append(r)
+        self.csv_path = csv_path
         self.sr = sr
         hop_length = int(sr * frame_ms / 1000)
         win_length = min(1024, hop_length * 4)
@@ -153,12 +291,45 @@ class TTSDataset(Dataset):
             win_length=win_length, n_mels=n_mels
         )
         self.frame = int(sr * 0.08)
+        # Build row offset index (stores file positions, not content)
+        self.row_offsets = []
+        self.fieldnames = None
+        with open(csv_path, 'rb') as f:
+            # Read header
+            header_line = f.readline()
+            if not header_line:
+                raise ValueError("CSV file is empty")
+            self.fieldnames = header_line.decode('utf-8').strip().split(',')
+            # Build offset index for data rows
+            offset = f.tell()
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                # Check if line is non-empty
+                try:
+                    decoded = line_bytes.decode('utf-8').strip()
+                    if decoded:
+                        self.row_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    pass
+                offset += len(line_bytes)
     
     def __len__(self):
-        return len(self.rows)
+        return len(self.row_offsets)
     
     def __getitem__(self, i):
-        text, path = self.rows[i]["text"], self.rows[i]["wav"]
+        # Read only the specific row using file offset (binary mode for consistency)
+        with open(self.csv_path, 'rb') as f:
+            f.seek(self.row_offsets[i])
+            line_bytes = f.readline()
+            line = line_bytes.decode('utf-8').strip()
+        # Parse CSV row properly (handles quoted fields)
+        import io
+        reader = csv.DictReader(io.StringIO(line), fieldnames=self.fieldnames)
+        row = next(reader)
+        text, path = row["text"], row["wav"]
         wav, sr = torchaudio.load(path)
         assert sr == self.sr
         mel = self.melspec(wav)[0].T  # (T, n_mels)
@@ -428,7 +599,11 @@ def train_vision(cfg, checkpoint_path, new_dataset, args, device):
     text_embed = nn.Embedding(vocab_size, cfg["d_model"]).to(device)
     
     # Build vocabulary from captions
-    all_captions = [item["caption"] for item in ds.items]
+    # Iterate through dataset to collect captions (works with lazy loading)
+    all_captions = []
+    for i in range(len(ds)):
+        _, caption = ds[i]
+        all_captions.append(caption)
     word_to_idx = {}
     word_freq = {}
     for cap in all_captions:

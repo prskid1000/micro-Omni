@@ -14,26 +14,175 @@ from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, Simp
 
 class MixDataset(Dataset):
     def __init__(self, text_path, image_manifest, image_root, asr_csv, ctx=1024):
-        self.text = [l.strip() for l in open(text_path, 'r', encoding='utf-8') if l.strip()]
-        self.images = js.load(open(image_manifest, 'r', encoding='utf-8'))
+        # Lazy-load text: build line offset index
+        self.text_path = text_path
+        self.text_offsets = []
+        with open(text_path, 'rb') as f:
+            offset = 0
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                try:
+                    decoded = line_bytes.decode('utf-8').strip()
+                    if decoded:
+                        self.text_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    pass
+                offset += len(line_bytes)
+        
+        # Lazy-load JSON manifest: build item offset index
+        self.image_manifest_path = image_manifest
         self.image_root = image_root
-        self.asr = [r for r in csv.DictReader(open(asr_csv, 'r', encoding='utf-8'))]
+        self.image_item_offsets = []
+        self.image_item_lengths = []
+        try:
+            with open(image_manifest, 'rb') as f:
+                content = f.read()
+                # Find array start
+                start_pos = content.find(b'[')
+                if start_pos == -1:
+                    raise ValueError("JSON manifest must be an array")
+                # Parse JSON to find object boundaries (handle commas and whitespace)
+                pos = start_pos + 1
+                depth = 0
+                obj_start = None
+                in_string = False
+                escape_next = False
+                while pos < len(content):
+                    byte = content[pos:pos+1]
+                    if escape_next:
+                        escape_next = False
+                    elif byte == b'\\':
+                        escape_next = True
+                    elif byte == b'"' and not escape_next:
+                        in_string = not in_string
+                    elif not in_string:
+                        if byte == b'{':
+                            if depth == 0:
+                                obj_start = pos
+                            depth += 1
+                        elif byte == b'}':
+                            depth -= 1
+                            if depth == 0 and obj_start is not None:
+                                # Found complete object
+                                self.image_item_offsets.append(obj_start)
+                                self.image_item_lengths.append(pos - obj_start + 1)
+                                obj_start = None
+                    pos += 1
+        except Exception:
+            # If parsing fails, fall back to loading entire JSON
+            pass
+        
+        # Fallback: if parsing failed, load entire JSON
+        if not self.image_item_offsets:
+            self.images = js.load(open(image_manifest, 'r', encoding='utf-8'))
+            self._use_image_fallback = True
+        else:
+            self._use_image_fallback = False
+            self.images = None  # Not used when using lazy loading
+        
+        # Lazy-load ASR CSV: build row offset index
+        self.asr_csv_path = asr_csv
+        self.asr_offsets = []
+        self.asr_fieldnames = None
+        with open(asr_csv, 'rb') as f:
+            header_line = f.readline()
+            if header_line:
+                self.asr_fieldnames = header_line.decode('utf-8').strip().split(',')
+                offset = f.tell()
+                while True:
+                    line_start = offset
+                    line_bytes = f.readline()
+                    if not line_bytes:
+                        break
+                    try:
+                        decoded = line_bytes.decode('utf-8').strip()
+                        if decoded:
+                            self.asr_offsets.append(line_start)
+                    except UnicodeDecodeError:
+                        pass
+                    offset += len(line_bytes)
+        
         self.tf = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
         self.ctx = ctx
 
-    def __len__(self): return max(len(self.text), len(self.images), len(self.asr))
+    def __len__(self):
+        if self._use_image_fallback:
+            image_len = len(self.images)
+        else:
+            image_len = len(self.image_item_offsets)
+        return max(len(self.text_offsets), image_len, len(self.asr_offsets))
 
     def __getitem__(self, i):
         it = {}
-        if i < len(self.text):
-            it["text"] = self.text[i]
+        # Lazy-load text
+        if i < len(self.text_offsets):
+            with open(self.text_path, 'rb') as f:
+                f.seek(self.text_offsets[i])
+                line_bytes = f.readline()
+                it["text"] = line_bytes.decode('utf-8').strip()
         else:
             it["text"] = "Describe the image or audio."
-        if i < len(self.images):
-            img_path = os.path.join(self.image_root, self.images[i]["image"])
-            it["image"] = img_path; it["caption"] = self.images[i]["caption"]
-        if i < len(self.asr):
-            it["audio"] = self.asr[i]["wav"]; it["trans"] = self.asr[i]["text"]
+        
+        # Lazy-load image from JSON
+        if self._use_image_fallback:
+            image_len = len(self.images)
+        else:
+            image_len = len(self.image_item_offsets)
+        if i < image_len:
+            if self._use_image_fallback:
+                img_item = self.images[i]
+            else:
+                # Read specific JSON object using offset
+                with open(self.image_manifest_path, 'rb') as f:
+                    f.seek(self.image_item_offsets[i])
+                    obj_bytes = f.read(self.image_item_lengths[i])
+                    try:
+                        img_item = js.loads(obj_bytes.decode('utf-8'))
+                    except:
+                        # Read until next object or end of array
+                        chunk = obj_bytes
+                        while True:
+                            next_byte = f.read(1)
+                            if not next_byte or next_byte in [b'{', b']']:
+                                break
+                            chunk += next_byte
+                        # Try to find and parse the JSON object in the chunk
+                        chunk_str = chunk.decode('utf-8')
+                        start = chunk_str.find('{')
+                        if start != -1:
+                            depth = 0
+                            end = start
+                            for j, char in enumerate(chunk_str[start:], start):
+                                if char == '{':
+                                    depth += 1
+                                elif char == '}':
+                                    depth -= 1
+                                    if depth == 0:
+                                        end = j + 1
+                                        break
+                            img_item = js.loads(chunk_str[start:end])
+                        else:
+                            # Fallback: load entire JSON
+                            self.images = js.load(open(self.image_manifest_path, 'r', encoding='utf-8'))
+                            self._use_image_fallback = True
+                            img_item = self.images[i]
+            img_path = os.path.join(self.image_root, img_item["image"])
+            it["image"] = img_path
+            it["caption"] = img_item["caption"]
+        
+        # Lazy-load ASR
+        if i < len(self.asr_offsets):
+            with open(self.asr_csv_path, 'rb') as f:
+                f.seek(self.asr_offsets[i])
+                line_bytes = f.readline()
+                line = line_bytes.decode('utf-8').strip()
+            import io
+            reader = csv.DictReader(io.StringIO(line), fieldnames=self.asr_fieldnames)
+            row = next(reader)
+            it["audio"] = row["wav"]; it["trans"] = row["text"]
         return it
 
 def mix_collate_fn(batch):

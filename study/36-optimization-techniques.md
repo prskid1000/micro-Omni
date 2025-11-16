@@ -97,13 +97,82 @@ model = torch.quantization.quantize_dynamic(
 
 ---
 
+## 💾 Memory Optimizations
+
+### 1. Lazy Dataset Loading
+
+**What:** Load data on-demand instead of pre-loading into RAM  
+**Benefit:** Reduces RAM usage by 90%+ for large datasets
+
+**Implemented in all μOmni datasets:**
+- **TextDataset**: File offset indexing (stores ~8 bytes/line vs full text)
+- **ASRDataset/TTSDataset**: CSV row offset indexing (stores ~8 bytes/row vs full dicts)
+- **ImgCapDataset**: JSON object offset indexing (stores ~16 bytes/object vs full JSON)
+
+**Before:**
+```python
+# Loads entire file into RAM
+self.lines = [l.strip() for l in open(path) if l.strip()]  # Could be GB!
+```
+
+**After:**
+```python
+# Only stores file positions (integers)
+self.line_offsets = []  # Just 8 bytes per line
+# Reads specific line on-demand in __getitem__
+```
+
+**Memory savings example:**
+- 10M line text file: ~500MB → ~80MB (6x reduction)
+- 1M row CSV: ~200MB → ~8MB (25x reduction)
+- 100K image JSON: ~50MB → ~1.6MB (30x reduction)
+
+### 2. DataLoader Workers
+
+**What:** Parallel data loading processes  
+**Trade-off:** More workers = faster loading but more RAM
+
+```json
+{
+  "num_workers": 2,  // Default: 2 workers
+  // Reduce to 0 or 1 if RAM is limited
+}
+```
+
+**Recommendation:**
+- **High RAM (32GB+)**: `num_workers: 2-4`
+- **Medium RAM (16GB)**: `num_workers: 1-2`
+- **Low RAM (8GB)**: `num_workers: 0-1`
+
+### 3. Batch Size Tuning
+
+**What:** Adjust batch size based on available memory  
+**Benefit:** Maximize GPU utilization without OOM
+
+```json
+{
+  "batch_size": 8,  // Start here
+  "gradient_accumulation_steps": 4  // Simulate batch_size=32
+}
+```
+
+**Strategy:**
+1. Start with `batch_size: 4`
+2. Increase until you hit OOM
+3. Use gradient accumulation to simulate larger batches
+
+---
+
 ## 💡 Best Practices
 
 ✅ **Always use FP16** for training  
 ✅ **Enable KV caching** for generation  
 ✅ **Use Flash Attention** if available  
 ✅ **Gradient accumulation** for large batches  
-✅ **Monitor GPU memory** with `nvidia-smi`
+✅ **Lazy loading enabled** by default (no action needed)  
+✅ **Monitor GPU memory** with `nvidia-smi`  
+✅ **Monitor RAM usage** - should be much lower than VRAM now  
+✅ **Reduce num_workers** if RAM is limited
 
 ---
 

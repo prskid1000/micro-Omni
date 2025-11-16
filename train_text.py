@@ -10,12 +10,36 @@ from tqdm import tqdm
 
 class TextDataset(Dataset):
     def __init__(self, path, tokenizer, ctx):
-        with open(path, 'r', encoding='utf-8') as f:
-            self.lines = [l.strip() for l in f if l.strip()]
+        self.path = path
         self.tok = tokenizer; self.ctx = ctx
-    def __len__(self): return len(self.lines)
+        # Build line offset index (stores file positions, not content)
+        # Read in binary mode and manually track offsets
+        self.line_offsets = []
+        with open(path, 'rb') as f:
+            offset = 0
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                # Decode to check if line is non-empty
+                try:
+                    decoded = line_bytes.decode('utf-8')
+                    if decoded.strip():
+                        self.line_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    # Skip invalid UTF-8 lines
+                    pass
+                # Manually track offset by adding line length
+                offset += len(line_bytes)
+    def __len__(self): return len(self.line_offsets)
     def __getitem__(self, i):
-        ids = self.tok.encode(self.lines[i])[:self.ctx-1]
+        # Read only the specific line using file offset
+        with open(self.path, 'rb') as f:
+            f.seek(self.line_offsets[i])
+            line_bytes = f.readline()
+            text = line_bytes.decode('utf-8').strip()
+        ids = self.tok.encode(text)[:self.ctx-1]
         ids = [1] + ids  # BOS=1 (SentencePiece default)
         pad = [0] * (self.ctx - len(ids))
         x = torch.tensor(ids + pad, dtype=torch.long)
