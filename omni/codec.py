@@ -1,16 +1,18 @@
 
 import torch
 from torch import nn
+from typing import Optional
+import numpy as np
 
 class RVQ(nn.Module):
     """ Two-level residual vector quantizer for 80/128-bin mel frames. """
-    def __init__(self, codebooks=2, codebook_size=128, d=64):
+    def __init__(self, codebooks: int = 2, codebook_size: int = 128, d: int = 64) -> None:
         super().__init__()
         self.codebooks = nn.ParameterList([nn.Embedding(codebook_size, d) for _ in range(codebooks)])
         self.proj_in = nn.Linear(128, d)
         self.proj_out = nn.Linear(d, 128)
 
-    def encode(self, mel_frame):
+    def encode(self, mel_frame: torch.Tensor) -> torch.Tensor:
         """
         Encode mel spectrogram frame(s) to RVQ codebook indices.
         
@@ -45,7 +47,7 @@ class RVQ(nn.Module):
         else:
             raise ValueError(f"Expected mel_frame shape (B, 128) or (B, T, 128), got {mel_frame.shape}")
     
-    def _encode_single(self, mel_frame):
+    def _encode_single(self, mel_frame: torch.Tensor) -> torch.Tensor:
         """
         Internal method to encode single frame(s) - handles (B, 128) input.
         
@@ -75,9 +77,15 @@ class RVQ(nn.Module):
         # Stack indices: (B, codebooks)
         return torch.stack(idxs, dim=-1)
 
-    def decode(self, idxs):
+    def decode(self, idxs: torch.Tensor) -> torch.Tensor:
         """
-        idxs: (B, C)
+        Decode codebook indices back to mel spectrogram.
+        
+        Args:
+            idxs: (B, C) codebook indices
+        
+        Returns:
+            mel: (B, 128) reconstructed mel spectrogram
         """
         z = 0.0
         for i, cb in enumerate(self.codebooks):
@@ -92,7 +100,8 @@ class GriffinLimVocoder:
     Uses proper mel-to-linear spectrogram conversion with mel filterbank inversion
     for better quality than simple upsampling.
     """
-    def __init__(self, sample_rate=16000, n_fft=1024, hop_length=256, win_length=1024, n_iter=32, n_mels=128):
+    def __init__(self, sample_rate: int = 16000, n_fft: int = 1024, hop_length: int = 256, 
+                 win_length: int = 1024, n_iter: int = 32, n_mels: int = 128) -> None:
         import librosa
         self.sr = sample_rate
         self.n_fft = n_fft
@@ -101,7 +110,6 @@ class GriffinLimVocoder:
         self.n_iter = n_iter
         self.n_mels = n_mels
         self.librosa = librosa
-        import numpy as np
         self.np = np
         
         # Build mel filterbank for proper inversion
@@ -114,7 +122,7 @@ class GriffinLimVocoder:
             fmax=sample_rate / 2.0
         )  # (n_mels, n_fft//2 + 1)
 
-    def mel_to_audio(self, mel):
+    def mel_to_audio(self, mel: np.ndarray) -> np.ndarray:
         """
         Convert mel spectrogram to audio waveform using improved Griffin-Lim.
         

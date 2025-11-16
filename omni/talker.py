@@ -1,17 +1,38 @@
 
 import torch
 from torch import nn
+from typing import Optional, Tuple, Dict
 from omni.utils import RMSNorm, make_positions
 from omni.thinker import Attention, MLP, Block
 from einops import rearrange
+import warnings
 
 class TalkerTiny(nn.Module):
     """ 
     AR Transformer that predicts 2 RVQ codebooks per frame (MTP=2).
-    Optimized with GQA, SwiGLU, and KV caching support for faster inference.
+    Optimized with GQA, SwiGLU, Flash Attention, KV caching, and torch.compile() support.
     """
-    def __init__(self, d=384, n_layers=8, n_heads=6, ff=1536, codebooks=2, codebook_size=128, 
-                 dropout=0.1, use_gqa=False, use_swiglu=True, rope_theta=10000.0):
+    def __init__(self, d: int = 384, n_layers: int = 8, n_heads: int = 6, ff: int = 1536, 
+                 codebooks: int = 2, codebook_size: int = 128, dropout: float = 0.1, 
+                 use_gqa: bool = False, use_swiglu: bool = True, rope_theta: float = 10000.0,
+                 use_flash: bool = True, compile_model: bool = False) -> None:
+        """
+        Initialize TalkerTiny with performance optimizations.
+        
+        Args:
+            d: model dimension
+            n_layers: number of transformer layers
+            n_heads: number of attention heads
+            ff: feedforward dimension
+            codebooks: number of RVQ codebooks (default: 2)
+            codebook_size: size of each codebook (default: 128)
+            dropout: dropout rate
+            use_gqa: use Grouped Query Attention
+            use_swiglu: use SwiGLU activation
+            rope_theta: RoPE theta parameter
+            use_flash: use Flash Attention for 2-4x speedup (default: True)
+            compile_model: use torch.compile() for 30-50% speedup (default: False)
+        """
         super().__init__()
         self.emb = nn.Embedding(codebook_size, d)
         self.start = nn.Parameter(torch.zeros(1,1,d))
@@ -19,9 +40,9 @@ class TalkerTiny(nn.Module):
         self.n_heads = n_heads
         self.n_layers = n_layers
         
-        # Use optimized blocks (GQA + SwiGLU support)
+        # Use optimized blocks (GQA + SwiGLU + Flash Attention support)
         self.blocks = nn.ModuleList([
-            Block(d, n_heads, ff, rope_theta, dropout, use_gqa=use_gqa, use_swiglu=use_swiglu)
+            Block(d, n_heads, ff, rope_theta, dropout, use_gqa=use_gqa, use_swiglu=use_swiglu, use_flash=use_flash)
             for _ in range(n_layers)
         ])
         self.norm = RMSNorm(d)
@@ -31,18 +52,43 @@ class TalkerTiny(nn.Module):
         # KV cache for autoregressive generation
         self.kv_cache = None
         self.use_kv_cache = False
+        
+        # Compilation support for additional speedup
+        self._compiled = False
+        if compile_model:
+            self._apply_compilation()
+    
+    def _apply_compilation(self) -> None:
+        """Apply torch.compile() for 30-50% speedup. Requires PyTorch 2.0+."""
+        if not hasattr(torch, 'compile'):
+            warnings.warn("torch.compile() not available. Requires PyTorch 2.0+. Skipping compilation.")
+            return
+        
+        try:
+            # Compile individual blocks
+            for i, block in enumerate(self.blocks):
+                self.blocks[i] = torch.compile(block, mode='reduce-overhead')
+            
+            # Compile heads
+            self.base_head = torch.compile(self.base_head, mode='reduce-overhead')
+            self.res_head = torch.compile(self.res_head, mode='reduce-overhead')
+            
+            self._compiled = True
+            print(f"✓ TalkerTiny compiled successfully with torch.compile()")
+        except Exception as e:
+            warnings.warn(f"Failed to compile TalkerTiny: {e}. Continuing without compilation.")
 
-    def reset_kv_cache(self):
+    def reset_kv_cache(self) -> None:
         """Reset KV cache (call before new generation)"""
         self.kv_cache = None
 
-    def enable_kv_cache(self, enable=True):
+    def enable_kv_cache(self, enable: bool = True) -> None:
         """Enable/disable KV caching for faster autoregressive generation"""
         self.use_kv_cache = enable
         if not enable:
             self.kv_cache = None
 
-    def forward(self, prev_codes, use_cache=False):
+    def forward(self, prev_codes: torch.Tensor, use_cache: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass with optional KV caching for faster autoregressive generation.
         
