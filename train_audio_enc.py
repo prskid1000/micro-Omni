@@ -74,6 +74,27 @@ def main(cfg):
     print(f"Character vocabulary: {len(char_to_idx)} characters")
     opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
     
+    unk_idx = char_to_idx['<UNK>']
+    max_text_len = cfg.get("max_text_len", 64)
+    head.char_to_idx = char_to_idx
+    head.unk_idx = unk_idx
+    head.max_text_len = max_text_len
+
+    def encode_text_batch(text_batch):
+        targets = []
+        lengths = []
+        for t in text_batch:
+            ids = [char_to_idx.get(c, unk_idx) for c in t[:max_text_len]]
+            if not ids:
+                ids = [unk_idx]
+            targets.append(torch.tensor(ids, dtype=torch.long))
+            lengths.append(len(ids))
+        if targets:
+            targets = torch.cat(targets)
+        else:
+            targets = torch.empty(0, dtype=torch.long)
+        return targets, torch.tensor(lengths, dtype=torch.long)
+
     # Learning rate scheduler with warmup
     warmup_steps = cfg.get("warmup_steps", 500)
     max_steps = cfg.get("max_steps", 5000)
@@ -177,26 +198,9 @@ def main(cfg):
                     continue
             mel = mel.to(device)
             
-            # Improved tokenization: proper character-level encoding
-            # Use the character vocabulary built at initialization
-            max_text_len = cfg.get("max_text_len", 64)  # Increased from 16
-            
-            # Encode text to character IDs using the vocabulary (built at initialization)
-            tgt = []
-            for t in text:
-                ids = []
-                for c in t[:max_text_len]:
-                    if c in char_to_idx:
-                        ids.append(char_to_idx[c])
-                    else:
-                        unk_idx = char_to_idx.get('<UNK>', len(char_to_idx))  # Use UNK if not in vocab
-                        ids.append(unk_idx)
-                if len(ids) == 0:
-                    unk_idx = char_to_idx.get('<UNK>', len(char_to_idx))
-                    ids = [unk_idx]  # At least one token
-                tgt.append(torch.tensor(ids, dtype=torch.long, device=device))
-            tgt_lens = torch.tensor([len(t) for t in tgt], dtype=torch.long)
-            tgt = torch.cat(tgt)
+            tgt, tgt_lens = encode_text_batch(text)
+            tgt = tgt.to(device)
+            tgt_lens = tgt_lens.to(device)
             
             # Forward pass with mixed precision
             if use_amp:
@@ -204,13 +208,13 @@ def main(cfg):
                     x = model(mel)  # (B, T', d)
                     logit = head(x)  # (B,T',V)
                     log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
-                    inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
+                    inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
                     loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
             else:
                 x = model(mel)  # (B, T', d)
                 logit = head(x)  # (B,T',V)
                 log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
-                inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long)
+                inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
                 loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
             
             # Scale loss for gradient accumulation
@@ -311,24 +315,21 @@ def main(cfg):
                 with torch.no_grad():
                     for val_mel, val_text in val_dl:
                         val_mel = val_mel.to(device)
-                        val_tgt = []
-                        for t in val_text:
-                            ids = [ (ord(c)%63)+1 for c in t[:max_text_len] ]
-                            val_tgt.append(torch.tensor(ids, dtype=torch.long))
-                        val_tgt_lens = torch.tensor([len(t) for t in val_tgt], dtype=torch.long)
-                        val_tgt = torch.cat(val_tgt)
+                        val_tgt, val_tgt_lens = encode_text_batch(val_text)
+                        val_tgt = val_tgt.to(device)
+                        val_tgt_lens = val_tgt_lens.to(device)
                         if use_amp:
                             with autocast():
                                 val_x = model(val_mel)
                                 val_logit = head(val_x)
                                 val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                                val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                                val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
                                 val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
                         else:
                             val_x = model(val_mel)
                             val_logit = head(val_x)
                             val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                            val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                            val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
                             val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
                         
                         # Validate validation loss
@@ -390,24 +391,21 @@ def main(cfg):
         with torch.no_grad():
             for val_mel, val_text in val_dl:
                 val_mel = val_mel.to(device)
-                val_tgt = []
-                for t in val_text:
-                    ids = [ (ord(c)%63)+1 for c in t[:max_text_len] ]
-                    val_tgt.append(torch.tensor(ids, dtype=torch.long))
-                val_tgt_lens = torch.tensor([len(t) for t in val_tgt], dtype=torch.long)
-                val_tgt = torch.cat(val_tgt)
+                val_tgt, val_tgt_lens = encode_text_batch(val_text)
+                val_tgt = val_tgt.to(device)
+                val_tgt_lens = val_tgt_lens.to(device)
                 if use_amp:
                     with autocast():
                         val_x = model(val_mel)
                         val_logit = head(val_x)
                         val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                        val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                        val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
                         val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
                 else:
                     val_x = model(val_mel)
                     val_logit = head(val_x)
                     val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                    val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long)
+                    val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
                     val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
                 
                 # Validate validation loss

@@ -1,7 +1,7 @@
 
 import torch
 from torch import nn
-from omni.utils import RMSNorm
+from omni.utils import RMSNorm, make_positions
 from omni.thinker import Attention, MLP, Block
 from einops import rearrange
 
@@ -54,29 +54,51 @@ class TalkerTiny(nn.Module):
             logits: (base_logits, res_logits) both (B, T, codebook_size)
         """
         B, T, _ = prev_codes.shape
-        x = self.emb(prev_codes[:,:,0]) + self.emb(prev_codes[:,:,1])
-        start = self.start.expand(B, -1, -1)
-        x = torch.cat([start, x], dim=1)  # (B, T+1, d)
+        token_emb = self.emb(prev_codes[:, :, 0]) + self.emb(prev_codes[:, :, 1])
         
-        # Handle KV caching
         use_kv = use_cache and self.use_kv_cache
+        if use_kv and self.kv_cache is None:
+            self.kv_cache = [None] * len(self.blocks)
+        
+        cache_ready = use_kv and self.kv_cache[0] is not None
+        if use_kv and cache_ready and T > 1:
+            # New sequence without reset; start over
+            self.reset_kv_cache()
+            self.kv_cache = [None] * len(self.blocks)
+            cache_ready = False
+        
+        start = self.start.expand(B, -1, -1)
+        if not use_kv or not cache_ready:
+            x = torch.cat([start, token_emb], dim=1)
+            offset = 1
+        else:
+            x = token_emb
+            offset = 0
+        
+        seq_len = x.shape[1]
         
         if use_kv:
-            # Initialize cache if first call
-            if self.kv_cache is None:
-                self.kv_cache = [None] * len(self.blocks)
-            
-            # Process through blocks with caching
-            for i, blk in enumerate(self.blocks):
-                x, self.kv_cache[i] = blk(x, mask=None, pos=None, cache=self.kv_cache[i])
+            if cache_ready:
+                pos = torch.tensor([self.kv_cache[0]['pos']], device=x.device, dtype=torch.long)
+                for i, blk in enumerate(self.blocks):
+                    x, new_cache = blk(x, mask=None, pos=pos, cache=self.kv_cache[i], return_cache=True)
+                    self.kv_cache[i] = new_cache
+            else:
+                pos = make_positions(seq_len, x.device)
+                mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)).unsqueeze(0).unsqueeze(0)
+                for i, blk in enumerate(self.blocks):
+                    x, new_cache = blk(x, mask=mask, pos=pos, cache=None, return_cache=True)
+                    self.kv_cache[i] = new_cache
         else:
-            # Standard forward pass
+            pos = make_positions(seq_len, x.device)
+            mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)).unsqueeze(0).unsqueeze(0)
             for blk in self.blocks:
-                x, _ = blk(x, mask=None, pos=None, cache=None)
+                x, _ = blk(x, mask=mask, pos=pos, cache=None, return_cache=False)
         
         x = self.norm(x)
-        base_logits = self.base_head(x[:,1:,:])
-        res_logits = self.res_head(x[:,1:,:])
+        x = x[:, offset:, :]
+        base_logits = self.base_head(x)
+        res_logits = self.res_head(x)
         
         # Check for numerical stability (NaN/Inf detection)
         if torch.isnan(base_logits).any() or torch.isinf(base_logits).any():

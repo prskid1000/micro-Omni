@@ -363,6 +363,9 @@ def train_audio_enc(cfg, checkpoint_path, new_dataset, args, device):
     opt = torch.optim.AdamW(list(model.parameters()) + list(head.parameters()),
                             lr=cfg["lr"], weight_decay=cfg["wd"])
     loss_fn = nn.CTCLoss(blank=0, zero_infinity=True)
+    head.char_to_idx = char_to_idx
+    head.max_text_len = cfg.get("max_text_len", 64)
+    head.unk_idx = char_to_idx['<UNK>']
     
     return model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, "audio_enc", head, None, None, None
 
@@ -614,6 +617,30 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
     if text_embed_encode:
         text_embed_encode[0].train()
     
+    if model_type == "audio_enc":
+        char_to_idx = getattr(head, "char_to_idx", None)
+        if char_to_idx is None:
+            raise ValueError("Audio encoder head is missing char_to_idx mapping for post-training.")
+        max_text_len = getattr(head, "max_text_len", cfg.get("max_text_len", 64))
+        unk_idx = getattr(head, "unk_idx", char_to_idx.get('<UNK>', len(char_to_idx)))
+
+        def encode_texts(text_batch):
+            encoded = []
+            lengths = []
+            for t in text_batch:
+                ids = [char_to_idx.get(c, unk_idx) for c in t[:max_text_len]]
+                if not ids:
+                    ids = [unk_idx]
+                encoded.append(torch.tensor(ids, dtype=torch.long))
+                lengths.append(len(ids))
+            if encoded:
+                encoded = torch.cat(encoded)
+            else:
+                encoded = torch.empty(0, dtype=torch.long)
+            return encoded, torch.tensor(lengths, dtype=torch.long)
+    else:
+        encode_texts = None
+    
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 1)
     checkpoint_freq = cfg.get("checkpoint_freq", 500)
@@ -636,18 +663,20 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
             if model_type == "thinker":
                 x, y = batch
                 x, y = x.to(device), y.to(device)
-                batch_data = (x, y)
             elif model_type == "audio_enc":
                 mels, texts = batch
                 mels = mels.to(device)
-                batch_data = (mels, texts, head)
+                targets, target_lens = encode_texts(texts)
+                targets = targets.to(device)
+                target_lens = target_lens.to(device)
             elif model_type == "vision":
                 imgs, captions = batch
                 imgs = imgs.to(device)
-                batch_data = (imgs, captions, img_proj, text_proj, text_embed_encode)
             elif model_type == "talker":
                 mels = batch.to(device)
-                batch_data = (mels, rvq)
+                codes = rvq.encode(mels)
+                prev = torch.roll(codes, 1, dims=1)
+                prev[:, 0, :] = 0
             
             # Forward pass
             try:
@@ -657,13 +686,11 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                             logits = model(x)
                             loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
                         elif model_type == "audio_enc":
-                            # CTC loss computation (simplified - would need proper encoding)
                             out = model(mels)
-                            out = head(out)
-                            # Simplified: use dummy targets for now
-                            # In real implementation, need to encode texts properly
-                            loss = torch.tensor(0.0, device=device, requires_grad=True)
-                            # TODO: Implement proper CTC encoding
+                            logits = head(out)
+                            log_prob = logits.log_softmax(-1).transpose(0, 1)
+                            inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
+                            loss = loss_fn(log_prob, targets, inp_lens, target_lens)
                         elif model_type == "vision":
                             cls, _ = model(imgs)
                             img_feat = img_proj(cls.squeeze(1))
@@ -671,18 +698,21 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                             text_feat = text_proj(text_feats)
                             loss = loss_fn(img_feat, text_feat)
                         elif model_type == "talker":
-                            # Simplified TTS training
-                            codes = rvq.encode(mels)
-                            # TODO: Implement proper autoregressive training
-                            loss = torch.tensor(0.0, device=device, requires_grad=True)
+                            base_logits, res_logits = model(prev, use_cache=False)
+                            loss = (
+                                loss_fn(base_logits.reshape(-1, base_logits.size(-1)), codes[:, :, 0].reshape(-1)) +
+                                loss_fn(res_logits.reshape(-1, res_logits.size(-1)), codes[:, :, 1].reshape(-1))
+                            )
                 else:
                     if model_type == "thinker":
                         logits = model(x)
                         loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
                     elif model_type == "audio_enc":
                         out = model(mels)
-                        out = head(out)
-                        loss = torch.tensor(0.0, device=device, requires_grad=True)
+                        logits = head(out)
+                        log_prob = logits.log_softmax(-1).transpose(0, 1)
+                        inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
+                        loss = loss_fn(log_prob, targets, inp_lens, target_lens)
                     elif model_type == "vision":
                         cls, _ = model(imgs)
                         img_feat = img_proj(cls.squeeze(1))
@@ -690,8 +720,11 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                         text_feat = text_proj(text_feats)
                         loss = loss_fn(img_feat, text_feat)
                     elif model_type == "talker":
-                        codes = rvq.encode(mels)
-                        loss = torch.tensor(0.0, device=device, requires_grad=True)
+                        base_logits, res_logits = model(prev, use_cache=False)
+                        loss = (
+                            loss_fn(base_logits.reshape(-1, base_logits.size(-1)), codes[:, :, 0].reshape(-1)) +
+                            loss_fn(res_logits.reshape(-1, res_logits.size(-1)), codes[:, :, 1].reshape(-1))
+                        )
             except RuntimeError as e:
                 error_msg = str(e)
                 if ("NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg) and model_type == "thinker":
@@ -822,10 +855,119 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
             
-            # Validation (simplified - would need proper implementation per model type)
             if step % val_freq == 0 and step > 0:
                 model.eval()
-                # TODO: Implement proper validation for each model type
+                if head:
+                    head.eval()
+                if rvq:
+                    rvq.eval()
+                if img_proj:
+                    img_proj.eval()
+                if text_proj:
+                    text_proj.eval()
+                if text_embed_encode:
+                    text_embed_encode[0].eval()
+                
+                val_loss_sum = 0.0
+                val_batches = 0
+                with torch.no_grad():
+                    for val_batch in val_dl:
+                        if model_type == "thinker":
+                            val_x, val_y = val_batch
+                            val_x, val_y = val_x.to(device), val_y.to(device)
+                            val_logits = model(val_x)
+                            val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+                        elif model_type == "audio_enc":
+                            val_mels, val_texts = val_batch
+                            val_mels = val_mels.to(device)
+                            val_targets, val_target_lens = encode_texts(val_texts)
+                            val_targets = val_targets.to(device)
+                            val_target_lens = val_target_lens.to(device)
+                            val_out = model(val_mels)
+                            val_logits = head(val_out)
+                            val_log_prob = val_logits.log_softmax(-1).transpose(0, 1)
+                            val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
+                            val_loss = loss_fn(val_log_prob, val_targets, val_inp_lens, val_target_lens)
+                        elif model_type == "vision":
+                            val_imgs, val_caps = val_batch
+                            val_imgs = val_imgs.to(device)
+                            val_cls, _ = model(val_imgs)
+                            val_img_feat = img_proj(val_cls.squeeze(1))
+                            val_img_feat = val_img_feat / val_img_feat.norm(dim=-1, keepdim=True)
+                            val_text_feats = torch.stack([text_embed_encode[1](cap) for cap in val_caps]).to(device)
+                            val_text_feat = text_proj(val_text_feats)
+                            val_text_feat = val_text_feat / val_text_feat.norm(dim=-1, keepdim=True)
+                            temperature = cfg.get("temperature", 0.07)
+                            val_logits = torch.matmul(val_img_feat, val_text_feat.t()) / temperature
+                            val_labels = torch.arange(val_logits.size(0), device=device)
+                            val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
+                        elif model_type == "talker":
+                            val_mels = val_batch.to(device)
+                            val_codes = rvq.encode(val_mels)
+                            val_prev = torch.roll(val_codes, 1, dims=1)
+                            val_prev[:, 0, :] = 0
+                            val_base_logits, val_res_logits = model(val_prev, use_cache=False)
+                            val_loss = (
+                                loss_fn(val_base_logits.reshape(-1, val_base_logits.size(-1)), val_codes[:, :, 0].reshape(-1)) +
+                                loss_fn(val_res_logits.reshape(-1, val_res_logits.size(-1)), val_codes[:, :, 1].reshape(-1))
+                            )
+                        else:
+                            val_loss = torch.tensor(0.0, device=device)
+                        
+                        try:
+                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                        except RuntimeError as e:
+                            logger.warning(f"Step {step}: Validation error: {e}")
+                            continue
+                        
+                        val_loss_sum += float(val_loss.detach())
+                        val_batches += 1
+                        if val_batches >= 20:
+                            break
+                
+                avg_val_loss = val_loss_sum / max(val_batches, 1)
+                logger.val_step(step, avg_val_loss, epoch)
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    best_path = os.path.join(cfg["save_dir"], f"{model_type}_post_best.pt")
+                    best_checkpoint = {
+                        "model": model.state_dict(),
+                        "optimizer": opt.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "step": step,
+                        "best_val_loss": best_val_loss,
+                        "source_checkpoint": args.checkpoint,
+                        "post_training": True
+                    }
+                    if model_type == "thinker":
+                        best_checkpoint["model"] = model.state_dict()
+                    elif model_type == "audio_enc":
+                        best_checkpoint["enc"] = model.state_dict()
+                        best_checkpoint["head"] = head.state_dict()
+                    elif model_type == "vision":
+                        best_checkpoint["vit"] = model.state_dict()
+                        best_checkpoint["img_proj"] = img_proj.state_dict()
+                        best_checkpoint["text_proj"] = text_proj.state_dict()
+                        best_checkpoint["text_embed"] = text_embed_encode[0].state_dict()
+                    elif model_type == "talker":
+                        best_checkpoint["talker"] = model.state_dict()
+                        best_checkpoint["rvq"] = rvq.state_dict()
+                    if scaler is not None:
+                        best_checkpoint["scaler"] = scaler.state_dict()
+                    torch.save(best_checkpoint, best_path)
+                    logger.checkpoint(step, best_path, is_best=True)
+                
+                model.train()
+                if head:
+                    head.train()
+                if rvq:
+                    rvq.train()
+                if img_proj:
+                    img_proj.train()
+                if text_proj:
+                    text_proj.train()
+                if text_embed_encode:
+                    text_embed_encode[0].train()
                 model.train()
             
             # Stop at max_steps

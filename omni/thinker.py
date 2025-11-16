@@ -98,7 +98,7 @@ class Attention(nn.Module):
         self.o = nn.Linear(d, d, bias=False)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, x, mask=None, pos=None, cache=None):
+    def forward(self, x, mask=None, pos=None, cache=None, need_cache=False):
         """
         Forward pass with optional KV caching.
         
@@ -114,8 +114,7 @@ class Attention(nn.Module):
             cache: Updated cache dict with new K/V appended
         """
         B, T, D = x.shape
-        # is_incremental means we're using caching (cache may be None on first call)
-        is_incremental = cache is not None or (cache is None and T == 1)  # Single token suggests incremental
+        store_cache = need_cache or cache is not None
         
         if self.use_gqa:
             # GQA: separate Q, K, V projections
@@ -125,39 +124,37 @@ class Attention(nn.Module):
             
             # Reshape
             q = rearrange(q, "b t (h d) -> b h t d", h=self.h)
-            k = rearrange(k, "b t (g d) -> b g t d", g=self.kv_groups)
-            v = rearrange(v, "b t (g d) -> b g t d", g=self.kv_groups)
+            k_new = rearrange(k, "b t (g d) -> b g t d", g=self.kv_groups)
+            v_new = rearrange(v, "b t (g d) -> b g t d", g=self.kv_groups)
             
             # Apply RoPE
             if pos is None:
-                if is_incremental:
-                    # For incremental, pos is just the current position
-                    pos = torch.tensor([cache.get('pos', 0)], device=x.device, dtype=torch.long)
-                else:
-                    pos = make_positions(T, x.device)
+                pos = make_positions(T, x.device)
             
-            q, _ = self.rope_q(q, q, pos if is_incremental else pos)
-            k, _ = self.rope_k(k, k, pos if is_incremental else pos)
+            q, _ = self.rope_q(q, q, pos)
+            k_new, _ = self.rope_k(k_new, k_new, pos)
             
-            # Handle KV cache
-            if is_incremental and cache is not None and 'k' in cache and 'v' in cache:
-                # Concatenate with cached K/V
-                k = torch.cat([cache['k'], k], dim=2)  # (B, g, T_cached+T, dk)
-                v = torch.cat([cache['v'], v], dim=2)  # (B, g, T_cached+T, dk)
+            if cache is not None:
+                k_combined = torch.cat([cache['k'], k_new], dim=2)  # (B, g, T_total, dk)
+                v_combined = torch.cat([cache['v'], v_new], dim=2)  # (B, g, T_total, dk)
+            else:
+                k_combined = k_new
+                v_combined = v_new
             
             # Repeat k and v to match query heads (each kv head serves multiple q heads)
             repeat_factor = self.h // self.kv_groups
-            k = k.repeat_interleave(repeat_factor, dim=1)  # (B, h, T_total, dk)
-            v = v.repeat_interleave(repeat_factor, dim=1)  # (B, h, T_total, dk)
+            k = k_combined.repeat_interleave(repeat_factor, dim=1)  # (B, h, T_total, dk)
+            v = v_combined.repeat_interleave(repeat_factor, dim=1)  # (B, h, T_total, dk)
             
-            # Update cache (always create cache if in incremental mode)
-            if is_incremental:
-                # Store K/V for next iteration (before repeating)
-                cache_k = k[:, ::repeat_factor, :, :]  # (B, g, T_total, dk) - get one per group
-                cache_v = v[:, ::repeat_factor, :, :]  # (B, g, T_total, dk)
-                cache = {'k': cache_k, 'v': cache_v, 'pos': pos[-1].item() + 1 if pos.numel() > 0 else 0}
-            else:
-                cache = None
+            next_cache = None
+            if store_cache:
+                if pos is not None and pos.numel() > 0:
+                    next_pos = pos[-1].item() + 1
+                elif cache is not None and 'pos' in cache:
+                    next_pos = cache['pos'] + T
+                else:
+                    next_pos = k_combined.shape[2]
+                next_cache = {'k': k_combined, 'v': v_combined, 'pos': next_pos}
         else:
             # Standard MHA
             qkv = self.qkv(x).chunk(3, dim=-1)  # 3 * (B,T,D)
@@ -165,24 +162,23 @@ class Attention(nn.Module):
             
             # Apply RoPE
             if pos is None:
-                if is_incremental:
-                    pos = torch.tensor([cache.get('pos', 0)], device=x.device, dtype=torch.long)
-                else:
-                    pos = make_positions(T, x.device)
+                pos = make_positions(T, x.device)
             
-            q, k = self.rope(q, k, pos if is_incremental else pos)
+            q, k = self.rope(q, k, pos)
             
-            # Handle KV cache
-            if is_incremental and cache is not None and 'k' in cache and 'v' in cache:
-                # Concatenate with cached K/V
+            if cache is not None and 'k' in cache and 'v' in cache:
                 k = torch.cat([cache['k'], k], dim=2)  # (B, h, T_cached+T, dk)
                 v = torch.cat([cache['v'], v], dim=2)  # (B, h, T_cached+T, dk)
             
-            # Update cache (always create cache if in incremental mode)
-            if is_incremental:
-                cache = {'k': k, 'v': v, 'pos': pos[-1].item() + 1 if pos.numel() > 0 else 0}
-            else:
-                cache = None
+            next_cache = None
+            if store_cache:
+                if pos is not None and pos.numel() > 0:
+                    next_pos = pos[-1].item() + 1
+                elif cache is not None and 'pos' in cache:
+                    next_pos = cache['pos'] + T
+                else:
+                    next_pos = k.shape[2]
+                next_cache = {'k': k, 'v': v, 'pos': next_pos}
         
         # Attention computation
         T_total = k.shape[2]
@@ -270,7 +266,7 @@ class Attention(nn.Module):
             raise RuntimeError("NaN detected in attention output")
         y = rearrange(y, "b h t d -> b t (h d)")
         
-        return self.o(y), cache
+        return self.o(y), next_cache
 
 class MoE(nn.Module):
     """Mixture of Experts layer"""
@@ -332,7 +328,7 @@ class Block(nn.Module):
             self.mlp = MLP(d, ff, use_swiglu=use_swiglu)
         self.drop = nn.Dropout(dropout)
     
-    def forward(self, x, mask=None, pos=None, cache=None):
+    def forward(self, x, mask=None, pos=None, cache=None, return_cache=False):
         """
         Forward pass with optional KV caching.
         
@@ -346,7 +342,7 @@ class Block(nn.Module):
             x: (B, T, D) output
             cache: Updated cache for this layer
         """
-        attn_out, cache = self.attn(self.norm1(x), mask=mask, pos=pos, cache=cache)
+        attn_out, cache = self.attn(self.norm1(x), mask=mask, pos=pos, cache=cache, need_cache=return_cache)
         x = x + self.drop(attn_out)
         if self.use_moe:
             x = x + self.drop(self.moe(self.norm2(x)))
@@ -455,39 +451,46 @@ class ThinkerLM(nn.Module):
             inf_count = torch.isinf(x).sum().item()
             raise RuntimeError(f"Numerical instability detected after embedding: NaN={nan_count}, Inf={inf_count}")
         
-        # Handle KV caching
-        use_cache = self.use_kv_cache and (self.kv_cache is not None or (idx is not None and T == 1))
+        using_cache = self.use_kv_cache
+        if using_cache and self.kv_cache is None:
+            self.kv_cache = [None] * len(self.blocks)
         
-        if use_cache:
-            # Initialize cache if first call
-            if self.kv_cache is None:
-                self.kv_cache = [None] * len(self.blocks)
-                # First call with full prompt - create causal mask
-                mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+        cache_ready = using_cache and self.kv_cache[0] is not None
+        if using_cache and cache_ready and T > 1:
+            # New sequence provided without explicit reset
+            self.reset_kv_cache()
+            self.kv_cache = [None] * len(self.blocks)
+            cache_ready = False
+        
+        if using_cache:
+            if cache_ready:
+                # Incremental step
+                if pos is None:
+                    pos = torch.tensor([self.kv_cache[0]['pos']], device=x.device, dtype=torch.long)
+                mask = None
+                for i, blk in enumerate(self.blocks):
+                    x, new_cache = blk(x, mask=mask, pos=pos, cache=self.kv_cache[i], return_cache=True)
+                    self.kv_cache[i] = new_cache
+                    if torch.isnan(x).any() or torch.isinf(x).any():
+                        nan_count = torch.isnan(x).sum().item()
+                        inf_count = torch.isinf(x).sum().item()
+                        raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
+            else:
+                # Prefill step: build caches from full sequence
+                if pos is None:
+                    pos = make_positions(T, x.device)
+                mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)
                 if attn_mask is not None:
                     if len(attn_mask.shape) == 3:
-                        attn_mask = attn_mask.unsqueeze(1)  # (B, 1, T, T)
+                        attn_mask = attn_mask.unsqueeze(1)
                     mask = mask * attn_mask
-            else:
-                # Incremental call - don't pass mask, let Attention create it
-                mask = None
-            
-            if pos is None:
-                if self.kv_cache[0] is not None and 'pos' in self.kv_cache[0]:
-                    # Incremental: use cached position
-                    pos = torch.tensor([self.kv_cache[0]['pos']], device=x.device, dtype=torch.long)
-                else:
-                    # First call: generate positions
-                    pos = make_positions(T, x.device)
-            
-            # Process through blocks with caching
-            for i, blk in enumerate(self.blocks):
-                x, self.kv_cache[i] = blk(x, mask=mask, pos=pos, cache=self.kv_cache[i])
-                # Check for NaN after each block
-                if torch.isnan(x).any() or torch.isinf(x).any():
-                    nan_count = torch.isnan(x).sum().item()
-                    inf_count = torch.isinf(x).sum().item()
-                    raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
+                for i, blk in enumerate(self.blocks):
+                    x, new_cache = blk(x, mask=mask, pos=pos, cache=None, return_cache=True)
+                    self.kv_cache[i] = new_cache
+                    if torch.isnan(x).any() or torch.isinf(x).any():
+                        nan_count = torch.isnan(x).sum().item()
+                        inf_count = torch.isinf(x).sum().item()
+                        raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
         else:
             # No caching - standard forward
             if pos is None:
@@ -502,7 +505,7 @@ class ThinkerLM(nn.Module):
             
             # Standard forward pass
             for i, blk in enumerate(self.blocks):
-                x, _ = blk(x, mask=mask, pos=pos, cache=None)
+                x, _ = blk(x, mask=mask, pos=pos, cache=None, return_cache=False)
                 # Check for NaN after each block
                 if torch.isnan(x).any() or torch.isinf(x).any():
                     nan_count = torch.isnan(x).sum().item()
