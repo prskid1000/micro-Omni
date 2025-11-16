@@ -1,7 +1,7 @@
 --index-url https://download.pytorch.org/whl/cu129
 
 # Core PyTorch (2.9.0+ required for Triton 3.5.0 compatibility)
-torch==2.9.0+cu129
+torch
 torchaudio
 torchvision
 numpy
