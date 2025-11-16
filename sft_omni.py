@@ -444,7 +444,8 @@ def main(cfg):
                     # Calculate loss (mask out padding)
                     loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
             except RuntimeError as e:
-                if "NaN detected in attention probabilities after softmax" in str(e):
+                error_msg = str(e)
+                if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
                     logger.error(f"Step {step}: {e}")
                     logger.error("Reloading from last checkpoint...")
                     # Reload from last checkpoint
@@ -590,7 +591,8 @@ def main(cfg):
                             val_loss_sum += float(val_loss.detach())
                             val_count += 1
                         except RuntimeError as e:
-                            if "NaN detected in attention probabilities after softmax" in str(e):
+                            error_msg = str(e)
+                            if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
                                 logger.error(f"Step {step}: {e}")
                                 logger.error("Reloading from last checkpoint...")
                                 # Reload from last checkpoint
@@ -718,7 +720,8 @@ def main(cfg):
                     val_loss_sum += float(val_loss.detach())
                     val_count += 1
                 except RuntimeError as e:
-                    if "NaN detected in attention probabilities after softmax" in str(e):
+                    error_msg = str(e)
+                    if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
                         logger.error(f"Epoch {epoch}: {e}")
                         logger.error("Reloading from last checkpoint...")
                         # Reload from last checkpoint

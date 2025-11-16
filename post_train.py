@@ -693,7 +693,8 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                         codes = rvq.encode(mels)
                         loss = torch.tensor(0.0, device=device, requires_grad=True)
             except RuntimeError as e:
-                if "NaN detected in attention probabilities after softmax" in str(e) and model_type == "thinker":
+                error_msg = str(e)
+                if ("NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg) and model_type == "thinker":
                     logger.error(f"Step {step}: {e}")
                     logger.error("Reloading from last checkpoint...")
                     # Reload from last checkpoint
