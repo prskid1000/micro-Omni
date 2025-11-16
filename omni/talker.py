@@ -66,12 +66,13 @@ class TalkerTiny(nn.Module):
         
         try:
             # Compile individual blocks
+            # Using 'default' mode for better stability across platforms
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, mode='reduce-overhead')
+                self.blocks[i] = torch.compile(block, mode='default')
             
             # Compile heads
-            self.base_head = torch.compile(self.base_head, mode='reduce-overhead')
-            self.res_head = torch.compile(self.res_head, mode='reduce-overhead')
+            self.base_head = torch.compile(self.base_head, mode='default')
+            self.res_head = torch.compile(self.res_head, mode='default')
             
             self._compiled = True
             print(f"✓ TalkerTiny compiled successfully with torch.compile()")

@@ -64,11 +64,12 @@ class ViTTiny(nn.Module):
         
         try:
             # Compile blocks
+            # Using 'default' mode for better stability across platforms
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, mode='reduce-overhead')
+                self.blocks[i] = torch.compile(block, mode='default')
             
             # Compile projection
-            self.proj = torch.compile(self.proj, mode='reduce-overhead')
+            self.proj = torch.compile(self.proj, mode='default')
             
             self._compiled = True
             print(f"✓ ViTTiny compiled successfully with torch.compile()")

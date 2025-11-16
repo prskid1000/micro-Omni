@@ -6,136 +6,82 @@
 
 ## 🎯 Purpose
 
-Fine-tune all components together for multimodal understanding.
+**Final Stage:** Fine-tune all components together on multimodal data, teaching cross-modal understanding and enabling the system to answer questions about images, transcribe audio, and handle any modality combination.
 
-## 📝 Task
+---
 
-**Objective**: Joint training on mixed multimodal batches
+## 📝 The Task
 
-```
-Batch 1: Image + Text → Text response
-Batch 2: Audio + Text → Text response
-Batch 3: Text only → Text response
-Batch 4: Image + Audio + Text → Text response
-```
+Train on mixed batches with different modality combinations:
+- **Text-only:** "What is AI?" → "AI is artificial intelligence..."
+- **Image+Text:** [cat image] + "What animal?" → "This is a cat"
+- **Audio+Text:** [audio of "hello"] + "Transcribe" → "hello"
+- **All modalities:** [image] + [audio] + "Describe" → Multimodal response
 
-## 💻 Command
+---
 
-```bash
-python sft_omni.py --config configs/omni_sft_tiny.json
-```
+## 💻 Training Details
 
-## 📊 Configuration
+### Configuration
 
 ```json
 {
+  // Load pretrained checkpoints
   "thinker_ckpt": "checkpoints/thinker_tiny/thinker_best.pt",
   "audio_ckpt": "checkpoints/audio_enc_tiny/audio_enc.pt",
   "vision_ckpt": "checkpoints/vision_tiny/vision.pt",
   
-  "freeze_encoders": true,
+  // Training strategy
+  "freeze_encoders": true,  // Only fine-tune Thinker
   "batch_size": 8,
   "num_epochs": 5,
   "learning_rate": 1e-4,
-  "warmup_steps": 500,
   
+  // Data mix (balance modalities)
   "data_mix": {
-    "text_only": 0.4,
-    "image_text": 0.3,
-    "audio_text": 0.3
+    "text_only": 0.4,    // 40% text
+    "image_text": 0.3,   // 30% vision
+    "audio_text": 0.3    // 30% audio
   }
 }
 ```
 
-## 📁 Data Format
+### Expected Progress
 
 ```
-data/multimodal/
-├── text/
-│   └── conversations.json
-├── images/
-│   └── image_qa.json
-└── audio/
-    └── audio_qa.json
+Epoch 1/5: loss=2.456, text_acc=45.2%
+  → Image QA: 35.8%
+  → Audio WER: 25.3%
+  (Learning to integrate modalities)
+
+Epoch 5/5: loss=1.123, accuracy=75.6%
+  → Image QA: 68.9%
+  → Audio WER: 12.7%
+  (Good multimodal understanding!)
 ```
 
-## 📈 Expected Progress
+### Running
 
-```
-Epoch 1/5:
-Step 100: loss=2.456 text_acc=45.2%
-→ Image QA acc: 35.8%
-→ Audio transcription WER: 25.3%
-
-Epoch 3/5:
-Step 450: loss=1.678 text_acc=62.8%
-→ Image QA acc: 58.3%
-→ Audio transcription WER: 18.5%
-
-Epoch 5/5:
-Final: loss=1.123 accuracy=75.6%
-→ Image QA acc: 68.9%
-→ Audio transcription WER: 12.7%
-```
-
-## 📊 Key Metrics
-
-**Text Loss**: Next-token prediction
-**Image QA Accuracy**: Visual understanding
-**Audio WER**: Speech recognition quality
-
-## 💡 Training Strategy
-
-1. **Freeze encoders** (optional)
-   - Faster training
-   - Focus on projectors + Thinker
-
-2. **Unfreeze all** (optional)
-   - Better quality
-   - Slower training
-
-3. **Mixed batches**
-   - Diverse training signal
-   - Better generalization
-
-## 🎯 What Gets Trained?
-
-```
-✅ Thinker (fine-tuned)
-✅ Vision Projector (trained from scratch)
-✅ Audio Projector (trained from scratch)
-❌ Vision Encoder (frozen, optional)
-❌ Audio Encoder (frozen, optional)
-```
-
-## 💡 Tips
-
-1. **Start with frozen encoders** - faster
-2. **Lower learning rate** - fine-tuning, not pretraining
-3. **Monitor all modalities** - balanced performance
-4. **Curriculum learning** - easier → harder data
-
-## 🎓 Output
-
-```
-checkpoints/omni_sft_tiny/
-├── omni.pt               # Final multimodal model
-│   ├── thinker           # Fine-tuned Thinker
-│   ├── proj_v            # Vision projector
-│   └── proj_a            # Audio projector
-└── omni_step_500.pt      # Checkpoints
-```
-
-## 🎉 Next Steps
-
-After SFT completes, you have a fully trained multimodal model!
-
-**Ready for inference:**
 ```bash
-python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny
+python sft_omni.py --config configs/omni_sft_tiny.json
+# Time: ~8 hours
+# Output: checkpoints/omni_sft_tiny/omni_final.pt
 ```
+
+---
+
+## 💡 Key Points
+
+✅ **Final integration** of all components  
+✅ **Freeze encoders** (already trained)  
+✅ **Mixed batches** teach cross-modal understanding  
+✅ **5 epochs** sufficient for fine-tuning  
+✅ **Output** is the complete μOmni system!
 
 ---
 
 [Continue to Chapter 32: Inference Pipeline →](32-inference-pipeline.md)
 
+**Chapter Progress:** Training Pipeline ●●●●●● (6/6 complete!)
+
+---

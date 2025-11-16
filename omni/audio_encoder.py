@@ -137,12 +137,13 @@ class AudioEncoderTiny(nn.Module):
         
         try:
             # Compile blocks
+            # Using 'default' mode for better stability across platforms
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, mode='reduce-overhead')
+                self.blocks[i] = torch.compile(block, mode='default')
             
             # Compile conv and projection
-            self.down = torch.compile(self.down, mode='reduce-overhead')
-            self.proj = torch.compile(self.proj, mode='reduce-overhead')
+            self.down = torch.compile(self.down, mode='default')
+            self.proj = torch.compile(self.proj, mode='default')
             
             self._compiled = True
             print(f"✓ AudioEncoderTiny compiled successfully with torch.compile()")

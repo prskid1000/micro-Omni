@@ -1,66 +1,156 @@
-# Chapter 44: Key Research Papers
+# Chapter 44: Research Papers & References
 
-[Back to Index](00-INDEX.md)
+[← Previous: Mathematical Foundations](43-mathematical-foundations.md) | [Back to Index](00-INDEX.md) | [Next: Future Extensions →](45-future-extensions.md)
 
 ---
 
-## 📚 Foundational Papers
+## 📚 Key Research Papers
+
+Foundational papers that influenced μOmni's design.
+
+---
+
+## 🎯 Core Architecture
 
 ### Transformers
-**"Attention Is All You Need"** (Vaswani et al., 2017)
+
+**"Attention Is All You Need" (2017)**  
+*Vaswani et al.*  
 - Introduced transformer architecture
-- Multi-head self-attention
-- Position encodings
-- [arxiv.org/abs/1706.03762](https://arxiv.org/abs/1706.03762)
+- Self-attention mechanism
+- Multi-head attention
+- Position-wise feedforward
 
-### GPT (Decoder-Only)
-**"Improving Language Understanding by Generative Pre-Training"** (Radford et al., 2018)
+**"Language Models are Few-Shot Learners" (GPT-3, 2020)**  
+*Brown et al., OpenAI*  
 - Decoder-only transformers
-- Autoregressive generation
-- Pre-training + fine-tuning
-
-### Vision Transformer
-**"An Image is Worth 16x16 Words"** (Dosovitskiy et al., 2020)
-- ViT architecture
-- Patch-based image processing
-- [arxiv.org/abs/2010.11929](https://arxiv.org/abs/2010.11929)
-
-## 🎯 Relevant to μOmni
-
-### RoPE
-**"RoFormer: Enhanced Transformer with Rotary Position Embedding"** (Su et al., 2021)
-- Rotary position embeddings
-- Better extrapolation
-- [arxiv.org/abs/2104.09864](https://arxiv.org/abs/2104.09864)
-
-### GQA
-**"GQA: Training Generalized Multi-Query Transformer Models"** (Ainslie et al., 2023)
-- Grouped query attention
-- Efficient inference
-- [arxiv.org/abs/2305.13245](https://arxiv.org/abs/2305.13245)
-
-### Multimodal
-**"Flamingo: a Visual Language Model"** (Alayrac et al., 2022)
-- Multimodal fusion strategies
-- Vision-language alignment
-
-**"Qwen-Audio"** (Chu et al., 2023)
-- Audio encoder design
-- Speech understanding
-
-## 💡 Reading Recommendations
-
-**Start with:**
-1. Attention Is All You Need (foundational)
-2. GPT paper (decoder-only)
-3. Vision Transformer (ViT)
-
-**Then explore:**
-- RoPE (position encoding)
-- GQA (efficiency)
-- Multimodal papers (fusion)
+- Scaling laws
+- In-context learning
 
 ---
 
-[Back to Index](00-INDEX.md)
+## 🔄 Position Encodings
 
+**"RoFormer: Enhanced Transformer with Rotary Position Embedding" (2021)**  
+*Su et al.*  
+- RoPE (Rotary Position Embedding)
+- Relative position encoding
+- Used in μOmni's Thinker
+
+---
+
+## 🎵 Audio & Multimodal
+
+**"Qwen2-Audio Technical Report" (2024)**  
+*Alibaba*  
+- Audio encoder architecture (AuT-Tiny inspiration)
+- CTC loss for ASR
+- Multimodal fusion strategies
+
+**"Qwen-Omni: All-in-One Multimodal Model" (2024)**  
+*Alibaba*  
+- **Primary inspiration for μOmni**
+- Thinker-Talker architecture
+- RVQ codec for speech
+- End-to-end multimodal training
+
+---
+
+## 👁️ Vision
+
+**"An Image is Worth 16x16 Words" (ViT, 2021)**  
+*Dosovitskiy et al., Google*  
+- Vision Transformer (ViT)
+- Patch-based image processing
+- CLS token for global representation
+- Used in μOmni's Vision Encoder
+
+---
+
+## 🗣️ Speech Generation
+
+**"Neural Discrete Representation Learning" (VQ-VAE, 2017)**  
+*van den Oord et al., DeepMind*  
+- Vector quantization
+- Discrete latent representations
+- Foundation for RVQ
+
+**"SoundStream: An End-to-End Neural Audio Codec" (2021)**  
+*Zeghidour et al., Google*  
+- Residual Vector Quantization (RVQ)
+- Multiple codebooks
+- High-quality audio compression
+
+---
+
+## ⚡ Optimizations
+
+**"FlashAttention: Fast and Memory-Efficient Exact Attention" (2022)**  
+*Dao et al., Stanford*  
+- 2-4x speedup for attention
+- Memory-efficient implementation
+- Used in μOmni
+
+**"GQA: Training Generalized Multi-Query Transformer Models" (2023)**  
+*Ainslie et al., Google*  
+- Grouped Query Attention
+- Reduces KV cache memory
+- Faster inference
+
+---
+
+## 📖 Related Systems
+
+**"CLIP: Learning Transferable Visual Models" (2021)**  
+*Radford et al., OpenAI*  
+- Vision-language pretraining
+- Contrastive learning
+- Multimodal alignment
+
+**"Whisper: Robust Speech Recognition" (2022)**  
+*Radford et al., OpenAI*  
+- Large-scale ASR
+- Multilingual support
+- Architecture inspiration for audio encoder
+
+---
+
+## 🔗 Useful Resources
+
+### Papers
+
+- **arXiv.org:** Latest ML research
+- **Papers with Code:** Implementations + benchmarks
+- **Hugging Face:** Pretrained models
+
+### Courses
+
+- **Stanford CS224N:** NLP with Deep Learning
+- **Fast.ai:** Practical Deep Learning
+- **DeepLearning.AI:** Specializations
+
+### Blogs
+
+- **Lil'Log (Lilian Weng):** In-depth explanations
+- **Jay Alammar:** Visual guides to transformers
+- **Distill.pub:** Interactive ML explanations
+
+---
+
+## 💡 How μOmni Builds On This Research
+
+**Qwen-Omni** → Thinker-Talker architecture  
+**ViT** → Patch-based vision encoding  
+**RoPE** → Position encoding in Thinker  
+**RVQ (SoundStream)** → Speech codec  
+**CTC** → ASR training  
+**Flash Attention** → Efficient attention  
+**GQA** → Faster inference
+
+μOmni is a **pedagogical implementation** combining these advances!
+
+---
+
+[Continue to Chapter 45: Future Extensions →](45-future-extensions.md)
+
+---

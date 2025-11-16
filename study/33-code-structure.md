@@ -1,6 +1,6 @@
 # Chapter 33: Codebase Structure Guide
 
-[Back to Index](00-INDEX.md) | [Next: Configuration Files →](34-configuration-files.md)
+[← Previous: Inference Pipeline](32-inference-pipeline.md) | [Back to Index](00-INDEX.md) | [Next: Configuration Files →](34-configuration-files.md)
 
 ---
 

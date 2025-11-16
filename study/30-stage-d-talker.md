@@ -4,95 +4,99 @@
 
 ---
 
-## 🎯 Purpose
+## 🎯 Learning Objectives
 
-Train speech code generator (Talker) and RVQ codec jointly.
+- What Stage D trains (two-part training)
+- RVQ Codec training (part 1)
+- Talker training (part 2)
+- Configuration and metrics
 
-## 📝 Task
+---
 
-**Objective**: Predict RVQ codes autoregressively for speech synthesis
+## 💡 Stage D: Teaching Speech Generation
+
+**Two-Part Training:**
+
+1. **Part 1: RVQ Codec** - Learn to discretize mel spectrograms into codes
+2. **Part 2: Talker** - Learn to predict those codes autoregressively
+
+**Purpose:** Enable text-to-speech generation
+
+---
+
+## 📝 Training Details
+
+### Part 1: RVQ Codec
+
+**Task:** Mel frame → Discrete codes [base, residual]  
+**Loss:** MSE (reconstruction error)  
+**Target:** Low reconstruction error (<0.05)
 
 ```
-Input:  Previous codes [[42, 87], [103, 12], ...]
-Output: Next codes [67, 91]
+Input: Mel frame (128,)
+Output: Codes [42, 87]
+Reconstructed: Mel frame (128,)
+Loss: MSE(reconstructed, original)
 ```
 
-## 💻 Command
+### Part 2: Talker  
 
-```bash
-python train_talker.py --config configs/talker_tiny.json
+**Task:** Predict next speech codes given previous codes  
+**Loss:** Cross-entropy (both base and residual heads)  
+**Target:** Perplexity <15, intelligible speech
+
+```
+Input: [[0,0], [42,87], [56,91]]
+Predict: [67, 103] (next frame)
 ```
 
-## 📊 Configuration
+### Configuration
 
 ```json
 {
-  "d_model": 192,
-  "n_layers": 4,
-  "n_heads": 3,
-  "d_ff": 768,
-  "codebooks": 2,
-  "codebook_size": 128,
-  "dropout": 0.1,
+  "d_model": 192, "n_layers": 4, "n_heads": 3,
+  "codebooks": 2, "codebook_size": 128,
   
   "data_path": "data/audio/tts/",
-  "batch_size": 16,
-  "num_epochs": 25,
-  "learning_rate": 3e-4,
-  
-  "save_every": 500
+  "batch_size": 16, "num_epochs": 25,
+  "learning_rate": 3e-4
 }
 ```
 
-## 📁 Data Format
-
-```
-data/audio/tts/
-├── audio1.wav
-├── audio2.wav
-└── audio3.wav
-
-(No transcriptions needed - learns from audio only)
-```
+---
 
 ## 📈 Expected Progress
 
 ```
-Epoch 1/25:
-Step 100: base_loss=3.456 res_loss=3.234 recon=0.087
-Step 500: base_loss=2.123 res_loss=2.087 recon=0.045
+RVQ Codec:
+Epoch 1: recon_error=0.35 (poor)
+Epoch 10: recon_error=0.08 (decent)
+Epoch 15: recon_error=0.03 (good!)
 
-Epoch 13/25:
-base_loss=1.567 res_loss=1.489 recon=0.023
-
-Epoch 25/25:
-Final: base_loss=1.234 res_loss=1.189 recon=0.012
+Talker:
+Epoch 1: loss=6.8, ppl=900 (random)
+Epoch 10: loss=3.2, ppl=24 (learning patterns)
+Epoch 25: loss=2.1, ppl=8 (good generation!)
 ```
 
-## 📊 Key Metrics
-
-**base_loss**: Base codebook prediction
-**res_loss**: Residual codebook prediction
-**recon**: Mel reconstruction MSE
-- All lower is better
-- Good recon: <0.02
-
-## 💡 Tips
-
-1. **Joint training** - RVQ and Talker train together
-2. **Reconstruction quality** - listen to samples
-3. **Codebook usage** - ensure all codes used
-4. **Frame rate** - 12.5Hz matches encoder
+---
 
 ## 🎓 Output
 
 ```
+checkpoints/rvq_codec/
+├── rvq_best.pt          # RVQ Codec
+
 checkpoints/talker_tiny/
-├── talker.pt             # Contains both Talker & RVQ
-└── talker_step_500.pt    # Checkpoints
+├── talker_best.pt       # Talker model
 ```
+
+Enables text-to-speech in final system!
 
 ---
 
 [Continue to Chapter 31: Stage E - Multimodal SFT →](31-stage-e-sft.md)
 
+**Chapter Progress:** Training Pipeline ●●●●●○ (5/6 complete)
+
+---

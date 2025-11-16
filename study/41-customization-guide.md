@@ -1,108 +1,131 @@
 # Chapter 41: Customization Guide
 
-[Back to Index](00-INDEX.md)
+[← Previous: Inference Examples](40-inference-examples.md) | [Back to Index](00-INDEX.md) | [Next: Performance Tuning →](42-performance-tuning.md)
 
 ---
 
-## 🎯 Common Customizations
+## 🎨 Customizing μOmni
 
-### 1. Modify Model Size
+How to adapt μOmni for your specific needs.
 
-**Increase capacity**:
+---
+
+## 🔧 Common Customizations
+
+### 1. Change Model Size
+
+**Make it Larger (Better Quality):**
 ```json
-// configs/thinker_tiny.json
+// configs/thinker_large.json
 {
-  "n_layers": 6,      // 4 → 6
-  "d_model": 384,     // 256 → 384
-  "n_heads": 6,       // 4 → 6
-  "d_ff": 1536        // 1024 → 1536
+  "d_model": 512,      // Was 256
+  "n_layers": 8,       // Was 4
+  "n_heads": 8,        // Was 4
+  "d_ff": 2048         // Was 1024
 }
+// Parameters: ~60M (was 15M)
+// GPU: Need 24GB+ VRAM
 ```
 
-**Decrease for faster training**:
+**Make it Smaller (Faster):**
 ```json
+// configs/thinker_micro.json
 {
-  "n_layers": 2,      // 4 → 2
-  "d_model": 128,     // 256 → 128
-  "n_heads": 2,       // 4 → 2
-  "d_ff": 512         // 1024 → 512
+  "d_model": 128,      // Was 256
+  "n_layers": 2,       // Was 4
+  "n_heads": 2,        // Was 4
+  "d_ff": 512          // Was 1024
 }
+// Parameters: ~4M (was 15M)
+// GPU: Works on 6GB
 ```
 
-### 2. Change Vocabulary Size
-
-```bash
-# Train new tokenizer
-python -c "
-import sentencepiece as spm
-spm.SentencePieceTrainer.train(
-    input='your_corpus.txt',
-    model_prefix='tokenizer',
-    vocab_size=10000,  # Increase from 5000
-    model_type='bpe'
-)
-"
-```
-
-### 3. Add New Modality
+### 2. Add New Modality
 
 ```python
-# Example: Add depth sensor data
-class DepthEncoder(nn.Module):
+# Example: Add video support
+class VideoEncoder(nn.Module):
     def __init__(self):
-        # ... define architecture
+        # Extract frames → Process with ViT
+        # Output: (num_frames, 256) embeddings
         
-    def forward(self, depth_map):
-        # depth_map: (B, H, W)
-        features = self.process(depth_map)
-        return features  # (B, T, d)
-
-# Add projector
-depth_projector = nn.Linear(depth_dim, thinker_d_model)
-
-# Use in inference
-depth_emb = depth_projector(depth_encoder(depth_input))
-combined = torch.cat([img_emb, depth_emb, text_emb], dim=1)
+# In inference:
+video_emb = video_encoder(video_path)  # (T_v, 256)
+text_emb = tokenizer(text)             # (T_t, 256)
+combined = torch.cat([video_emb, text_emb], dim=0)
+response = thinker(combined)
 ```
 
-### 4. Custom Training Data
+### 3. Fine-tune for Specific Task
 
 ```python
-# data/custom/dataset.py
-class CustomDataset(torch.utils.data.Dataset):
-    def __init__(self, data_path):
-        self.data = self.load_data(data_path)
-    
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        return {
-            'image': process_image(item['image_path']),
-            'audio': process_audio(item['audio_path']),
-            'text': item['text'],
-            'label': item['label']
-        }
-```
+# Fine-tune on domain-specific data
+# Example: Medical image understanding
 
-### 5. Fine-tune on Domain
+# Prepare data
+data = [
+    {"image": "xray1.jpg", "question": "What do you see?", "answer": "..."},
+    # ... more medical examples
+]
 
-```bash
-# Domain-specific fine-tuning
+# Fine-tune (Stage E style)
 python sft_omni.py \
-  --config configs/omni_sft_tiny.json \
-  --data_path data/medical/  # Your domain
-  --num_epochs 10 \
-  --learning_rate 1e-5  # Lower LR for fine-tuning
+  --config configs/medical_sft.json \
+  --data data/medical/ \
+  --base_model checkpoints/omni_sft_tiny/omni_final.pt
 ```
 
-## 💡 Key Takeaways
+### 4. Change Vocabulary Size
 
-✅ **Config files** control model architecture  
-✅ **Tokenizer** can be retrained for new vocabulary  
-✅ **New modalities** can be added with encoders  
-✅ **Custom datasets** easy to integrate  
-✅ **Fine-tuning** adapts to specific domains
+```json
+{
+  "vocab_size": 10000,  // Was 5000
+  // Covers more words, but slower
+  // Retrain tokenizer with more data
+}
+```
+
+### 5. Modify Attention Mechanism
+
+```python
+# Use different attention (e.g., local attention)
+class LocalAttention(nn.Module):
+    def forward(self, q, k, v):
+        # Attend only to nearby tokens
+        # Reduces computation for long sequences
+```
 
 ---
 
-[Back to Index](00-INDEX.md)
+## 🎯 Common Use Cases
 
+### Academic Research
+- Experiment with architectures
+- Test new attention mechanisms
+- Ablation studies
+
+### Production Deployment
+- Optimize for inference speed
+- Quantize models (INT8)
+- Reduce model size
+
+### Domain-Specific Applications
+- Medical: Radiology reports + X-rays
+- Education: Tutoring with diagrams
+- Customer Service: Voice + screen sharing
+
+---
+
+## 💡 Best Practices
+
+✅ **Start from pretrained model** (transfer learning)  
+✅ **Test on small data first** before full training  
+✅ **Keep backups** of working checkpoints  
+✅ **Document changes** in config files  
+✅ **Validate improvements** with metrics
+
+---
+
+[Continue to Chapter 42: Performance Tuning →](42-performance-tuning.md)
+
+---

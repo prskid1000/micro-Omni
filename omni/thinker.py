@@ -489,15 +489,16 @@ class ThinkerLM(nn.Module):
         
         try:
             # Compile individual blocks for better compilation efficiency
+            # Using 'default' mode for better stability across platforms
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, mode='reduce-overhead')
+                self.blocks[i] = torch.compile(block, mode='default')
             
             # Compile embedding and output head
-            self.tok_emb = torch.compile(self.tok_emb, mode='reduce-overhead')
-            self.lm_head = torch.compile(self.lm_head, mode='reduce-overhead')
+            self.tok_emb = torch.compile(self.tok_emb, mode='default')
+            self.lm_head = torch.compile(self.lm_head, mode='default')
             
             self._compiled = True
-            print(f"✓ Model compiled successfully with torch.compile() for improved performance")
+            print(f"✓ Model compiled successfully with torch.compile()")
         except Exception as e:
             warnings.warn(f"Failed to compile model: {e}. Continuing without compilation.")
     

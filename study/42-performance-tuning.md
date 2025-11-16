@@ -1,113 +1,161 @@
-# Chapter 42: Performance Tuning and Scaling
+# Chapter 42: Performance Tuning
 
-[Back to Index](00-INDEX.md)
-
----
-
-## 🎯 Optimization Strategies
-
-### 1. Training Speed
-
-**Enable Mixed Precision (FP16)**:
-```python
-from torch.cuda.amp import autocast, GradScaler
-
-scaler = GradScaler()
-
-for batch in dataloader:
-    with autocast():
-        loss = model(batch)
-    
-    scaler.scale(loss).backward()
-    scaler.step(optimizer)
-    scaler.update()
-```
-
-**Gradient Accumulation** (for larger effective batch):
-```python
-accumulation_steps = 4
-
-for i, batch in enumerate(dataloader):
-    loss = model(batch) / accumulation_steps
-    loss.backward()
-    
-    if (i + 1) % accumulation_steps == 0:
-        optimizer.step()
-        optimizer.zero_grad()
-```
-
-**Gradient Checkpointing** (save memory):
-```json
-{
-  "use_gradient_checkpointing": true
-}
-```
-
-### 2. Inference Speed
-
-**Use Flash Attention**:
-```python
-# Automatically enabled in PyTorch 2.0+
-# 2-4x speedup for attention
-```
-
-**KV Caching**:
-```python
-model.enable_kv_cache(True)
-model.reset_kv_cache()  # Before each sequence
-```
-
-**Batch Inference**:
-```python
-# Process multiple inputs together
-images = [img1, img2, img3]
-batch = torch.stack([transform(img) for img in images])
-outputs = model(batch)  # Faster than one-by-one
-```
-
-### 3. Memory Optimization
-
-**Reduce Batch Size**:
-```json
-{"batch_size": 4}  // Instead of 16
-```
-
-**Lower Context Length**:
-```json
-{"ctx_len": 512}  // Instead of 2048
-```
-
-**Use Gradient Checkpointing**:
-Trades computation for memory (20-30% slower, 50% less memory).
-
-### 4. Multi-GPU Training
-
-```bash
-# Data parallelism
-python -m torch.distributed.launch \
-  --nproc_per_node=2 \
-  train_text.py --config configs/thinker_tiny.json
-```
-
-## 📊 Performance Benchmarks
-
-| Configuration | Training Speed | Memory Usage | Quality |
-|---------------|----------------|--------------|---------|
-| **Default** | 100% | 10GB | Baseline |
-| **+ FP16** | 150% | 6GB | Same |
-| **+ Flash Attn** | 180% | 6GB | Same |
-| **+ Grad Ckpt** | 140% | 4GB | Same |
-| **All optimizations** | 200% | 4GB | Same |
-
-## 💡 Key Takeaways
-
-✅ **Mixed precision (FP16)** → 1.5x speedup  
-✅ **Flash Attention** → 2-4x faster attention  
-✅ **KV caching** → 10x faster generation  
-✅ **Gradient checkpointing** → 50% less memory  
-✅ **Combine optimizations** for best results
+[← Previous: Customization Guide](41-customization-guide.md) | [Back to Index](00-INDEX.md) | [Next: Mathematical Foundations →](43-mathematical-foundations.md)
 
 ---
 
-[Back to Index](00-INDEX.md)
+## ⚡ Maximizing Performance
 
+Advanced techniques to optimize μOmni for speed and efficiency.
+
+---
+
+## 🚀 Inference Speed Optimizations
+
+### 1. Model Compilation
+
+```python
+# PyTorch 2.0+ compile
+model = torch.compile(model, mode='reduce-overhead')
+# 20-30% speedup on generation!
+```
+
+### 2. Quantization Strategies
+
+**Dynamic INT8 Quantization:**
+```python
+import torch.quantization as quant
+quantized_model = quant.quantize_dynamic(
+    model, {nn.Linear}, dtype=torch.qint8
+)
+# 4x smaller, 2-3x faster, minimal quality loss
+```
+
+**Static INT8 (Best Quality):**
+```python
+# Requires calibration data
+model.eval()
+model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+torch.quantization.prepare(model, inplace=True)
+# Run calibration data
+torch.quantization.convert(model, inplace=True)
+```
+
+### 3. Batch Size Tuning
+
+```python
+# Find optimal batch size
+for batch_size in [1, 2, 4, 8, 16]:
+    time = benchmark(model, batch_size)
+    throughput = batch_size / time
+    print(f"Batch {batch_size}: {throughput:.1f} samples/sec")
+# Use highest throughput
+```
+
+### 4. ONNX Export (Deployment)
+
+```python
+# Export to ONNX for production
+torch.onnx.export(
+    model,
+    dummy_input,
+    "model.onnx",
+    opset_version=14,
+    do_constant_folding=True
+)
+# Use with ONNX Runtime for faster inference
+```
+
+---
+
+## 🎯 Training Speed Optimizations
+
+### 1. Data Loading
+
+```python
+# Multi-worker data loading
+dataloader = DataLoader(
+    dataset,
+    batch_size=16,
+    num_workers=4,      # Parallel loading
+    pin_memory=True,    # Faster GPU transfer
+    prefetch_factor=2   # Prefetch batches
+)
+```
+
+### 2. Learning Rate Scheduling
+
+```python
+# Cosine annealing for better convergence
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=num_epochs,
+    eta_min=1e-6
+)
+```
+
+### 3. Early Stopping
+
+```python
+# Stop when validation stops improving
+if val_loss < best_loss:
+    best_loss = val_loss
+    patience_counter = 0
+else:
+    patience_counter += 1
+    if patience_counter >= 5:  # 5 epochs no improvement
+        print("Early stopping!")
+        break
+```
+
+---
+
+## 📊 Profiling & Benchmarking
+
+### PyTorch Profiler
+
+```python
+with torch.profiler.profile(
+    activities=[
+        torch.profiler.ProfilerActivity.CPU,
+        torch.profiler.ProfilerActivity.CUDA,
+    ]
+) as prof:
+    model(input)
+
+print(prof.key_averages().table(sort_by="cuda_time_total"))
+```
+
+### Memory Profiling
+
+```python
+import torch.cuda
+torch.cuda.reset_peak_memory_stats()
+output = model(input)
+peak_memory = torch.cuda.max_memory_allocated() / 1024**3
+print(f"Peak memory: {peak_memory:.2f} GB")
+```
+
+---
+
+## 💡 Performance Targets
+
+**Inference (12GB GPU):**
+- Text generation: 30-50 tokens/sec
+- Image processing: <100ms per image
+- Audio transcription: 2-3x real-time
+- Text-to-speech: 1-2x real-time
+
+**Training (12GB GPU):**
+- Stage A: 8-12 hours
+- Stage B: 6-10 hours
+- Stage C: 4-8 hours
+- Stage D: 10-15 hours
+- Stage E: 6-12 hours
+- **Total: 40-60 hours**
+
+---
+
+[Continue to Chapter 43: Mathematical Foundations →](43-mathematical-foundations.md)
+
+---
