@@ -43,7 +43,6 @@ import json
 import os
 import csv
 import torch
-import gc
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -848,8 +847,7 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                         initial_step = step
                         logger.info(f"Resuming from step {step}, epoch {start_epoch}")
                     opt.zero_grad()
-                    if use_amp:
-                        scaler.update()
+                    # Don't call scaler.update() here - no backward pass occurred, so no inf checks were recorded
                     continue
                 else:
                     # Re-raise if it's a different error or different model type
@@ -917,11 +915,6 @@ def run_training_loop(model, opt, loss_fn, train_dl, val_dl, checkpoint_meta, mo
                         continue
                 
                 opt.zero_grad()
-                
-                # Periodic memory cleanup
-                if step % 100 == 0 and device == "cuda":
-                    torch.cuda.empty_cache()
-                    gc.collect()
             else:
                 unscaled_loss = loss_val * accumulation_steps
                 try:

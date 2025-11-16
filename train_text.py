@@ -1,5 +1,5 @@
 
-import argparse, json, torch, os, random, gc
+import argparse, json, torch, os, random
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -195,8 +195,7 @@ def main(cfg):
                         initial_step = step
                         logger.info(f"Resuming from step {step}, epoch {start_epoch}")
                     opt.zero_grad()
-                    if use_amp:
-                        scaler.update()
+                    # Don't call scaler.update() here - no backward pass occurred, so no inf checks were recorded
                     continue
                 else:
                     # Re-raise if it's a different error
@@ -299,11 +298,6 @@ def main(cfg):
                     continue
                 
                 opt.zero_grad()  # Clear gradients after stepping
-                
-                # Periodic memory cleanup
-                if step % 100 == 0 and device == "cuda":
-                    torch.cuda.empty_cache()
-                    gc.collect()
             else:
                 # Not accumulation step - just validate loss
                 unscaled_loss = loss_val * accumulation_steps

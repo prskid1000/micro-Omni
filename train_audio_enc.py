@@ -1,5 +1,5 @@
 
-import argparse, json, os, torch, torchaudio, csv, gc
+import argparse, json, os, torch, torchaudio, csv
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -286,11 +286,6 @@ def main(cfg):
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping
-                
-                # Periodic memory cleanup
-                if step % 100 == 0 and device == "cuda":
-                    torch.cuda.empty_cache()
-                    gc.collect()
             else:
                 # Not accumulation step - just validate loss
                 unscaled_loss = loss_val * accumulation_steps
