@@ -21,7 +21,7 @@
   "gradient_accumulation_steps": 1,
   "use_amp": true,
   "use_flash": true,
-  "use_compile": false,
+  "use_compile": true,
   "num_workers": 2,
   "drop_last": true,
   "print_freq": 100,

@@ -1,35 +1,18 @@
-# Core PyTorch
-torch>=2.1
-torchaudio>=2.1
-torchvision>=0.16
+--index-url https://download.pytorch.org/whl/cu129
 
-# Data processing
+# Core PyTorch
+torch
+torchaudio
+torchvision
 numpy
 scipy
-Pillow>=9.0
-
-# Audio processing
-librosa>=0.10.0
-soundfile>=0.12.0
-
-# NLP & Tokenization
-sentencepiece>=0.1.99
-
-# Dataset handling
-# NOTE: DialogStudio requires datasets<3.0.0 (uses loading scripts not supported in newer versions)
-# If you don't need DialogStudio, you can use datasets>=3.0.0
-datasets<3.0.0
-huggingface_hub  # Required for HuggingFace dataset authentication
-
-# Utilities
-tqdm>=4.64.0
-einops>=0.6.0
-requests  # For downloading datasets
-
-# Video processing
-# Note: PyAV requires ffmpeg to be installed on the system
-# Install ffmpeg separately:
-#   Windows: Download from https://ffmpeg.org/download.html or use: choco install ffmpeg
-#   Linux: sudo apt-get install ffmpeg (Ubuntu/Debian) or sudo yum install ffmpeg (CentOS/RHEL)
-#   Mac: brew install ffmpeg
-av>=10.0.0  # PyAV - Python bindings for ffmpeg (for video encoding/decoding)
+Pillow
+librosa
+soundfile
+sentencepiece
+datasets
+huggingface_hub
+tqdm
+einops
+requests
+av
