@@ -6,6 +6,14 @@
 
 ## 📚 Table of Contents
 
+### **Part 0: Prerequisites (Start Here!)**
+
+| Chapter | Title | Description |
+|---------|-------|-------------|
+| [00-Prerequisites](00-prerequisites.md) | What You Need to Know | Learning paths, background requirements, how to use this guide |
+
+---
+
 ### **Part 1: Foundation - Understanding AI Basics (Chapters 1-5)**
 
 | Chapter | Title | Description |
@@ -138,7 +146,9 @@ Throughout this documentation you will find:
 
 ## 🚀 Getting Started
 
-**New to AI?** → Start with [Chapter 01: What is Artificial Intelligence?](01-what-is-ai.md)
+**COMPLETE BEGINNER?** → Start with [Prerequisites](00-prerequisites.md) to find your learning path!
+
+**New to AI?** → Begin with [Chapter 01: What is Artificial Intelligence?](01-what-is-ai.md)
 
 **Want system overview?** → Jump to [Chapter 19: μOmni System Architecture](19-muomni-overview.md)
 

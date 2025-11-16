@@ -42,7 +42,14 @@ This comprehensive guide contains **45 chapters** organized into 8 parts, design
 
 ## 🎯 Quick Start Guides
 
-### For Beginners (New to AI)
+### 🆕 For Complete Beginners (Never Studied AI)
+**Start here:** [📖 Complete Beginner's Learning Guide](LEARNING-GUIDE.md) ⭐ **HIGHLY RECOMMENDED**
+
+This 4-week structured path takes you from zero to understanding and using μOmni!
+
+**Or start directly:** [Prerequisites](00-prerequisites.md) → [Chapter 01: What is AI?](01-what-is-ai.md)
+
+### For Beginners (Some Tech Background)
 **Start here:** [Chapter 01: What is Artificial Intelligence?](01-what-is-ai.md)
 
 Follow the sequential path through Parts 1 and 2 to build foundational understanding.
