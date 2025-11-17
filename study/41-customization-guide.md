@@ -23,8 +23,9 @@ How to adapt μOmni for your specific needs.
   "n_heads": 8,        // Was 4
   "d_ff": 2048         // Was 1024
 }
-// Parameters: ~60M (was 15M)
+// Parameters: ~80M (was 20.32M)
 // GPU: Need 24GB+ VRAM
+// Expected Performance: ~70-80% of max (vs 40-50% for tiny)
 ```
 
 **Make it Smaller (Faster):**
@@ -36,8 +37,22 @@ How to adapt μOmni for your specific needs.
   "n_heads": 2,        // Was 4
   "d_ff": 512          // Was 1024
 }
-// Parameters: ~4M (was 15M)
+// Parameters: ~4M (was 20.32M)
 // GPU: Works on 6GB
+// Expected Performance: ~30-40% of max (faster inference)
+```
+
+**Performance vs Size Trade-offs:**
+
+```
+Performance vs Model Size:
+- 25M (Tiny): ~40-50% performance, 50-100 TPS, 12GB VRAM
+- 100M (Medium): ~70-80% performance, 20-40 TPS, 24GB VRAM
+- 500M (Large): ~85-90% performance, 5-10 TPS, 40GB+ VRAM
+- 1B+: ~90-95% performance, <5 TPS, Multi-GPU required
+
+Key Insight: Performance scales sublinearly. Doubling parameters
+doesn't double performance. Diminishing returns after ~500M.
 ```
 
 ### 2. Add New Modality

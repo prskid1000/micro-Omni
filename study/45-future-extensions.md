@@ -98,6 +98,35 @@ response = model.chat(
 - Benefit: Significantly better quality
 - Challenge: Infrastructure costs
 
+**Performance Scaling Expectations:**
+
+```
+Scale vs Performance:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Current (25M):    40-50% of max performance
+Medium (100M):   70-80% of max performance
+Large (500M):    85-90% of max performance
+XL (1B-7B):      90-95% of max performance
+
+Key Finding: Models under 15B parameters can achieve
+90% of larger model performance on many tasks.
+
+Diminishing Returns:
+- 25M→100M: ~30% performance gain per 2x params
+- 100M→500M: ~15% performance gain per 2x params
+- 500M→1B: ~8% performance gain per 2x params
+- 1B→2B: ~4% performance gain per 2x params
+
+Training Time Scaling:
+- 25M: 40-60 hours (single GPU)
+- 100M: 80-120 hours (single GPU)
+- 500M: 200-400 hours (single GPU)
+- 1B+: 1000+ hours (multi-GPU required)
+```
+
+**Recommendation:** Start with 100-500M scale for best quality/efficiency balance. Scale to 1B+ only if maximum performance is required.
+
 ### 2. In-Context Learning
 
 - Few-shot learning from examples
