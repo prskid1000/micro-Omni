@@ -74,6 +74,38 @@ def load_checkpoint(dataset_name):
             return json.load(f)
     return None
 
+def get_directory_size(path):
+    """Calculate total size of a directory recursively in bytes"""
+    if not os.path.exists(path):
+        return 0
+    total_size = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(path):
+            for filename in filenames:
+                filepath = os.path.join(dirpath, filename)
+                if os.path.exists(filepath):
+                    total_size += os.path.getsize(filepath)
+    except (OSError, PermissionError):
+        pass
+    return total_size
+
+def get_audio_dataset_size(ds_name):
+    """Get actual disk size of audio dataset folder"""
+    # Map dataset names to their actual data folders
+    folder_map = {
+        "librispeech": "data/audio/librispeech",
+        "voxceleb": "data/audio/voxceleb",
+        "urbansound": "data/audio/urbansound8k",
+        "musan": "data/audio/musan",
+        "commonvoice": "data/audio/commonvoice",  # If exists
+        "ted_lyrics": "data/audio/ted_lyrics",  # If exists
+    }
+    
+    folder_path = folder_map.get(ds_name)
+    if folder_path and os.path.exists(folder_path):
+        return get_directory_size(folder_path)
+    return 0
+
 def download_file(url, output_path, resume=True):
     """Download file with resume support"""
     if os.path.exists(output_path):
@@ -331,7 +363,7 @@ def convert_librispeech_to_csv(state):
     state["librispeech"]["samples"] = len(rows)
     save_state(state)
     
-    # Clean up checkpoint on success
+    # Clean up checkpoint file (state file only, actual data is never deleted)
     checkpoint_file = "data/.checkpoint_audio_librispeech.json"
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
@@ -699,13 +731,12 @@ def intelligent_download_all_audio(state, min_gb=25, max_gb=30):
             
             print(f"\nDownloading {ds_name} (target: {target_size}GB)...")
             
-            # Check existing
-            output_file = f"data/audio/{ds_name}_asr.csv"
-            if os.path.exists(output_file):
-                existing_size = os.path.getsize(output_file)
+            # Check existing - use actual data folder size, not CSV file size
+            existing_size = get_audio_dataset_size(ds_name)
+            if existing_size > 0:
                 total_size += existing_size
                 category_size += existing_size
-                print(f"  Already downloaded: {existing_size / (1024**3):.2f} GB")
+                print(f"  Already downloaded: {existing_size / (1024**3):.2f} GB (actual data)")
                 downloaded.append(ds_name)
                 continue
             
@@ -718,12 +749,18 @@ def intelligent_download_all_audio(state, min_gb=25, max_gb=30):
                         success = convert_func(state) and success
                     
                     if success:
-                        if os.path.exists(output_file):
-                            actual_size = os.path.getsize(output_file)
+                        # Check actual data folder size, not CSV file size
+                        actual_size = get_audio_dataset_size(ds_name)
+                        if actual_size > 0:
                             total_size += actual_size
                             category_size += actual_size
                             downloaded.append(ds_name)
-                            print(f"  ✓ Downloaded: {actual_size / (1024**3):.2f} GB")
+                            print(f"  ✓ Downloaded: {actual_size / (1024**3):.2f} GB (actual data)")
+                            
+                            # Stop if we've reached max size
+                            if total_size >= max_gb * 1024**3:
+                                print(f"\nReached max size ({max_gb}GB), stopping...")
+                                break
             except Exception as e:
                 print(f"  ✗ Error: {e}")
                 continue

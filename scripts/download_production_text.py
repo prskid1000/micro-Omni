@@ -310,7 +310,7 @@ def convert_wikipedia_to_text(state):
     state["wikipedia"]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint file on success
+    # Clean up checkpoint file (state file only, actual data is never deleted)
     checkpoint_file = "data/.checkpoint_wikipedia.json"
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
@@ -573,7 +573,7 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
     state[dataset_name]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint on success
+    # Clean up checkpoint file (state file only, actual data is never deleted)
     checkpoint_file = f"data/.checkpoint_{dataset_name}.json"
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
@@ -896,7 +896,7 @@ def download_arxiv_by_category(state, category, category_key):
     state[category_key]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint on success
+    # Clean up checkpoint file (state file only, actual data is never deleted)
     checkpoint_file = f"data/.checkpoint_{category_key}.json"
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
@@ -1073,7 +1073,7 @@ def download_pubmed(state):
     state["pubmed"]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint on success
+    # Clean up checkpoint file (state file only, actual data is never deleted)
     checkpoint_file = "data/.checkpoint_pubmed.json"
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
