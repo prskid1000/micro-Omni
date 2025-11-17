@@ -64,6 +64,43 @@ configs/
 
 ---
 
+## 🤖 Automatic Config Updates Based on Dataset Size
+
+**Recommended:** After downloading datasets, automatically update training parameters:
+
+```bash
+# Update all configs based on actual dataset sizes
+python scripts/update_configs_from_data.py
+
+# Preview changes without modifying files
+python scripts/update_configs_from_data.py --dry-run
+```
+
+**What gets updated:**
+- `max_steps`: Calculated from dataset size and batch size
+- `max_epochs`: Based on dataset size (1-3 for large, 5-10 for small)
+- `warmup_steps`: 5-10% of total steps (capped at 10K)
+- `val_freq`: Every 500-1000 steps or 10% of steps per epoch
+- `checkpoint_freq`: Every 5000-10000 steps or 1 per epoch
+- Data paths: Automatically updated to production files if they exist
+
+**Dataset size recommendations:**
+- **Very large (>1M samples):** 1-3 epochs
+- **Large (500K-1M):** 2-4 epochs
+- **Medium (100K-500K):** 3-6 epochs
+- **Small (50K-100K):** 5-10 epochs
+- **Very small (<50K):** 10-20 epochs
+
+**Files checked:**
+- Text: `data/text/production_corpus.txt` or `data/text/tiny_corpus.txt`
+- Images: `data/images/production_annotations.json` or `data/images/annotations.json`
+- Audio: `data/audio/production_asr.csv` or `data/audio/asr.csv`
+- TTS: `data/audio/production_tts.csv` or `data/audio/tts.csv`
+
+**Note:** The script only checks production and synthetic files, ignoring intermediate dataset files.
+
+---
+
 ## 💡 Tuning Tips
 
 **For faster training:**
@@ -80,6 +117,10 @@ configs/
 - Decrease `batch_size`
 - Reduce `ctx_len`
 - Use gradient accumulation
+
+**Automatic tuning:**
+- Use `scripts/update_configs_from_data.py` to automatically set epochs/steps based on your dataset size
+- Ensures optimal training duration without manual calculation
 
 ---
 

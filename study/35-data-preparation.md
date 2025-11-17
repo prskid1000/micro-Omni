@@ -317,6 +317,48 @@ When using `--dataset all`, scripts intelligently download from multiple categor
 
 ---
 
+## ⚙️ After Downloading: Update Training Configs
+
+**Important:** After downloading datasets, update training parameters based on actual data size:
+
+```bash
+# Automatically update all config files based on dataset sizes
+python scripts/update_configs_from_data.py
+
+# Preview changes first (recommended)
+python scripts/update_configs_from_data.py --dry-run
+```
+
+**What this does:**
+- ✅ Counts samples in your production/synthetic datasets
+- ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps`
+- ✅ Adjusts validation and checkpoint frequencies
+- ✅ Updates data paths to production files automatically
+- ✅ Applies best practices based on dataset size
+
+**Why it matters:**
+- Large datasets (>1M samples) need fewer epochs (1-3)
+- Small datasets (<50K samples) need more epochs (10-20)
+- Proper warmup steps prevent training instability
+- Correct max_steps ensures complete training without waste
+
+**Example output:**
+```
+[1] Analyzing Text Dataset...
+  Text samples: 2,500,000 (from data/text/production_corpus.txt)
+  
+[Stage A] Text-only Training (thinker_tiny.json)
+  Samples: 2,500,000
+  Steps/epoch: 312,500
+  Recommended epochs: 2
+  Max steps: 625,000
+  Warmup steps: 31,250
+```
+
+See [Chapter 34: Configuration Files](34-configuration-files.md) for more details.
+
+---
+
 ## 💡 Tips
 
 ✅ **Start with intelligent download:** `--dataset all --combine` for balanced diversity  
@@ -324,7 +366,8 @@ When using `--dataset all`, scripts intelligently download from multiple categor
 ✅ **Fine-grained resumption:** Safe to interrupt and resume  
 ✅ **No formatting needed:** Outputs are in final format ready for training  
 ✅ **Diverse knowledge:** Automatically balances across categories  
-✅ **Synthetic data:** Use `make_synthetic_datasets.py` for quick testing
+✅ **Synthetic data:** Use `make_synthetic_datasets.py` for quick testing  
+✅ **Update configs:** Run `scripts/update_configs_from_data.py` after downloading to optimize training parameters
 
 ---
 

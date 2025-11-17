@@ -376,6 +376,34 @@ Like learning to walk before you run!
 
 ---
 
+## ⚙️ Before Training: Update Configs Based on Dataset Size
+
+**Important:** After downloading your datasets, update training parameters based on actual data size:
+
+```bash
+# Analyze datasets and automatically update all config files
+python scripts/update_configs_from_data.py
+
+# Dry run (see what would change without modifying files)
+python scripts/update_configs_from_data.py --dry-run
+```
+
+**What it does:**
+- ✅ Counts samples in production/synthetic datasets
+- ✅ Calculates appropriate `max_steps`, `max_epochs`, `warmup_steps`
+- ✅ Adjusts `val_freq` and `checkpoint_freq` based on dataset size
+- ✅ Updates data paths to production files if they exist
+- ✅ Uses best practices: 1-3 epochs for large datasets, 5-10 for small
+
+**When to run:**
+- After downloading production datasets
+- After generating synthetic test data
+- When switching between different dataset sizes
+
+See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
+
+---
+
 ## 💻 Quick Start Commands
 
 ### Running the Training Pipeline
