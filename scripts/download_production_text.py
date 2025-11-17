@@ -303,6 +303,15 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
         checkpoint_interval = 50  # Save checkpoint every 50 pages
         report_interval = 1000  # Report progress every 1000 pages
         
+        # Track if we're still catching up to checkpoint
+        resume_page_count = page_count
+        catching_up = (resume_page_count > 0)
+        current_page_num = 0  # Track current page number in XML
+        
+        if catching_up:
+            print(f"Fast-forwarding through {resume_page_count:,} already-processed pages...")
+            print("(This may take a few minutes - skipping page processing to speed up)")
+        
         print(f"Starting extraction from page {page_count}...")
         
         for event, elem in context:
@@ -312,7 +321,25 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
                 tag_name = tag_name.split('}')[1]  # Remove namespace prefix
             
             if event == 'end' and tag_name == 'page':
-                page_count += 1
+                current_page_num += 1
+                
+                # Fast-forward: skip processing until we reach checkpoint
+                if catching_up and current_page_num <= resume_page_count:
+                    page_count = current_page_num  # Update for checkpoint saving
+                    # Clear element quickly without processing
+                    elem.clear()
+                    root.clear()
+                    # Report progress every 10000 pages during fast-forward
+                    if current_page_num % 10000 == 0:
+                        print(f"Fast-forward: {current_page_num:,} / {resume_page_count:,} pages...")
+                    continue
+                
+                # We've caught up - start processing normally
+                if catching_up and current_page_num > resume_page_count:
+                    catching_up = False
+                    print(f"Caught up! Starting processing from page {current_page_num:,}...")
+                
+                page_count = current_page_num
                 article = process_page_with_ns(elem)
                 
                 if article:
