@@ -1,0 +1,582 @@
+{
+  "description": "Project Gutenberg book IDs for downloading classic literature",
+  "books": [
+    {
+      "id": 1342,
+      "title": "Pride and Prejudice"
+    },
+    {
+      "id": 84,
+      "title": "Frankenstein"
+    },
+    {
+      "id": 11,
+      "title": "Alice's Adventures in Wonderland"
+    },
+    {
+      "id": 2701,
+      "title": "Moby Dick"
+    },
+    {
+      "id": 74,
+      "title": "The Adventures of Tom Sawyer"
+    },
+    {
+      "id": 98,
+      "title": "A Tale of Two Cities"
+    },
+    {
+      "id": 5200,
+      "title": "Metamorphosis"
+    },
+    {
+      "id": 1661,
+      "title": "The Adventures of Sherlock Holmes"
+    },
+    {
+      "id": 768,
+      "title": "Wuthering Heights"
+    },
+    {
+      "id": 1260,
+      "title": "Jane Eyre"
+    },
+    {
+      "id": 145,
+      "title": "Middlemarch"
+    },
+    {
+      "id": 1232,
+      "title": "The Count of Monte Cristo"
+    },
+    {
+      "id": 1399,
+      "title": "Anna Karenina"
+    },
+    {
+      "id": 2554,
+      "title": "Crime and Punishment"
+    },
+    {
+      "id": 2600,
+      "title": "War and Peace"
+    },
+    {
+      "id": 174,
+      "title": "The Picture of Dorian Gray"
+    },
+    {
+      "id": 345,
+      "title": "Dracula"
+    },
+    {
+      "id": 30254,
+      "title": "The Great Gatsby"
+    },
+    {
+      "id": 64317,
+      "title": "The Old Man and the Sea"
+    },
+    {
+      "id": 2814,
+      "title": "Don Quixote"
+    },
+    {
+      "id": 4300,
+      "title": "Ulysses"
+    },
+    {
+      "id": 6130,
+      "title": "Les Misérables"
+    },
+    {
+      "id": 25344,
+      "title": "The Scarlet Letter"
+    },
+    {
+      "id": 514,
+      "title": "Little Women"
+    },
+    {
+      "id": 844,
+      "title": "The Importance of Being Earnest"
+    },
+    {
+      "id": 730,
+      "title": "Oliver Twist"
+    },
+    {
+      "id": 1400,
+      "title": "Great Expectations"
+    },
+    {
+      "id": 205,
+      "title": "Walden"
+    },
+    {
+      "id": 8800,
+      "title": "The Brothers Karamazov"
+    },
+    {
+      "id": 1080,
+      "title": "A Modest Proposal"
+    },
+    {
+      "id": 2591,
+      "title": "Grimms' Fairy Tales"
+    },
+    {
+      "id": 27827,
+      "title": "The Prince"
+    },
+    {
+      "id": 2800,
+      "title": "Leviathan"
+    },
+    {
+      "id": 829,
+      "title": "Gulliver's Travels"
+    },
+    {
+      "id": 100,
+      "title": "The Complete Works of William Shakespeare"
+    },
+    {
+      "id": 1112,
+      "title": "The Republic"
+    },
+    {
+      "id": 1497,
+      "title": "The Iliad"
+    },
+    {
+      "id": 1727,
+      "title": "The Odyssey"
+    },
+    {
+      "id": 55,
+      "title": "The Wonderful Wizard of Oz"
+    },
+    {
+      "id": 16,
+      "title": "Peter Pan"
+    },
+    {
+      "id": 46,
+      "title": "A Christmas Carol"
+    },
+    {
+      "id": 1952,
+      "title": "The Yellow Wallpaper"
+    },
+    {
+      "id": 76,
+      "title": "Adventures of Huckleberry Finn"
+    },
+    {
+      "id": 158,
+      "title": "Emma"
+    },
+    {
+      "id": 161,
+      "title": "Sense and Sensibility"
+    },
+    {
+      "id": 105,
+      "title": "Persuasion"
+    },
+    {
+      "id": 121,
+      "title": "Northanger Abbey"
+    },
+    {
+      "id": 42671,
+      "title": "The Time Machine"
+    },
+    {
+      "id": 35,
+      "title": "The War of the Worlds"
+    },
+    {
+      "id": 36,
+      "title": "The Invisible Man"
+    },
+    {
+      "id": 159,
+      "title": "A Room with a View"
+    },
+    {
+      "id": 140,
+      "title": "The Jungle Book"
+    },
+    {
+      "id": 236,
+      "title": "The Secret Garden"
+    },
+    {
+      "id": 27805,
+      "title": "The Adventures of Pinocchio"
+    },
+    {
+      "id": 61,
+      "title": "The Call of the Wild"
+    },
+    {
+      "id": 215,
+      "title": "The Hound of the Baskervilles"
+    },
+    {
+      "id": 2852,
+      "title": "The Sign of the Four"
+    },
+    {
+      "id": 2346,
+      "title": "A Study in Scarlet"
+    },
+    {
+      "id": 209,
+      "title": "The Return of Sherlock Holmes"
+    },
+    {
+      "id": 108,
+      "title": "A Scandal in Bohemia"
+    },
+    {
+      "id": 244,
+      "title": "A Doll's House"
+    },
+    {
+      "id": 3600,
+      "title": "The Metamorphosis"
+    },
+    {
+      "id": 4085,
+      "title": "The Trial"
+    },
+    {
+      "id": 7849,
+      "title": "The Castle"
+    },
+    {
+      "id": 5207,
+      "title": "The Great Wall of China"
+    },
+    {
+      "id": 33,
+      "title": "The Prince and the Pauper"
+    },
+    {
+      "id": 1837,
+      "title": "The Adventures of Tom Sawyer Abroad"
+    },
+    {
+      "id": 1838,
+      "title": "Tom Sawyer, Detective"
+    },
+    {
+      "id": 3176,
+      "title": "Life on the Mississippi"
+    },
+    {
+      "id": 245,
+      "title": "The Awakening"
+    },
+    {
+      "id": 1228,
+      "title": "The Art of War"
+    },
+    {
+      "id": 863,
+      "title": "The Federalist Papers"
+    },
+    {
+      "id": 1322,
+      "title": "Leaves of Grass"
+    },
+    {
+      "id": 120,
+      "title": "Treasure Island"
+    },
+    {
+      "id": 41,
+      "title": "The Legend of Sleepy Hollow"
+    },
+    {
+      "id": 42,
+      "title": "The Fall of the House of Usher"
+    },
+    {
+      "id": 2148,
+      "title": "The Tell-Tale Heart"
+    },
+    {
+      "id": 2147,
+      "title": "The Raven"
+    },
+    {
+      "id": 1065,
+      "title": "The Cask of Amontillado"
+    },
+    {
+      "id": 2149,
+      "title": "The Masque of the Red Death"
+    },
+    {
+      "id": 1064,
+      "title": "The Pit and the Pendulum"
+    },
+    {
+      "id": 1063,
+      "title": "The Black Cat"
+    },
+    {
+      "id": 1062,
+      "title": "The Gold-Bug"
+    },
+    {
+      "id": 1061,
+      "title": "The Murders in the Rue Morgue"
+    },
+    {
+      "id": 1060,
+      "title": "The Mystery of Marie Rogêt"
+    },
+    {
+      "id": 1059,
+      "title": "The Purloined Letter"
+    },
+    {
+      "id": 1058,
+      "title": "The Balloon-Hoax"
+    },
+    {
+      "id": 1057,
+      "title": "Mesmeric Revelation"
+    },
+    {
+      "id": 1056,
+      "title": "The Facts in the Case of M. Valdemar"
+    },
+    {
+      "id": 1055,
+      "title": "The Sphinx"
+    },
+    {
+      "id": 1054,
+      "title": "The Island of the Fay"
+    },
+    {
+      "id": 1053,
+      "title": "The Assignation"
+    },
+    {
+      "id": 1052,
+      "title": "The Domain of Arnheim"
+    },
+    {
+      "id": 1051,
+      "title": "Landor's Cottage"
+    },
+    {
+      "id": 1050,
+      "title": "William Wilson"
+    },
+    {
+      "id": 1049,
+      "title": "The Man of the Crowd"
+    },
+    {
+      "id": 1048,
+      "title": "The Man That Was Used Up"
+    },
+    {
+      "id": 1047,
+      "title": "The Business Man"
+    },
+    {
+      "id": 1046,
+      "title": "Why the Little Frenchman Wears His Hand in a Sling"
+    },
+    {
+      "id": 1045,
+      "title": "Never Bet the Devil Your Head"
+    },
+    {
+      "id": 1044,
+      "title": "Three Sundays in a Week"
+    },
+    {
+      "id": 1043,
+      "title": "Diddling"
+    },
+    {
+      "id": 1042,
+      "title": "The Angel of the Odd"
+    },
+    {
+      "id": 1041,
+      "title": "Mellonta Tauta"
+    },
+    {
+      "id": 1040,
+      "title": "The System of Doctor Tarr and Professor Fether"
+    },
+    {
+      "id": 1039,
+      "title": "The Literary Life of Thingum Bob, Esq."
+    },
+    {
+      "id": 1038,
+      "title": "How to Write a Blackwood Article"
+    },
+    {
+      "id": 1037,
+      "title": "A Predicament"
+    },
+    {
+      "id": 1036,
+      "title": "The Devil in the Belfry"
+    },
+    {
+      "id": 1035,
+      "title": "Lionizing"
+    },
+    {
+      "id": 1034,
+      "title": "X-ing a Paragrab"
+    },
+    {
+      "id": 1033,
+      "title": "The Power of Words"
+    },
+    {
+      "id": 1032,
+      "title": "The Colloquy of Monos and Una"
+    },
+    {
+      "id": 1031,
+      "title": "The Conversation of Eiros and Charmion"
+    },
+    {
+      "id": 1030,
+      "title": "Shadow—A Parable"
+    },
+    {
+      "id": 1029,
+      "title": "Silence—A Fable"
+    },
+    {
+      "id": 1028,
+      "title": "Berenice"
+    },
+    {
+      "id": 1027,
+      "title": "Morella"
+    },
+    {
+      "id": 1026,
+      "title": "Ligeia"
+    },
+    {
+      "id": 1025,
+      "title": "Eleonora"
+    },
+    {
+      "id": 1024,
+      "title": "The Oval Portrait"
+    },
+    {
+      "id": 1023,
+      "title": "The Philosophy of Composition"
+    },
+    {
+      "id": 1022,
+      "title": "The Poetic Principle"
+    },
+    {
+      "id": 1021,
+      "title": "Old English Poetry"
+    },
+    {
+      "id": 1020,
+      "title": "The Rationale of Verse"
+    },
+    {
+      "id": 1019,
+      "title": "Notes Upon English Verse"
+    },
+    {
+      "id": 1018,
+      "title": "Fifty Suggestions"
+    },
+    {
+      "id": 1017,
+      "title": "Maelzel's Chess-Player"
+    },
+    {
+      "id": 1016,
+      "title": "A Few Words on Secret Writing"
+    },
+    {
+      "id": 1015,
+      "title": "The Philosophy of Furniture"
+    },
+    {
+      "id": 1014,
+      "title": "Morning on the Wissahiccon"
+    },
+    {
+      "id": 1013,
+      "title": "Byron and Miss Chaworth"
+    },
+    {
+      "id": 1012,
+      "title": "Pinakidia"
+    },
+    {
+      "id": 1011,
+      "title": "Some Secrets of the Magazine Prison-House"
+    },
+    {
+      "id": 1010,
+      "title": "Bon-Bon"
+    },
+    {
+      "id": 1009,
+      "title": "King Pest"
+    },
+    {
+      "id": 1008,
+      "title": "Metzengerstein"
+    },
+    {
+      "id": 1007,
+      "title": "The Duc De L'Omelette"
+    },
+    {
+      "id": 1006,
+      "title": "A Tale of Jerusalem"
+    },
+    {
+      "id": 1005,
+      "title": "Loss of Breath"
+    },
+    {
+      "id": 1004,
+      "title": "Four Beasts in One"
+    },
+    {
+      "id": 1003,
+      "title": "The Unparalleled Adventure of One Hans Pfaall"
+    },
+    {
+      "id": 1002,
+      "title": "The Narrative of Arthur Gordon Pym"
+    },
+    {
+      "id": 1001,
+      "title": "The Journal of Julius Rodman"
+    }
+  ]
+}
+

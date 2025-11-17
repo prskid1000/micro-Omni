@@ -114,8 +114,8 @@ def download_mjsynth(state, max_samples=1000000):
     print("Downloading MJSynth (Synth90k) Dataset")
     print("="*60)
     
-    if state["mjsynth"]["downloaded"] and state["mjsynth"]["extracted"] and state["mjsynth"]["converted"]:
-        print("MJSynth already downloaded and converted, skipping...")
+    if state["mjsynth"]["downloaded"] and state["mjsynth"]["extracted"] and state["mjsynth"]["converted"] and state["mjsynth"]["samples"] >= max_samples:
+        print(f"MJSynth already downloaded and converted ({state['mjsynth']['samples']:,} samples), skipping...")
         return True
     
     # MJSynth is available from multiple sources
@@ -177,8 +177,8 @@ def download_textocr(state, max_samples=1000000):
     print("Downloading TextOCR Dataset")
     print("="*60)
     
-    if state["textocr"]["downloaded"] and state["textocr"]["extracted"] and state["textocr"]["converted"]:
-        print("TextOCR already downloaded and converted, skipping...")
+    if state["textocr"]["downloaded"] and state["textocr"]["extracted"] and state["textocr"]["converted"] and state["textocr"]["samples"] >= max_samples:
+        print(f"TextOCR already downloaded and converted ({state['textocr']['samples']:,} samples), skipping...")
         return True
     
     # TextOCR is available from Google Research

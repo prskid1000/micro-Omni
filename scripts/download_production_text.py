@@ -521,8 +521,8 @@ def convert_wikipedia_to_text(state, max_samples=1000000):
     print("Converting Wikipedia to Text Format")
     print("="*60)
     
-    if state["wikipedia"]["converted"]:
-        print("Wikipedia already converted, skipping...")
+    if state["wikipedia"]["converted"] and state["wikipedia"]["samples"] >= max_samples:
+        print(f"Wikipedia already converted ({state['wikipedia']['samples']:,} samples), skipping...")
         return True
     
     extracted_dir = "data/text_downloads/wikipedia_extracted"
@@ -631,8 +631,8 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
     print(f"Downloading {dataset_name}")
     print("="*60)
     
-    if state[dataset_name]["downloaded"]:
-        print(f"{dataset_name} already downloaded, skipping...")
+    if state[dataset_name]["downloaded"] and state[dataset_name]["samples"] >= max_samples:
+        print(f"{dataset_name} already downloaded ({state[dataset_name]['samples']:,} samples), skipping...")
         return True
     
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -852,8 +852,8 @@ def download_alpaca(state, max_samples=500000):
     print("Downloading Alpaca")
     print("="*60)
     
-    if state["alpaca"]["downloaded"]:
-        print("Alpaca already downloaded, skipping...")
+    if state["alpaca"]["downloaded"] and state["alpaca"]["samples"] >= max_samples:
+        print(f"Alpaca already downloaded ({state['alpaca']['samples']:,} samples), skipping...")
         return True
     
     output_file = "data/text/alpaca.txt"
@@ -941,8 +941,8 @@ def download_arxiv_by_category(state, category, category_key, max_samples=100000
     print(f"Downloading ArXiv {category} Papers")
     print("="*60)
     
-    if state[category_key]["downloaded"]:
-        print(f"ArXiv {category} already downloaded, skipping...")
+    if state[category_key]["downloaded"] and state[category_key]["samples"] >= max_samples:
+        print(f"ArXiv {category} already downloaded ({state[category_key]['samples']:,} samples), skipping...")
         return True
     
     import time
@@ -1086,8 +1086,8 @@ def download_pubmed(state, max_samples=500000):
     print("Downloading PubMed Abstracts")
     print("="*60)
     
-    if state["pubmed"]["downloaded"]:
-        print("PubMed already downloaded, skipping...")
+    if state["pubmed"]["downloaded"] and state["pubmed"]["samples"] >= max_samples:
+        print(f"PubMed already downloaded ({state['pubmed']['samples']:,} samples), skipping...")
         return True
     
     import time
@@ -1257,8 +1257,8 @@ def download_math_datasets(state, max_samples=100000):
     print("Downloading Math Datasets")
     print("="*60)
     
-    if state["math_datasets"]["downloaded"]:
-        print("Math datasets already downloaded, skipping...")
+    if state["math_datasets"]["downloaded"] and state["math_datasets"]["samples"] >= max_samples:
+        print(f"Math datasets already downloaded ({state['math_datasets']['samples']:,} samples), skipping...")
         return True
     
     output_file = "data/text/math_datasets.txt"
@@ -1394,8 +1394,8 @@ def download_scienceqa(state, max_samples=50000):
     print("Downloading ScienceQA")
     print("="*60)
     
-    if state["scienceqa"]["downloaded"]:
-        print("ScienceQA already downloaded, skipping...")
+    if state["scienceqa"]["downloaded"] and state["scienceqa"]["samples"] >= max_samples:
+        print(f"ScienceQA already downloaded ({state['scienceqa']['samples']:,} samples), skipping...")
         return True
     
     # ScienceQA is on GitHub
@@ -1479,13 +1479,13 @@ def download_scienceqa(state, max_samples=50000):
         return False
 
 def download_books(state, max_samples=500000):
-    """Download books corpus from Project Gutenberg"""
+    """Download books corpus from Project Gutenberg with fine-grained resuming"""
     print("\n" + "="*60)
     print("Downloading Books Corpus")
     print("="*60)
     
-    if state["books"]["downloaded"]:
-        print("Books already downloaded, skipping...")
+    if state["books"]["downloaded"] and state["books"]["samples"] >= max_samples:
+        print(f"Books already downloaded ({state['books']['samples']:,} samples), skipping...")
         return True
     
     print("Downloading books from Project Gutenberg...")
@@ -1494,27 +1494,58 @@ def download_books(state, max_samples=500000):
     output_file = "data/text/books.txt"
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    # Project Gutenberg book IDs (popular books)
-    # You can expand this list
-    book_ids = [
-        1342,  # Pride and Prejudice
-        84,    # Frankenstein
-        11,    # Alice's Adventures in Wonderland
-        2701,  # Moby Dick
-        74,    # The Adventures of Tom Sawyer
-        98,    # A Tale of Two Cities
-        5200,  # Metamorphosis
-        1661,  # The Adventures of Sherlock Holmes
-    ]
+    # Load checkpoint for resuming
+    checkpoint = load_checkpoint("books")
+    if checkpoint:
+        print(f"Resuming from checkpoint: book {checkpoint.get('last_book_id', 0)}, {checkpoint.get('count', 0)} passages")
+        count = checkpoint.get('count', 0)
+        last_book_id = checkpoint.get('last_book_id', 0)
+        processed_books = set(checkpoint.get('processed_books', []))
+        mode = 'a'  # Append mode
+        resume = True
+    else:
+        count = 0
+        last_book_id = 0
+        processed_books = set()
+        mode = 'w'  # Write mode
+        resume = False
     
-    count = 0
+    # Load book IDs from external file (relative to script location)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    book_list_file = os.path.join(script_dir, "gutenberg_book_ids.json")
+    if not os.path.exists(book_list_file):
+        print(f"ERROR: {book_list_file} not found!")
+        print("Please ensure the book list file exists.")
+        return False
+    
+    with open(book_list_file, 'r', encoding='utf-8') as f:
+        book_data = json.load(f)
+        book_ids = [book["id"] for book in book_data.get("books", [])]
+        print(f"Loaded {len(book_ids)} book IDs from {book_list_file}")
     
     base_url = "https://www.gutenberg.org/files"
     
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for book_id in tqdm(book_ids, desc="Downloading books"):
+    if resume:
+        print(f"Resuming: Already have {count:,} passages, starting from book ID {last_book_id}")
+        # Find starting index
+        start_idx = 0
+        for i, bid in enumerate(book_ids):
+            if bid == last_book_id:
+                start_idx = i + 1
+                break
+        book_ids = book_ids[start_idx:]
+    else:
+        start_idx = 0
+    
+    with open(output_file, mode, encoding='utf-8') as f:
+        for book_id in tqdm(book_ids, desc="Downloading books", initial=start_idx, total=len(book_ids) + start_idx):
+            # Skip if already processed
+            if book_id in processed_books:
+                continue
+            
             try:
                 # Try different file formats
+                downloaded = False
                 for suffix in ['-0.txt', '-8.txt', '.txt']:
                     url = f"{base_url}/{book_id}/{book_id}{suffix}"
                     try:
@@ -1524,22 +1555,22 @@ def download_books(state, max_samples=500000):
                             content = response.text
                             # Remove Project Gutenberg headers/footers
                             lines = content.split('\n')
-                            start_idx = 0
-                            end_idx = len(lines)
+                            start_idx_text = 0
+                            end_idx_text = len(lines)
                             
                             # Find start (skip header)
                             for i, line in enumerate(lines):
-                                if 'START OF THIS PROJECT GUTENBERG' in line.upper():
-                                    start_idx = i + 1
+                                if 'START OF THIS PROJECT GUTENBERG' in line.upper() or 'START OF THE PROJECT GUTENBERG' in line.upper():
+                                    start_idx_text = i + 1
                                     break
                             
                             # Find end (skip footer)
                             for i in range(len(lines)-1, -1, -1):
-                                if 'END OF THIS PROJECT GUTENBERG' in lines[i].upper():
-                                    end_idx = i
+                                if 'END OF THIS PROJECT GUTENBERG' in lines[i].upper() or 'END OF THE PROJECT GUTENBERG' in lines[i].upper():
+                                    end_idx_text = i
                                     break
                             
-                            book_text = '\n'.join(lines[start_idx:end_idx])
+                            book_text = '\n'.join(lines[start_idx_text:end_idx_text])
                             
                             # Split into paragraphs
                             paragraphs = book_text.split('\n\n')
@@ -1547,13 +1578,25 @@ def download_books(state, max_samples=500000):
                                 para = para.strip()
                                 if len(para) > 200:
                                     f.write(para + '\n\n')
+                                    f.flush()  # Flush for fine-grained resumption
                                     count += 1
                                     
                                     # Print progress with remaining
                                     print_progress_with_remaining(count, max_samples, "passages", report_interval=100)
                                     
+                                    # Save checkpoint every 50 passages
+                                    if count % 50 == 0:
+                                        save_checkpoint("books", {
+                                            'count': count,
+                                            'last_book_id': book_id,
+                                            'processed_books': list(processed_books)
+                                        })
+                                    
                                     if count >= max_samples:
                                         break
+                            
+                            processed_books.add(book_id)
+                            downloaded = True
                             
                             if count >= max_samples:
                                 break
@@ -1571,6 +1614,11 @@ def download_books(state, max_samples=500000):
     state["books"]["converted"] = True
     state["books"]["samples"] = count
     save_state(state)
+    
+    # Clean up checkpoint file on success
+    checkpoint_file = "data/.checkpoint_books.json"
+    if os.path.exists(checkpoint_file) and count >= max_samples:
+        os.remove(checkpoint_file)
     
     print(f"\n✓ Downloaded {count:,} book passages to {output_file}")
     return True

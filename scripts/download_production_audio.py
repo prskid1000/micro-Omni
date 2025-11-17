@@ -279,8 +279,8 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
     print("Converting LibriSpeech to ASR CSV")
     print("="*60)
     
-    if state["librispeech"]["converted"]:
-        print("LibriSpeech already converted, skipping...")
+    if state["librispeech"]["converted"] and state["librispeech"]["samples"] >= max_samples:
+        print(f"LibriSpeech already converted ({state['librispeech']['samples']:,} samples), skipping...")
         return True
     
     base_dir = "data/audio/librispeech/LibriSpeech"
@@ -436,8 +436,8 @@ def download_ljspeech(state, max_samples=1000000):
     print("Downloading LJSpeech Dataset")
     print("="*60)
     
-    if state["ljspeech"]["downloaded"]:
-        print("LJSpeech already downloaded, skipping...")
+    if state["ljspeech"]["downloaded"] and state["ljspeech"]["samples"] >= max_samples:
+        print(f"LJSpeech already downloaded ({state['ljspeech']['samples']:,} samples), skipping...")
         return True
     
     # LJSpeech has direct download

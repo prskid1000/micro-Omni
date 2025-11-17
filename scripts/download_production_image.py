@@ -137,8 +137,8 @@ def download_coco(state, max_samples=1000000):
     print("Downloading COCO 2017 Dataset")
     print("="*60)
     
-    if state["coco"]["downloaded"]:
-        print("COCO already downloaded, skipping...")
+    if state["coco"]["downloaded"] and state["coco"]["samples"] >= max_samples:
+        print(f"COCO already downloaded ({state['coco']['samples']:,} samples), skipping...")
         return True
     
     # COCO 2017 has direct download URLs
@@ -227,8 +227,8 @@ def download_food101(state, max_samples=1000000):
     print("Downloading Food-101")
     print("="*60)
     
-    if state["food101"]["downloaded"]:
-        print("Food-101 already downloaded, skipping...")
+    if state["food101"]["downloaded"] and state["food101"]["samples"] >= max_samples:
+        print(f"Food-101 already downloaded ({state['food101']['samples']:,} samples), skipping...")
         return True
     
     # Food-101 is available from GitHub
@@ -290,8 +290,8 @@ def download_cifar10(state, max_samples=1000000):
     print("Downloading CIFAR-10 Dataset")
     print("="*60)
     
-    if state["cifar10"]["downloaded"]:
-        print("CIFAR-10 already downloaded, skipping...")
+    if state["cifar10"]["downloaded"] and state["cifar10"]["samples"] >= max_samples:
+        print(f"CIFAR-10 already downloaded ({state['cifar10']['samples']:,} samples), skipping...")
         return True
     
     # CIFAR-10 has direct download
@@ -380,8 +380,8 @@ def download_cifar100(state, max_samples=1000000):
     print("Downloading CIFAR-100 Dataset")
     print("="*60)
     
-    if state["cifar100"]["downloaded"]:
-        print("CIFAR-100 already downloaded, skipping...")
+    if state["cifar100"]["downloaded"] and state["cifar100"]["samples"] >= max_samples:
+        print(f"CIFAR-100 already downloaded ({state['cifar100']['samples']:,} samples), skipping...")
         return True
     
     # CIFAR-100 has direct download
