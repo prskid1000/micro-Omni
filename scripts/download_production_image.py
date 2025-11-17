@@ -189,7 +189,7 @@ def download_imagenet_subset(state):
         return False
 
 def extract_imagenet_subset(state):
-    """Extract and create ImageNet subset under 30GB"""
+    """Extract and create ImageNet subset with fine-grained resuming"""
     print("\n" + "="*60)
     print("Extracting ImageNet Subset")
     print("="*60)
@@ -201,6 +201,14 @@ def extract_imagenet_subset(state):
     download_dir = "data/image_downloads/imagenet"
     extract_dir = "data/images/imagenet_subset"
     os.makedirs(extract_dir, exist_ok=True)
+    
+    # Load checkpoint
+    checkpoint = load_checkpoint("imagenet_extract")
+    if checkpoint:
+        print(f"Resuming extraction: {len(checkpoint.get('extracted_classes', []))} classes already extracted")
+        extracted_classes = set(checkpoint.get('extracted_classes', []))
+    else:
+        extracted_classes = set()
     
     train_tar = os.path.join(download_dir, "ILSVRC2012_img_train.tar")
     val_tar = os.path.join(download_dir, "ILSVRC2012_img_val.tar")
@@ -227,31 +235,55 @@ def extract_imagenet_subset(state):
             print(f"Extracting first {max_classes} classes...")
             
             for i, member in enumerate(tqdm(class_tars[:max_classes], desc="Extracting classes")):
+                class_name = member.name.replace('.tar', '')
+                
+                # Skip if already extracted
+                if class_name in extracted_classes:
+                    print(f"  Skipping {class_name} (already extracted)")
+                    continue
+                
                 tar.extract(member, download_dir)
                 class_tar_path = os.path.join(download_dir, member.name)
                 
                 # Extract class images
-                class_name = member.name.replace('.tar', '')
                 class_dir = os.path.join(extract_dir, "train", class_name)
                 os.makedirs(class_dir, exist_ok=True)
                 
                 with tarfile.open(class_tar_path, 'r') as class_tar:
                     class_tar.extractall(class_dir)
                 
+                extracted_classes.add(class_name)
+                
+                # Save checkpoint every 10 classes
+                if len(extracted_classes) % 10 == 0:
+                    save_checkpoint("imagenet_extract", {
+                        'extracted_classes': list(extracted_classes)
+                    })
+                    save_state(state)
+                
                 # Keep class tar files - may need them for re-extraction with different parameters
                 # (No cleanup - all downloaded/extracted files are preserved)
         
-        # Extract validation set
+        # Extract validation set (only if not already done)
         if os.path.exists(val_tar):
-            print("\nExtracting validation set...")
             val_extract_dir = os.path.join(extract_dir, "val")
-            os.makedirs(val_extract_dir, exist_ok=True)
-            
-            with tarfile.open(val_tar, 'r') as tar:
-                tar.extractall(val_extract_dir)
+            if not os.path.exists(val_extract_dir) or len(os.listdir(val_extract_dir)) == 0:
+                print("\nExtracting validation set...")
+                os.makedirs(val_extract_dir, exist_ok=True)
+                
+                with tarfile.open(val_tar, 'r') as tar:
+                    tar.extractall(val_extract_dir)
+            else:
+                print("\nValidation set already extracted, skipping...")
         
         state["imagenet"]["extracted"] = True
         save_state(state)
+        
+        # Clean up checkpoint on success
+        checkpoint_file = "data/.checkpoint_image_imagenet_extract.json"
+        if os.path.exists(checkpoint_file):
+            os.remove(checkpoint_file)
+        
         print("✓ ImageNet subset extracted")
         return True
     else:

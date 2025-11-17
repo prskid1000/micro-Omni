@@ -31,6 +31,7 @@ Math problem: Solve for x in 2x + 5 = 15.
 
 **Download:**
 ```bash
+# ⚠️ Always use --combine to create production_corpus.txt (required for training)
 # Download with sample limit (default: 1,000,000 per dataset, ~12M total combined)
 python scripts/download_production_text.py --dataset all --combine
 
@@ -43,6 +44,7 @@ python scripts/download_production_text.py --dataset conversations --combine
 ```
 
 **Features:**
+- ✅ **`--combine` creates `production_corpus.txt`** - the file that `train_text.py` uses
 - ✅ Fine-grained resumption (checkpoints during processing)
 - ✅ Diverse knowledge: General, Conversations, Scientific, Tools
 - ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
@@ -74,6 +76,7 @@ data/audio/commonvoice/clip1.wav,"hello world"
 
 **Download:**
 ```bash
+# ⚠️ Always use --combine to create production_asr.csv and production_tts.csv (required for training)
 # Download with sample limit (default: 1,000,000 per dataset, ~6M total combined)
 python scripts/download_production_audio.py --dataset all --combine
 
@@ -86,6 +89,7 @@ python scripts/download_production_audio.py --dataset scientific --combine
 ```
 
 **Features:**
+- ✅ **`--combine` creates `production_asr.csv` and `production_tts.csv`** - files that `train_audio_enc.py` and `train_talker.py` use
 - ✅ Fine-grained resumption (checkpoints by split/speaker)
 - ✅ Diverse audio: General speech, Scientific talks, Environmental sounds
 - ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
@@ -126,6 +130,7 @@ python scripts/download_production_audio.py --dataset scientific --combine
 
 **Download:**
 ```bash
+# ⚠️ Always use --combine to create production_annotations.json (required for training)
 # Download with sample limit (default: 1,000,000 per dataset, ~7M total combined)
 python scripts/download_production_image.py --dataset all --combine
 
@@ -138,6 +143,7 @@ python scripts/download_production_image.py --dataset nature --combine
 ```
 
 **Features:**
+- ✅ **`--combine` creates `production_annotations.json`** - the file that `train_vision.py` uses
 - ✅ Fine-grained resumption (checkpoints by class)
 - ✅ Diverse images: General, Scientific/Medical, Art, Nature, Domain-specific
 - ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
@@ -211,13 +217,23 @@ python scripts/download_production_audio.py --dataset all --combine
 
 ### Quick Start (Recommended)
 
+**⚠️ Always use `--combine` flag** - it creates the final production files that training scripts require:
+
 ```bash
 # Download all modalities with sample-based limits (default: 1M per dataset)
 # Combined totals: Text ~12M samples (~1.2B tokens), Audio ~6M, Images ~7M
+# Creates: production_corpus.txt, production_asr.csv, production_tts.csv, production_annotations.json
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
 python scripts/download_production_audio.py --dataset all --combine
 ```
+
+**What `--combine` does:**
+- **Text**: Combines all `.txt` files → `data/text/production_corpus.txt`
+- **Audio**: Combines all `*_asr.csv` files → `data/audio/production_asr.csv` and `production_tts.csv`
+- **Images**: Combines all `*_annotations.json` files → `data/images/production_annotations.json`
+
+These are the files that training scripts (`train_text.py`, `train_audio_enc.py`, etc.) use.
 
 ### Advanced Options
 
@@ -265,7 +281,11 @@ All download scripts output data in the **exact format** required by training sc
 | `train_talker.py` | `tts_csv` | CSV: `text,wav` | `data/audio/production_tts.csv` |
 | `train_vision.py` | `train_manifest`<br>`image_root` | JSON array: `[{"image": "...", "caption": "..."}]` | `data/images/production_annotations.json` |
 
-**✅ No additional formatting needed!** Data is ready to use directly.
+**⚠️ Important: The `--combine` flag is REQUIRED** to create these production files:
+- Without `--combine`: You get individual dataset files (e.g., `wikipedia.txt`, `books.txt`, `librispeech_asr.csv`)
+- With `--combine`: You get the final production files (e.g., `production_corpus.txt`, `production_asr.csv`) that training scripts use
+
+**✅ No additional formatting needed!** Data is ready to use directly after combining.
 
 ---
 
@@ -655,8 +675,9 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for more detail
 
 - ✅ All scripts support fine-grained resumption (checkpoints saved during processing)
 - ✅ All outputs are in final format - no additional formatting needed
+- ✅ **`--combine` flag is REQUIRED** to create production files (`production_corpus.txt`, `production_asr.csv`, etc.) that training scripts use
 - ✅ Combined files are automatically created when using `--combine` flag
-- ✅ Sample-based limits (`--max-samples`) control dataset size (default: 5,000,000 samples, optimized for single-epoch training)
+- ✅ Sample-based limits (`--max-samples`) control dataset size (default: 1,000,000 samples per dataset)
 - ✅ Paths in CSV/JSON are relative to working directory or can be absolute
 - ✅ TTS format (`text,wav`) is automatically created from ASR data when using `--combine`
 - ✅ Audio files may be FLAC format (LibriSpeech) - training scripts handle both WAV and FLAC

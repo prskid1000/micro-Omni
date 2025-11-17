@@ -218,7 +218,7 @@ def download_librispeech_subset(state):
     return True
 
 def extract_librispeech_subset(state):
-    """Extract LibriSpeech archives"""
+    """Extract LibriSpeech archives with fine-grained resuming"""
     print("\n" + "="*60)
     print("Extracting LibriSpeech Archives")
     print("="*60)
@@ -231,6 +231,14 @@ def extract_librispeech_subset(state):
     extract_dir = "data/audio/librispeech"
     os.makedirs(extract_dir, exist_ok=True)
     
+    # Load checkpoint
+    checkpoint = load_checkpoint("librispeech_extract")
+    if checkpoint:
+        print(f"Resuming extraction: {checkpoint.get('extracted_files', [])} already extracted")
+        extracted_files = set(checkpoint.get('extracted_files', []))
+    else:
+        extracted_files = set()
+    
     tar_files = [
         "train-clean-100.tar.gz",
         "train-clean-360.tar.gz",
@@ -239,6 +247,11 @@ def extract_librispeech_subset(state):
     ]
     
     for tar_file in tar_files:
+        # Check if already extracted
+        if tar_file in extracted_files:
+            print(f"✓ {tar_file} already extracted, skipping...")
+            continue
+        
         tar_path = os.path.join(download_dir, tar_file)
         if not os.path.exists(tar_path):
             print(f"WARNING: {tar_file} not found, skipping...")
@@ -249,12 +262,29 @@ def extract_librispeech_subset(state):
             with tarfile.open(tar_path, 'r:gz') as tar:
                 tar.extractall(extract_dir)
             print(f"✓ {tar_file} extracted")
+            extracted_files.add(tar_file)
+            
+            # Save checkpoint after each file
+            save_checkpoint("librispeech_extract", {
+                'extracted_files': list(extracted_files)
+            })
+            save_state(state)
         except Exception as e:
             print(f"ERROR extracting {tar_file}: {e}")
+            # Save checkpoint on error
+            save_checkpoint("librispeech_extract", {
+                'extracted_files': list(extracted_files)
+            })
             return False
     
     state["librispeech"]["extracted"] = True
     save_state(state)
+    
+    # Clean up checkpoint on success
+    checkpoint_file = "data/.checkpoint_audio_librispeech_extract.json"
+    if os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
+    
     print("\n✓ All LibriSpeech archives extracted")
     return True
 

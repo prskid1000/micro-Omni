@@ -141,11 +141,10 @@ def download_wikipedia(state):
         print("✗ Failed to download Wikipedia")
         return False
 
-def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100):
-    """Custom Wikipedia XML parser - extracts text without external dependencies"""
+def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, checkpoint=None):
+    """Custom Wikipedia XML parser - extracts text without external dependencies with fine-grained resuming"""
     import xml.etree.ElementTree as ET
     import re
-    from multiprocessing import Pool
     
     def clean_wiki_text(text):
         """Simple wiki text cleaning"""
@@ -197,16 +196,27 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100):
             if len(cleaned) < min_text_length:
                 return None
             
-            return f"{title}\n\n{cleaned}"
+            return (title, cleaned)
         except Exception as e:
             return None
+    
+    # Load checkpoint if resuming
+    processed_titles = set()
+    article_count = 0
+    files_per_dir = 100
+    file_count = 0
+    subdir = None
+    
+    if checkpoint:
+        processed_titles = set(checkpoint.get('processed_titles', []))
+        article_count = checkpoint.get('article_count', 0)
+        file_count = checkpoint.get('file_count', 0)
+        print(f"Resuming: {article_count} articles already processed, {len(processed_titles)} unique titles")
     
     print("Parsing Wikipedia XML dump (this may take 30-60 minutes)...")
     print("Using custom XML parser (no external dependencies required)...")
     
-    articles = []
-    article_count = 0
-    max_articles = 1000000  # Limit to prevent memory issues
+    os.makedirs(output_dir, exist_ok=True)
     
     # Parse XML incrementally
     print("Reading and parsing XML file...")
@@ -217,56 +227,94 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100):
         else:
             file_handle = open(input_file, 'rb')
         
+        # Note: bz2 files don't support seek(), so we track processed titles instead
+        
         # Use iterparse for memory-efficient parsing
         context = ET.iterparse(file_handle, events=('start', 'end'))
         context = iter(context)
         event, root = next(context)
         
+        # Open output file for appending
+        if file_count > 0 or article_count > 0:
+            subdir = os.path.join(output_dir, f"AA")
+            os.makedirs(subdir, exist_ok=True)
+            output_file = os.path.join(subdir, f"wiki_{file_count:02d}")
+            out_f = open(output_file, 'a', encoding='utf-8')
+        else:
+            out_f = None
+        
+        page_count = 0
+        max_articles = 1000000  # Limit to prevent memory issues
+        
         for event, elem in tqdm(context, desc="Processing pages"):
             if event == 'end' and elem.tag.endswith('page'):
+                page_count += 1
                 article = process_page(elem)
                 if article:
-                    articles.append(article)
-                    article_count += 1
-                    if article_count >= max_articles:
-                        break
+                    title, cleaned = article
+                    # Skip if already processed
+                    if title not in processed_titles:
+                        # Open new file if needed
+                        if out_f is None or (article_count % files_per_dir == 0 and article_count > 0):
+                            if out_f:
+                                out_f.close()
+                            subdir = os.path.join(output_dir, f"AA")
+                            os.makedirs(subdir, exist_ok=True)
+                            file_count = article_count // files_per_dir
+                            output_file = os.path.join(subdir, f"wiki_{file_count:02d}")
+                            out_f = open(output_file, 'a', encoding='utf-8')
+                        
+                        out_f.write(f"{title}\n\n{cleaned}\n\n")
+                        processed_titles.add(title)
+                        article_count += 1
+                        
+                        # Save checkpoint every 1000 articles
+                        if article_count % 1000 == 0:
+                            save_checkpoint("wikipedia_extract", {
+                                'processed_titles': list(processed_titles),  # Keep all for deduplication
+                                'article_count': article_count,
+                                'file_count': file_count
+                            })
+                        
+                        if article_count >= max_articles:
+                            break
+                
                 # Clear element to free memory
                 elem.clear()
                 root.clear()
         
+        if out_f:
+            out_f.close()
         file_handle.close()
     except ET.ParseError as e:
         print(f"XML parsing error: {e}")
+        # Save checkpoint on error
+        save_checkpoint("wikipedia_extract", {
+            'processed_titles': list(processed_titles),
+            'article_count': article_count,
+            'file_count': file_count
+        })
         return False
     except Exception as e:
         print(f"Error reading file: {e}")
+        # Save checkpoint on error
+        save_checkpoint("wikipedia_extract", {
+            'processed_titles': list(processed_titles),
+            'article_count': article_count,
+            'file_count': file_count
+        })
         return False
     
-    # Write articles to files
-    print(f"Writing {len(articles)} articles to output directory...")
-    os.makedirs(output_dir, exist_ok=True)
+    # Clean up checkpoint on success
+    checkpoint_file = "data/.checkpoint_wikipedia_extract.json"
+    if os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
     
-    # Split into multiple files (similar to WikiExtractor output format)
-    files_per_dir = 100
-    file_count = 0
-    
-    for i, article in enumerate(tqdm(articles, desc="Writing articles")):
-        if i % files_per_dir == 0:
-            subdir = os.path.join(output_dir, f"AA")
-            os.makedirs(subdir, exist_ok=True)
-            file_count = 0
-        
-        output_file = os.path.join(subdir, f"wiki_{file_count:02d}")
-        with open(output_file, 'a', encoding='utf-8') as f:
-            f.write(article + '\n\n')
-        
-        file_count += 1
-    
-    print(f"✓ Extracted {len(articles)} articles")
+    print(f"✓ Extracted {article_count} articles")
     return True
 
 def extract_wikipedia_text(state):
-    """Extract text from Wikipedia XML dump using custom parser"""
+    """Extract text from Wikipedia XML dump using custom parser with fine-grained resuming"""
     print("\n" + "="*60)
     print("Extracting Text from Wikipedia Dump")
     print("="*60)
@@ -282,6 +330,11 @@ def extract_wikipedia_text(state):
         print(f"ERROR: Wikipedia dump not found at {input_file}")
         return False
     
+    # Load checkpoint for extraction
+    checkpoint = load_checkpoint("wikipedia_extract")
+    if checkpoint:
+        print(f"Resuming extraction: {checkpoint.get('article_count', 0)} articles already processed")
+    
     # Handle bz2 compression - parse directly from compressed file
     import bz2
     if input_file.endswith('.bz2'):
@@ -289,7 +342,7 @@ def extract_wikipedia_text(state):
         # We'll handle decompression in the parser
     
     try:
-        success = extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100)
+        success = extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, checkpoint=checkpoint)
         
         if success:
             state["wikipedia"]["extracted"] = True
@@ -297,7 +350,7 @@ def extract_wikipedia_text(state):
             print("✓ Wikipedia text extracted successfully")
             return True
         else:
-            print("ERROR: Extraction failed")
+            print("ERROR: Extraction failed (checkpoint saved, can resume)")
             return False
     except Exception as e:
         print(f"ERROR extracting Wikipedia: {e}")
