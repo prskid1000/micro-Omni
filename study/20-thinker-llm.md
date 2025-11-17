@@ -114,7 +114,7 @@ Token/Embeddings Input (B, T, 256)
 | **Feedforward Dim** | 1024 |
 | **Vocabulary** | 5000 tokens |
 | **Context Length** | 512-2048 |
-| **Parameters** | ~60-80M |
+| **Parameters** | ~20.32M |
 
 ## 🔑 Key Features
 
@@ -182,7 +182,7 @@ class ThinkerLM(nn.Module):
 ✅ **Causal attention** for autoregressive generation  
 ✅ **Accepts multimodal embeddings** (text + image + audio)  
 ✅ **KV caching** for fast inference  
-✅ **~60-80M parameters**
+✅ **~20.32M parameters**
 
 ---
 

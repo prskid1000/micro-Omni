@@ -451,7 +451,7 @@ Embeddings: 2 × (128 × 96) = 24,576
 Transformer layers: ~10M
 Prediction heads: 2 × (96 × 128) = 24,576
 ─────────────────────────────────────
-Total: ~10-15M parameters
+Total: ~2.24M parameters
 
 GENERATION SPECS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -662,7 +662,7 @@ Result: Complete text-to-speech system!
 | **Heads** | 3 |
 | **Codebooks** | 2 |
 | **Output** | 2 × 128 logits |
-| **Parameters** | ~10-15M |
+| **Parameters** | ~2.24M |
 
 ## 🔄 Generation Process
 

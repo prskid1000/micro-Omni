@@ -350,7 +350,7 @@ TOTAL PARAMETERS:
 Convolutional layers: ~500K
 Transformer blocks: ~9M
 Projector: ~50K
-Total: ~10-15M parameters
+Total: ~2.05M parameters
 ```
 
 ### Comparison Table
@@ -501,7 +501,7 @@ Audio encoder enabled multimodal understanding! ✓
 ✅ **Transformer encoder** captures semantic meaning  
 ✅ **Projects to 256-dim** to align with Thinker  
 ✅ **Pretrained with CTC loss** on ASR task  
-✅ **~10-15M parameters** - compact and efficient  
+✅ **~2.05M parameters** - compact and efficient  
 ✅ **Enables multimodal** audio+text+image understanding
 
 ---
@@ -541,7 +541,7 @@ Audio encoder enabled multimodal understanding! ✓
 | **Dimension** | 192 |
 | **Layers** | 4 |
 | **Heads** | 3 |
-| **Parameters** | ~10-15M |
+| **Parameters** | ~2.05M |
 
 ## 🎓 Training
 

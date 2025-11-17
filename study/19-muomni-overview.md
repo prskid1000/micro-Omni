@@ -52,7 +52,7 @@
 Role: Central reasoning engine
 Type: Transformer decoder (GPT-style)
 Size: 256-dim, 4 layers, 4 heads
-Params: ~60-80M
+Params: ~20.32M
 
 Input: Multimodal tokens (text + image + audio)
 Output: Next-token predictions
@@ -181,21 +181,20 @@ SCENARIO: Image QA
 
 | Component | Parameters | Percentage |
 |-----------|-----------|-----------|
-| **Thinker** | ~60-80M | ~55% |
-| **Audio Encoder** | ~10-15M | ~10% |
-| **Vision Encoder** | ~15-20M | ~15% |
-| **Talker** | ~10-15M | ~10% |
-| **RVQ Codec** | ~100K | ~0.1% |
-| **Projectors** | ~80K | ~0.1% |
-| **Token Embeddings** | ~1.3M | ~1% |
-| **TOTAL** | **~120-140M** | **100%** |
+| **Thinker** | ~20.32M | ~79.2% |
+| **Audio Encoder** | ~2.05M | ~8.0% |
+| **Vision Encoder** | ~914K | ~3.6% |
+| **Talker** | ~2.24M | ~8.7% |
+| **RVQ Codec** | ~49K | ~0.2% |
+| **Projectors** | ~82K | ~0.3% |
+| **TOTAL** | **~25.65M** | **100%** |
 
 ```
 For comparison:
-- GPT-3: 175 **billion** parameters (1250x larger!)
-- LLaMA-7B: 7 **billion** parameters (50x larger)
-- BERT-base: 110 **million** parameters (similar size)
-- μOmni: 140 **million** parameters ✓
+- GPT-3: 175 **billion** parameters (6800x larger!)
+- LLaMA-7B: 7 **billion** parameters (270x larger)
+- BERT-base: 110 **million** parameters (4.3x larger)
+- μOmni: 25.65 **million** parameters ✓
 ```
 
 ---
@@ -393,7 +392,7 @@ Output: output.wav (synthesized speech)
 
 ## 💡 Key Takeaways
 
-✅ **μOmni** = Tiny multimodal AI (120-140M params)  
+✅ **μOmni** = Tiny multimodal AI (25.65M params)  
 ✅ **Thinker** = Central decoder-only LLM (GPT-style)  
 ✅ **Specialized encoders** for each modality  
 ✅ **Hybrid fusion** via projected embeddings  
@@ -415,7 +414,7 @@ Output: output.wav (synthesized speech)
 <summary>📝 Answers</summary>
 
 1. Thinker (LLM), Vision Encoder, Audio Encoder, Talker, RVQ Codec
-2. ~120-140 million parameters
+2. ~25.65 million parameters
 3. 256 dimensions (d_model of Thinker)
 4. Decoder-only (autoregressive/causal)
 5. Hybrid fusion (specialized encoders → project → unified processing)

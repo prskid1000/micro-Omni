@@ -92,7 +92,7 @@ response = model.chat(
 
 ### 1. Larger Scale
 
-**Current:** 60-80M parameters  
+**Current:** 25.65M parameters  
 **Target:** 1B-7B parameters
 - Requires: Multi-GPU training
 - Benefit: Significantly better quality

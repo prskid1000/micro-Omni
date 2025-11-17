@@ -508,7 +508,7 @@ Patch embedding: ~100K
 Positional embeddings: ~25K
 Transformer blocks: ~14M
 Projector: ~33K
-Total: ~15-20M parameters
+Total: ~914K parameters
 ```
 
 ### Comparison Table
@@ -643,7 +643,7 @@ With vision encoder:
 ✅ **Transformer encoder** captures visual relationships  
 ✅ **Projects to 256-dim** to align with Thinker  
 ✅ **Single embedding** represents entire image  
-✅ **~15-20M parameters** - compact and efficient  
+✅ **~914K parameters** - compact and efficient  
 ✅ **Enables multimodal** text+image+audio understanding
 
 ---
@@ -683,7 +683,7 @@ With vision encoder:
 | **Patches** | 196 + 1 CLS |
 | **Dimension** | 128 |
 | **Layers** | 4 |
-| **Parameters** | ~15-20M |
+| **Parameters** | ~914K |
 
 ## 🎓 Training
 

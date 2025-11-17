@@ -510,7 +510,7 @@ Status: OPTIONAL, EXPERIMENTAL
 Default: OFF (uses standard dense FFN)
 
 Reasons:
-1. μOmni is small (120-140M params)
+1. μOmni is small (25.65M params)
    → MoE overhead not worth it at this scale
    
 2. Educational focus

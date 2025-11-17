@@ -289,7 +289,9 @@ This progressive approach ensures stable, effective learning!
 | **D** | RVQ + Talker | Speech Gen | Audio (TTS) | MSE + CE | Recon Error | 10-15h | None (RVQ), Then Talker needs RVQ |
 | **E** | All (Joint) | Multimodal QA | Mixed Modalities | Cross-Entropy | Task Acc | 6-12h | A, B, C, D |
 
-**Total Estimated Time: 40-60 hours** on single 12GB GPU
+**Total Estimated Time: 40-60 hours** on single 12GB GPU (tiny model, 25.65M params)
+
+**Note:** Training time scales with model size. See "Model Scaling" section below for larger models.
 
 ---
 
@@ -401,6 +403,116 @@ python scripts/update_configs_from_data.py --dry-run
 - When switching between different dataset sizes
 
 See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
+
+---
+
+## 📈 Model Scaling
+
+### Current Configuration (Tiny)
+
+**Total: 25.65M parameters** - Fits on 12GB GPU
+
+| Component | Config | Parameters |
+|-----------|--------|------------|
+| **Thinker** | d_model=256, n_layers=4, n_heads=4, d_ff=1024 | 20.32M |
+| **Audio Encoder** | d_model=192, n_layers=4, n_heads=3, d_ff=768 | 2.05M |
+| **Vision Encoder** | d_model=128, n_layers=4, n_heads=2, d_ff=512 | 914K |
+| **Talker** | d_model=192, n_layers=4, n_heads=3, d_ff=768 | 2.24M |
+
+### Scaling to Larger Models
+
+**Moderate Scale (100-200M params):**
+- **GPU:** 24GB VRAM
+- **Changes:** 2x dimensions, 2x layers
+- **Example Thinker:** d_model=512, n_layers=8, n_heads=8, d_ff=2048
+- **Training Time:** ~80-120 hours
+- **Use Case:** Better quality while staying accessible
+
+**Large Scale (500M-1B params):**
+- **GPU:** 40GB+ VRAM (A100) or Multi-GPU
+- **Changes:** 3-4x dimensions, 4x layers
+- **Example Thinker:** d_model=768, n_layers=16, n_heads=12, d_ff=3072
+- **Training Time:** ~200-400 hours
+- **Use Case:** Production-quality performance
+
+**Very Large Scale (1B-7B params):**
+- **GPU:** Multi-GPU (4-8x A100) or TPU
+- **Changes:** 4x dimensions, 8x layers, enable MoE
+- **Example Thinker:** d_model=1024, n_layers=32, n_heads=16, d_ff=4096, use_moe=true
+- **Training Time:** ~1000+ hours
+- **Use Case:** Research, SOTA performance
+
+### Key Parameters to Scale
+
+| Parameter | Impact | Scaling Rule |
+|-----------|--------|--------------|
+| **d_model** | Quadratic on attention, linear on FFN | 2x d_model ≈ 4x params |
+| **n_layers** | Linear increase | 2x layers = 2x params |
+| **d_ff** | Linear on FFN | Usually 4x d_model |
+| **n_heads** | Minimal | Usually d_model / 64 |
+| **vocab_size** | Only embedding layer | Linear increase |
+
+### Memory Requirements
+
+**Training Memory Formula:**
+```
+Memory ≈ 4 × (model_params × 4 bytes) + (batch_size × ctx_len × d_model × 4 bytes)
+```
+
+**Examples:**
+- **Tiny (25.65M):** ~12GB VRAM ✓
+- **Moderate (150M):** ~24GB VRAM ✓
+- **Large (700M):** ~40GB+ VRAM (A100)
+- **Very Large (3B):** Multi-GPU required
+
+### Scaling Process
+
+1. **Create new config files:**
+   ```bash
+   cp configs/thinker_tiny.json configs/thinker_medium.json
+   # Edit parameters in new config
+   ```
+
+2. **Adjust training parameters:**
+   - Reduce `batch_size` if OOM
+   - Increase `gradient_accumulation_steps`
+   - Increase `max_steps` and `warmup_steps`
+   - Always use `use_amp: true`, `use_flash: true`
+
+3. **Update projector dimensions** (for Stage E):
+   - When scaling Thinker's d_model, update projectors in `sft_omni.py`
+   - Vision: `Linear(128 → new_d_model)`
+   - Audio: `Linear(192 → new_d_model)`
+
+4. **Train with new configs:**
+   ```bash
+   python train_text.py --config configs/thinker_medium.json
+   # ... repeat for all stages
+   ```
+
+### Important Considerations
+
+- **Memory Management:** Use gradient checkpointing, reduce batch size, use gradient accumulation
+- **Training Time:** Larger models need 10-100x more training time
+- **Data Requirements:** Larger models may need 100GB+ per modality (vs current 25-30GB)
+- **Learning Rate:** Consider scaling: `lr = base_lr * sqrt(d_model / 256)`
+
+### Recommended Scaling Path
+
+1. **Start Small:** Get tiny model (25.65M) working perfectly
+2. **Scale to Medium (100-200M):** Test quality improvements with 24GB GPU
+3. **Evaluate:** Is quality good enough?
+4. **If Not:** Scale to Large (500M-1B) with multi-GPU
+5. **Production:** Consider 1B-7B for real applications
+
+**Quick Reference:**
+
+| Scale | Total Params | VRAM | Training Time |
+|-------|--------------|------|---------------|
+| **Tiny** | 25.65M | 12GB | 40-60 hours |
+| **Medium** | ~150M | 24GB | 80-120 hours |
+| **Large** | ~700M | 40GB+ | 200-400 hours |
+| **XL** | ~3B | Multi-GPU | 1000+ hours |
 
 ---
 

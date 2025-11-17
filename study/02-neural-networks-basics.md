@@ -409,17 +409,17 @@ print(sum(p.numel() for p in layer.parameters()))
 
 | Component | Approximate Parameters |
 |-----------|----------------------|
-| Thinker (LLM) | ~60-80M |
-| Audio Encoder | ~10-15M |
-| Vision Encoder | ~15-20M |
-| Talker | ~10-15M |
-| RVQ Codec | ~100K |
-| **Total** | **~120-140M** |
+| Thinker (LLM) | ~20.32M |
+| Audio Encoder | ~2.05M |
+| Vision Encoder | ~914K |
+| Talker | ~2.24M |
+| RVQ Codec | ~49K |
+| **Total** | **~25.65M** |
 
 💡 For comparison:
 - GPT-3: 175 **billion** parameters
 - LLaMA 7B: 7 **billion** parameters
-- μOmni: 140 **million** parameters (1000x smaller!)
+- μOmni: 25.65 **million** parameters (6800x smaller!)
 
 ---
 

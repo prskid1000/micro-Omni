@@ -648,7 +648,7 @@ d_ff:          1024 (feedforward dimension)
 Context:       512-2048 tokens
 RoPE theta:    10000
 
-Total params:  ~60-80M
+Total params:  ~20.32M
 
 Components:
 ✅ Multi-head self-attention (with GQA option)

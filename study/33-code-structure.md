@@ -10,10 +10,10 @@
 μOmni/
 ├── omni/                      # Core modules
 │   ├── __init__.py
-│   ├── thinker.py            # Decoder-only LLM (60-80M params)
-│   ├── audio_encoder.py      # AuT-Tiny (10-15M params)
-│   ├── vision_encoder.py     # ViT-Tiny (15-20M params)
-│   ├── talker.py             # Speech generator (10-15M params)
+│   ├── thinker.py            # Decoder-only LLM (20.32M params)
+│   ├── audio_encoder.py      # AuT-Tiny (2.05M params)
+│   ├── vision_encoder.py     # ViT-Tiny (914K params)
+│   ├── talker.py             # Speech generator (2.24M params)
 │   ├── codec.py              # RVQ + Griffin-Lim vocoder
 │   ├── tokenizer.py          # BPE tokenizer wrapper
 │   ├── utils.py              # RMSNorm, RoPE, helpers
