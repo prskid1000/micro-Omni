@@ -521,13 +521,18 @@ def download_ljspeech(state, max_samples=1000000):
                 writer.writeheader()
                 writer.writerows(rows)
             
-            state["ljspeech"]["downloaded"] = True
-            state["ljspeech"]["extracted"] = True
-            state["ljspeech"]["converted"] = True
-            state["ljspeech"]["samples"] = len(rows)
+            # Only mark as downloaded if we reached max_samples
+            if count >= max_samples:
+                state["ljspeech"]["downloaded"] = True
+                state["ljspeech"]["extracted"] = True
+                state["ljspeech"]["converted"] = True
+            state["ljspeech"]["samples"] = count
             save_state(state)
             
-            print(f"✓ Created CSV with {len(rows):,} entries")
+            if count >= max_samples:
+                print(f"✓ Created CSV with {count:,} entries")
+            else:
+                print(f"⚠ Created CSV with {count:,} entries (target: {max_samples:,})")
             return True
     
     return False

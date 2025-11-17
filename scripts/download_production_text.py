@@ -21,6 +21,8 @@ from tqdm import tqdm
 import bz2
 import gzip
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # State file to track progress
 STATE_FILE = "data/.text_download_state.json"
@@ -795,17 +797,24 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
             save_state(state)
             return False
     
-    state[dataset_name]["downloaded"] = True
-    state[dataset_name]["converted"] = True
+    # Only mark as downloaded if we reached max_samples
+    if count >= max_samples:
+        state[dataset_name]["downloaded"] = True
+        state[dataset_name]["converted"] = True
     state[dataset_name]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint file (state file only, actual data is never deleted)
+    # Clean up checkpoint file (only if reached max_samples)
     checkpoint_file = f"data/.checkpoint_{dataset_name}.json"
-    if os.path.exists(checkpoint_file):
+    if os.path.exists(checkpoint_file) and count >= max_samples:
         os.remove(checkpoint_file)
     
-    print(f"\n✓ Downloaded {count:,} samples to {output_file}")
+    if count >= max_samples:
+        print(f"\n✓ Downloaded {count:,} samples to {output_file}")
+    else:
+        print(f"\n⚠ Downloaded {count:,} samples (target: {max_samples:,})")
+        print("   Data source may be exhausted. You can resume by running the script again.")
+    
     return True
 
 def extract_conversation_text(item):
@@ -1097,17 +1106,24 @@ def download_arxiv_by_category(state, category, category_key, max_samples=100000
                 save_state(state)
                 break
     
-    state[category_key]["downloaded"] = True
-    state[category_key]["converted"] = True
+    # Only mark as downloaded if we reached max_samples
+    if count >= max_samples:
+        state[category_key]["downloaded"] = True
+        state[category_key]["converted"] = True
     state[category_key]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint file (state file only, actual data is never deleted)
+    # Clean up checkpoint file (only if reached max_samples)
     checkpoint_file = f"data/.checkpoint_{category_key}.json"
-    if os.path.exists(checkpoint_file):
+    if os.path.exists(checkpoint_file) and count >= max_samples:
         os.remove(checkpoint_file)
     
-    print(f"\n✓ Downloaded {count:,} {category} papers to {output_file}")
+    if count >= max_samples:
+        print(f"\n✓ Downloaded {count:,} {category} papers to {output_file}")
+    else:
+        print(f"\n⚠ Downloaded {count:,} {category} papers (target: {max_samples:,})")
+        print("   ArXiv API may have rate limits or data exhausted. You can resume by running the script again.")
+    
     return True
 
 def download_pubmed(state, max_samples=500000):
@@ -1268,17 +1284,24 @@ def download_pubmed(state, max_samples=500000):
             save_state(state)
             return False
     
-    state["pubmed"]["downloaded"] = True
-    state["pubmed"]["converted"] = True
+    # Only mark as downloaded if we reached max_samples
+    if count >= max_samples:
+        state["pubmed"]["downloaded"] = True
+        state["pubmed"]["converted"] = True
     state["pubmed"]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint file (state file only, actual data is never deleted)
+    # Clean up checkpoint file (only if reached max_samples)
     checkpoint_file = "data/.checkpoint_pubmed.json"
-    if os.path.exists(checkpoint_file):
+    if os.path.exists(checkpoint_file) and count >= max_samples:
         os.remove(checkpoint_file)
     
-    print(f"\n✓ Downloaded {count:,} PubMed abstracts to {output_file}")
+    if count >= max_samples:
+        print(f"\n✓ Downloaded {count:,} PubMed abstracts to {output_file}")
+    else:
+        print(f"\n⚠ Downloaded {count:,} PubMed abstracts (target: {max_samples:,})")
+        print("   PubMed API may have rate limits or data exhausted. You can resume by running the script again.")
+    
     return True
 
 def download_math_datasets(state, max_samples=100000):
@@ -1410,12 +1433,19 @@ def download_math_datasets(state, max_samples=100000):
                     except Exception as e:
                         continue
     
-    state["math_datasets"]["downloaded"] = True
-    state["math_datasets"]["converted"] = True
+    # Only mark as downloaded if we reached max_samples
+    if count >= max_samples:
+        state["math_datasets"]["downloaded"] = True
+        state["math_datasets"]["converted"] = True
     state["math_datasets"]["samples"] = count
     save_state(state)
     
-    print(f"\n✓ Downloaded {count:,} math problems to {output_file}")
+    if count >= max_samples:
+        print(f"\n✓ Downloaded {count:,} math problems to {output_file}")
+    else:
+        print(f"\n⚠ Downloaded {count:,} math problems (target: {max_samples:,})")
+        print("   Data source may be exhausted. You can resume by running the script again.")
+    
     return True
 
 def download_scienceqa(state, max_samples=50000):
@@ -1508,8 +1538,51 @@ def download_scienceqa(state, max_samples=50000):
         print("ERROR: Failed to download ScienceQA")
         return False
 
+def _download_single_book(book_id, base_url, processed_books_set):
+    """Download and process a single book. Returns (book_id, book_text, passage_count, success)"""
+    # Try different file formats
+    for suffix in ['-0.txt', '-8.txt', '.txt']:
+        url = f"{base_url}/{book_id}/{book_id}{suffix}"
+        try:
+            response = requests.get(url, timeout=30, stream=True)
+            if response.status_code == 200:
+                # Read and process book
+                content = response.text
+                # Remove Project Gutenberg headers/footers
+                lines = content.split('\n')
+                start_idx_text = 0
+                end_idx_text = len(lines)
+                
+                # Find start (skip header)
+                for i, line in enumerate(lines):
+                    if 'START OF THIS PROJECT GUTENBERG' in line.upper() or 'START OF THE PROJECT GUTENBERG' in line.upper():
+                        start_idx_text = i + 1
+                        break
+                
+                # Find end (skip footer)
+                for i in range(len(lines)-1, -1, -1):
+                    if 'END OF THIS PROJECT GUTENBERG' in lines[i].upper() or 'END OF THE PROJECT GUTENBERG' in lines[i].upper():
+                        end_idx_text = i
+                        break
+                
+                book_text = '\n'.join(lines[start_idx_text:end_idx_text])
+                
+                # Count passages by double newlines (filter out empty passages for accurate count)
+                # Split by \n\n and count non-empty passages
+                passages = [p.strip() for p in book_text.split('\n\n') if p.strip()]
+                passage_count = len(passages)
+                
+                if len(book_text) > 0:
+                    return (book_id, book_text, passage_count, True)
+                else:
+                    return (book_id, '', 0, False)
+        except Exception as e:
+            continue
+    
+    return (book_id, '', 0, False)
+
 def download_books(state, max_samples=500000):
-    """Download books corpus from Project Gutenberg with fine-grained resuming"""
+    """Download books corpus from Project Gutenberg with parallel downloads"""
     print("\n" + "="*60)
     print("Downloading Books Corpus")
     print("="*60)
@@ -1522,7 +1595,7 @@ def download_books(state, max_samples=500000):
     
     print("Downloading books from Project Gutenberg...")
     print("NOTE: Project Gutenberg provides free books in plain text format.")
-    print("Downloading random books until sample limit is reached...")
+    print("Downloading 15 books in parallel until sample limit is reached...")
     
     output_file = "data/text/books.txt"
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -1546,7 +1619,6 @@ def download_books(state, max_samples=500000):
     base_url = "https://www.gutenberg.org/files"
     
     # Generate random book IDs (Project Gutenberg has books from ID 1 to ~70,000+)
-    # We'll try random IDs and skip ones we've already processed
     import random
     
     # Start from a random point if resuming, otherwise start from 1
@@ -1558,120 +1630,125 @@ def download_books(state, max_samples=500000):
     # Create progress bar that tracks passages
     pbar = tqdm(total=max_samples, desc="Downloading passages", unit="passage", initial=count)
     
-    consecutive_failures = 0
-    max_consecutive_failures = 100  # Stop trying if 100 consecutive failures
+    # Thread-safe locks for file writing and state updates
+    file_lock = threading.Lock()
+    state_lock = threading.Lock()
+    count_lock = threading.Lock()  # Lock for count variable
+    
+    # Use ThreadPoolExecutor for parallel downloads (15 workers)
+    max_workers = 15
     
     with open(output_file, mode, encoding='utf-8') as f:
-        while count < max_samples:
-            # Try random book IDs, but also try sequential to find available books
-            # Mix of sequential and random to find books efficiently
-            if random.random() < 0.3:  # 30% chance to try random ID
-                book_id = random.randint(1, 70000)
-            else:
-                book_id = current_id
-                current_id += 1
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Keep track of submitted tasks
+            futures = {}
+            consecutive_failures = 0
+            max_consecutive_failures = 100
             
-            # Skip if already processed
-            if book_id in processed_books:
-                continue
-            
-            try:
-                # Try different file formats
-                downloaded = False
-                for suffix in ['-0.txt', '-8.txt', '.txt']:
-                    url = f"{base_url}/{book_id}/{book_id}{suffix}"
+            while True:
+                # Check count with lock
+                with count_lock:
+                    if count >= max_samples:
+                        break
+                # Submit new tasks if we have room and haven't reached max_samples
+                with count_lock:
+                    can_continue = count < max_samples
+                while len(futures) < max_workers and can_continue:
+                    # Try random book IDs, but also try sequential to find available books
+                    if random.random() < 0.3:  # 30% chance to try random ID
+                        book_id = random.randint(1, 70000)
+                    else:
+                        book_id = current_id
+                        current_id += 1
+                    
+                    # Skip if already processed
+                    if book_id in processed_books:
+                        continue
+                    
+                    # Submit download task
+                    future = executor.submit(_download_single_book, book_id, base_url, processed_books)
+                    futures[future] = book_id
+                
+                # Process completed downloads
+                for future in as_completed(futures):
+                    book_id = futures.pop(future)
                     try:
-                        response = requests.get(url, timeout=30, stream=True)
-                        if response.status_code == 200:
-                            # Read and process book
-                            content = response.text
-                            # Remove Project Gutenberg headers/footers
-                            lines = content.split('\n')
-                            start_idx_text = 0
-                            end_idx_text = len(lines)
+                        result_book_id, book_text, passage_count, success = future.result()
+                        
+                        if success and len(book_text) > 0:
+                            # Thread-safe write and count update
+                            with file_lock, count_lock:
+                                # Check if we've reached max_samples before writing
+                                if count >= max_samples:
+                                    continue
+                                
+                                # Write entire book content (thread-safe)
+                                f.write(book_text + '\n\n')
+                                f.flush()
+                                
+                                # Update count (thread-safe)
+                                prev_count = count
+                                count += passage_count
+                                
+                                # Update progress bar (cap at max_samples)
+                                update_amount = min(passage_count, max_samples - prev_count)
+                                if update_amount > 0:
+                                    pbar.update(update_amount)
+                                
+                                # Update postfix with current count
+                                current_count = count
                             
-                            # Find start (skip header)
-                            for i, line in enumerate(lines):
-                                if 'START OF THIS PROJECT GUTENBERG' in line.upper() or 'START OF THE PROJECT GUTENBERG' in line.upper():
-                                    start_idx_text = i + 1
-                                    break
+                            # Update state (outside file lock for better performance)
+                            with state_lock:
+                                processed_books.add(book_id)
+                                pbar.set_postfix({'books': len(processed_books), 'passages': min(current_count, max_samples)})
                             
-                            # Find end (skip footer)
-                            for i in range(len(lines)-1, -1, -1):
-                                if 'END OF THIS PROJECT GUTENBERG' in lines[i].upper() or 'END OF THE PROJECT GUTENBERG' in lines[i].upper():
-                                    end_idx_text = i
-                                    break
-                            
-                            book_text = '\n'.join(lines[start_idx_text:end_idx_text])
-                            
-                            # Split into paragraphs
-                            paragraphs = book_text.split('\n\n')
-                            passages_added = 0
-                            for para in paragraphs:
-                                para = para.strip()
-                                if len(para) > 200:
-                                    f.write(para + '\n\n')
-                                    f.flush()  # Flush for fine-grained resumption
-                                    prev_count = count
-                                    count += 1
-                                    passages_added += 1
-                                    
-                                    # Update progress bar
-                                    update_amount = min(1, max_samples - prev_count)
-                                    if update_amount > 0:
-                                        pbar.update(update_amount)
-                                    pbar.set_postfix({'books': len(processed_books), 'passages': min(count, max_samples)})
-                                    
-                                    # Save checkpoint every 50 passages
-                                    if count % 50 == 0:
+                            # Save checkpoint every 50 passages (thread-safe)
+                            with count_lock:
+                                if count % 50 == 0:
+                                    with state_lock:
                                         save_checkpoint("books", {
                                             'count': count,
                                             'last_tried_id': book_id,
                                             'processed_books': list(processed_books)
                                         })
-                                    
-                                    if count >= max_samples:
-                                        break
                             
-                            if passages_added > 0:
+                            consecutive_failures = 0
+                        else:
+                            # Mark as tried to avoid retrying
+                            with state_lock:
                                 processed_books.add(book_id)
-                                downloaded = True
-                                consecutive_failures = 0  # Reset failure counter on success
+                            consecutive_failures += 1
                             
-                            if count >= max_samples:
-                                break
-                            break  # Successfully downloaded this book
                     except Exception as e:
-                        continue
-                
-                if downloaded:
-                    consecutive_failures = 0
-                else:
-                    consecutive_failures += 1
-                    # Mark as tried to avoid infinite loops
-                    processed_books.add(book_id)
+                        # Mark as tried on error
+                        with state_lock:
+                            processed_books.add(book_id)
+                        consecutive_failures += 1
                 
                 # If too many consecutive failures, try more random IDs
                 if consecutive_failures >= max_consecutive_failures:
                     print(f"\nWarning: {max_consecutive_failures} consecutive failures. Trying more random IDs...")
                     consecutive_failures = 0
-                    # Jump to a random range
                     current_id = random.randint(1, 70000)
                 
-                if count >= max_samples:
-                    break
-                    
-            except Exception as e:
-                consecutive_failures += 1
-                continue
+                # Check if we should continue
+                with count_lock:
+                    if count >= max_samples:
+                        break
+                    can_continue = count < max_samples
     
     pbar.close()
     
+    # Get final count (thread-safe)
+    with count_lock:
+        final_count = count
+    
     # Only mark as downloaded if we reached max_samples
-    if count >= max_samples:
+    if final_count >= max_samples:
         state["books"]["downloaded"] = True
         state["books"]["converted"] = True
-    state["books"]["samples"] = count
+    state["books"]["samples"] = final_count
     save_state(state)
     
     # Clean up checkpoint file on success (only if reached max_samples)

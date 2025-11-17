@@ -210,13 +210,18 @@ def download_coco(state, max_samples=1000000):
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(annotations, f, indent=2, ensure_ascii=False)
         
-        state["coco"]["downloaded"] = True
-        state["coco"]["extracted"] = True
-        state["coco"]["converted"] = True
-        state["coco"]["samples"] = len(annotations)
+        # Only mark as downloaded if we reached max_samples
+        if count >= max_samples:
+            state["coco"]["downloaded"] = True
+            state["coco"]["extracted"] = True
+            state["coco"]["converted"] = True
+        state["coco"]["samples"] = count
         save_state(state)
         
-        print(f"✓ Created annotations with {len(annotations):,} images")
+        if count >= max_samples:
+            print(f"✓ Created annotations with {count:,} images")
+        else:
+            print(f"⚠ Created annotations with {count:,} images (target: {max_samples:,})")
         return True
     
     return False
@@ -274,12 +279,17 @@ def download_food101(state, max_samples=1000000):
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(annotations, f, indent=2, ensure_ascii=False)
         
-        state["food101"]["downloaded"] = True
-        state["food101"]["converted"] = True
-        state["food101"]["samples"] = len(annotations)
+        # Only mark as downloaded if we reached max_samples
+        if count >= max_samples:
+            state["food101"]["downloaded"] = True
+            state["food101"]["converted"] = True
+        state["food101"]["samples"] = count
         save_state(state)
         
-        print(f"✓ Created annotations with {len(annotations):,} images")
+        if count >= max_samples:
+            print(f"✓ Created annotations with {count:,} images")
+        else:
+            print(f"⚠ Created annotations with {count:,} images (target: {max_samples:,})")
         return True
     
     return False
@@ -363,13 +373,18 @@ def download_cifar10(state, max_samples=1000000):
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(annotations, f, indent=2, ensure_ascii=False)
         
-        state["cifar10"]["downloaded"] = True
-        state["cifar10"]["extracted"] = True
-        state["cifar10"]["converted"] = True
-        state["cifar10"]["samples"] = len(annotations)
+        # Only mark as downloaded if we reached max_samples
+        if count >= max_samples:
+            state["cifar10"]["downloaded"] = True
+            state["cifar10"]["extracted"] = True
+            state["cifar10"]["converted"] = True
+        state["cifar10"]["samples"] = count
         save_state(state)
         
-        print(f"✓ Created annotations with {len(annotations):,} images")
+        if count >= max_samples:
+            print(f"✓ Created annotations with {count:,} images")
+        else:
+            print(f"⚠ Created annotations with {count:,} images (target: {max_samples:,})")
         return True
     
     return False
@@ -454,13 +469,18 @@ def download_cifar100(state, max_samples=1000000):
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(annotations, f, indent=2, ensure_ascii=False)
         
-        state["cifar100"]["downloaded"] = True
-        state["cifar100"]["extracted"] = True
-        state["cifar100"]["converted"] = True
-        state["cifar100"]["samples"] = len(annotations)
+        # Only mark as downloaded if we reached max_samples
+        if count >= max_samples:
+            state["cifar100"]["downloaded"] = True
+            state["cifar100"]["extracted"] = True
+            state["cifar100"]["converted"] = True
+        state["cifar100"]["samples"] = count
         save_state(state)
         
-        print(f"✓ Created annotations with {len(annotations):,} images")
+        if count >= max_samples:
+            print(f"✓ Created annotations with {count:,} images")
+        else:
+            print(f"⚠ Created annotations with {count:,} images (target: {max_samples:,})")
         return True
     
     return False
