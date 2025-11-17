@@ -4,12 +4,8 @@ Target: Under 30GB, millions of samples
 Includes diverse knowledge: General images, Scientific/Medical, Art, Architecture, Nature, Educational
 
 Supports:
-- General Images: ImageNet, Open Images, LAION
-- Scientific/Medical: Medical images, Scientific diagrams, Charts
-- Art & Culture: Art images, Historical photos, Architecture
-- Nature & Environment: Natural scenes, Animals, Plants
-- Educational: Textbook images, Diagrams, Infographics
-- Domain-specific: Food, Fashion, Sports, Technology
+- General Images: COCO
+- Domain-specific: Food, CIFAR datasets
 """
 
 import os
@@ -34,28 +30,12 @@ def load_state():
             return json.load(f)
     return {
         # General Images
-        "imagenet": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "openimages": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "laion": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        
-        # Scientific/Medical
-        "chestxray": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "scientific_figures": {"downloaded": False, "converted": False, "samples": 0},
-        
-        # Art & Culture
-        "wikiart": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "places365": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        
-        # Nature & Environment
-        "inat2021": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "nabirds": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        
-        # Educational
-        "textbook_figures": {"downloaded": False, "converted": False, "samples": 0},
+        "coco": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
         
         # Domain-specific
         "food101": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "stanford_cars": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
+        "cifar100": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
+        "cifar10": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
     }
 
 def save_state(state):
@@ -98,13 +78,9 @@ def get_image_dataset_size(ds_name):
     """Get actual disk size of image dataset folder"""
     # Map dataset names to their actual data folders
     folder_map = {
-        "imagenet": "data/images/imagenet_subset",
         "food101": "data/images/food101",
         "openimages": "data/images/openimages",  # If exists
         "laion": "data/images/laion",  # If exists
-        "stanford_cars": "data/images/stanford_cars",  # If exists
-        "places365": "data/images/places365",  # If exists
-        "inat2021": "data/images/inat2021",  # If exists
     }
     
     folder_path = folder_map.get(ds_name)
@@ -148,299 +124,92 @@ def download_file(url, output_path, resume=True):
         print(f"Error downloading {url}: {e}")
         return False
 
-def download_imagenet_subset(state):
-    """Download ImageNet-1K subset (requires registration)"""
+def download_coco(state, max_samples=1000000):
+    """Download COCO 2017 dataset - large-scale object detection and captioning"""
     print("\n" + "="*60)
-    print("Downloading ImageNet-1K Subset")
+    print("Downloading COCO 2017 Dataset")
     print("="*60)
     
-    if state["imagenet"]["downloaded"]:
-        print("ImageNet already downloaded, skipping...")
+    if state["coco"]["downloaded"]:
+        print("COCO already downloaded, skipping...")
         return True
     
-    print("NOTE: ImageNet requires registration at https://www.image-net.org/")
-    print("After registration, you'll need to download:")
-    print("  1. ILSVRC2012_img_train.tar (~138GB)")
-    print("  2. ILSVRC2012_img_val.tar (~6.3GB)")
-    print("  3. ILSVRC2012_devkit_t12.tar.gz (~2.5MB)")
-    print("\nFor production use under 30GB, we recommend:")
-    print("  - Download only a subset of classes (e.g., 100-200 classes)")
-    print("  - Or use ImageNet-21K-P subset")
-    print("\nThis script will help you prepare a subset once downloaded.")
-    
-    # Check if user has already downloaded
-    download_dir = "data/image_downloads/imagenet"
+    # COCO 2017 has direct download URLs
+    base_url = "http://images.cocodataset.org"
+    download_dir = "data/image_downloads/coco"
     os.makedirs(download_dir, exist_ok=True)
     
-    train_tar = os.path.join(download_dir, "ILSVRC2012_img_train.tar")
-    val_tar = os.path.join(download_dir, "ILSVRC2012_img_val.tar")
+    # COCO 2017 train images (~18GB, 118k images)
+    # We'll download train2017.zip for ~50GB total image budget
+    url = f"{base_url}/zips/train2017.zip"
+    zip_file = os.path.join(download_dir, "train2017.zip")
     
-    if os.path.exists(train_tar) or os.path.exists(val_tar):
-        print(f"\nFound ImageNet archives in {download_dir}")
-        print("Proceeding with extraction and subset creation...")
-        state["imagenet"]["downloaded"] = True
-        save_state(state)
-        return True
-    else:
-        print(f"\nImageNet archives not found in {download_dir}")
-        print("Please download ImageNet manually and place archives in:")
-        print(f"  {download_dir}")
-        print("\nOr use --skip-download and manually extract, then run with --skip-extract")
-        return False
-
-def extract_imagenet_subset(state):
-    """Extract and create ImageNet subset with fine-grained resuming"""
-    print("\n" + "="*60)
-    print("Extracting ImageNet Subset")
-    print("="*60)
+    print("Downloading COCO 2017 train images (~18GB, 118k images)...")
+    print("This may take 1-2 hours depending on your connection...")
     
-    if state["imagenet"]["extracted"]:
-        print("ImageNet already extracted, skipping...")
-        return True
-    
-    download_dir = "data/image_downloads/imagenet"
-    extract_dir = "data/images/imagenet_subset"
-    os.makedirs(extract_dir, exist_ok=True)
-    
-    # Load checkpoint
-    checkpoint = load_checkpoint("imagenet_extract")
-    if checkpoint:
-        print(f"Resuming extraction: {len(checkpoint.get('extracted_classes', []))} classes already extracted")
-        extracted_classes = set(checkpoint.get('extracted_classes', []))
-    else:
-        extracted_classes = set()
-    
-    train_tar = os.path.join(download_dir, "ILSVRC2012_img_train.tar")
-    val_tar = os.path.join(download_dir, "ILSVRC2012_img_val.tar")
-    
-    # If we have the full ImageNet, extract a subset
-    # Otherwise, check if we can download a pre-made subset
-    if os.path.exists(train_tar):
-        print("Extracting ImageNet train set (this will take 30-60 minutes)...")
-        print("Creating subset (200 classes)...")
+    if download_file(url, zip_file, resume=True):
+        extract_dir = "data/images/coco"
+        os.makedirs(extract_dir, exist_ok=True)
         
-        # Extract only a subset of classes
-        # ImageNet has 1000 classes, we'll take ~200 classes
-        # Each class has ~1300 images, 200 classes = ~260k images
+        print("Extracting COCO images...")
+        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
         
-        max_classes = 200
+        # Download annotations
+        annotations_url = f"{base_url}/annotations/annotations_trainval2017.zip"
+        annotations_file = os.path.join(download_dir, "annotations_trainval2017.zip")
         
-        # Extract train tar
-        print("Extracting train archive...")
-        with tarfile.open(train_tar, 'r') as tar:
-            members = tar.getmembers()
-            class_tars = [m for m in members if m.name.endswith('.tar')]
-            
-            print(f"Found {len(class_tars)} class archives")
-            print(f"Extracting first {max_classes} classes...")
-            
-            for i, member in enumerate(tqdm(class_tars[:max_classes], desc="Extracting classes")):
-                class_name = member.name.replace('.tar', '')
-                
-                # Skip if already extracted
-                if class_name in extracted_classes:
-                    print(f"  Skipping {class_name} (already extracted)")
-                    continue
-                
-                tar.extract(member, download_dir)
-                class_tar_path = os.path.join(download_dir, member.name)
-                
-                # Extract class images
-                class_dir = os.path.join(extract_dir, "train", class_name)
-                os.makedirs(class_dir, exist_ok=True)
-                
-                with tarfile.open(class_tar_path, 'r') as class_tar:
-                    class_tar.extractall(class_dir)
-                
-                extracted_classes.add(class_name)
-                
-                # Save checkpoint every 10 classes
-                if len(extracted_classes) % 10 == 0:
-                    save_checkpoint("imagenet_extract", {
-                        'extracted_classes': list(extracted_classes)
-                    })
-                    save_state(state)
-                
-                # Keep class tar files - may need them for re-extraction with different parameters
-                # (No cleanup - all downloaded/extracted files are preserved)
+        print("Downloading COCO annotations...")
+        if download_file(annotations_url, annotations_file, resume=True):
+            print("Extracting annotations...")
+            with zipfile.ZipFile(annotations_file, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
         
-        # Extract validation set (only if not already done)
-        if os.path.exists(val_tar):
-            val_extract_dir = os.path.join(extract_dir, "val")
-            if not os.path.exists(val_extract_dir) or len(os.listdir(val_extract_dir)) == 0:
-                print("\nExtracting validation set...")
-                os.makedirs(val_extract_dir, exist_ok=True)
-                
-                with tarfile.open(val_tar, 'r') as tar:
-                    tar.extractall(val_extract_dir)
-            else:
-                print("\nValidation set already extracted, skipping...")
-        
-        state["imagenet"]["extracted"] = True
-        save_state(state)
-        
-        # Clean up checkpoint on success
-        checkpoint_file = "data/.checkpoint_image_imagenet_extract.json"
-        if os.path.exists(checkpoint_file):
-            os.remove(checkpoint_file)
-        
-        print("✓ ImageNet subset extracted")
-        return True
-    else:
-        print("ImageNet archives not found. Please download first.")
-        return False
-
-def convert_imagenet_to_manifest(state, max_samples=1000000):
-    """Convert ImageNet subset to annotation format with fine-grained resuming"""
-    print("\n" + "="*60)
-    print("Converting ImageNet to Annotation Format")
-    print("="*60)
-    
-    if state["imagenet"]["converted"]:
-        print("ImageNet already converted, skipping...")
-        return True
-    
-    extract_dir = "data/images/imagenet_subset"
-    output_file = "data/images/imagenet_annotations.json"
-    
-    if not os.path.exists(extract_dir):
-        print(f"ERROR: ImageNet subset not found at {extract_dir}")
-        return False
-    
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    # Load checkpoint
-    checkpoint = load_checkpoint("imagenet")
-    if checkpoint:
-        print(f"Resuming from checkpoint: {checkpoint.get('last_class', 'start')}")
-        processed_classes = set(checkpoint.get('processed_classes', []))
-        annotations = checkpoint.get('annotations', [])
-    else:
-        processed_classes = set()
+        # Convert to annotations format
+        output_file = "data/images/coco_annotations.json"
         annotations = []
-    
-    print("Creating annotation file...")
-    count = len(annotations)
-    
-    # Process train images
-    train_dir = os.path.join(extract_dir, "train")
-    if os.path.exists(train_dir):
-        all_classes = sorted(os.listdir(train_dir))
-        for class_name in tqdm(all_classes, desc="Processing classes"):
-            if class_name in processed_classes:
-                continue
+        count = 0
+        
+        # Load COCO annotations
+        ann_file = os.path.join(extract_dir, "annotations", "captions_train2017.json")
+        if os.path.exists(ann_file):
+            with open(ann_file, 'r') as f:
+                coco_data = json.load(f)
             
-            class_dir = os.path.join(train_dir, class_name)
-            if not os.path.isdir(class_dir):
-                continue
+            # Create image ID to filename mapping
+            images_dict = {img['id']: img['file_name'] for img in coco_data['images']}
             
-            for img_file in os.listdir(class_dir):
-                if img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                    img_path = os.path.join("imagenet_subset/train", class_name, img_file)
+            # Process captions
+            for ann in tqdm(coco_data['annotations'], desc="Processing captions"):
+                img_id = ann['image_id']
+                caption = ann['caption']
+                filename = images_dict.get(img_id)
+                
+                if filename:
+                    img_path = f"coco/train2017/{filename}"
                     annotations.append({
                         "image": img_path,
-                        "caption": f"An image of {class_name.replace('_', ' ')}",
-                        "category": class_name
-                    })
-                    count += 1
-                    
-                    # Stop if we've reached sample limit
-                    if count >= max_samples:
-                        break
-            
-            processed_classes.add(class_name)
-            
-            # Save checkpoint every 10 classes
-            if len(processed_classes) % 10 == 0:
-                save_checkpoint("imagenet", {
-                    'processed_classes': list(processed_classes),
-                    'annotations': annotations,
-                    'last_class': class_name,
-                    'count': count
-                })
-                save_state(state)
-            
-            if count >= max_samples:
-                break
-    
-    # Process val images (only if we haven't reached limit)
-    if count < max_samples:
-        val_dir = os.path.join(extract_dir, "val")
-        if os.path.exists(val_dir):
-            for img_file in tqdm(os.listdir(val_dir), desc="Processing validation"):
-                if img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                    img_path = os.path.join("imagenet_subset/val", img_file)
-                    annotations.append({
-                        "image": img_path,
-                        "caption": "A validation image",
-                        "category": "unknown"
+                        "caption": caption,
+                        "category": "coco"
                     })
                     count += 1
                     
                     if count >= max_samples:
                         break
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(annotations, f, indent=2, ensure_ascii=False)
-    
-    state["imagenet"]["converted"] = True
-    state["imagenet"]["samples"] = count
-    save_state(state)
-    
-    # Clean up checkpoint file (state file only, actual data is never deleted)
-    checkpoint_file = "data/.checkpoint_image_imagenet.json"
-    if os.path.exists(checkpoint_file):
-        os.remove(checkpoint_file)
-    
-    print(f"\n✓ Created annotation file with {count:,} images")
-    print(f"  Saved to: {output_file} (ready to use)")
-    return True
-
-def download_openimages_subset(state):
-    """Download Open Images Dataset subset - provide instructions (no HuggingFace)"""
-    print("\n" + "="*60)
-    print("Downloading Open Images Dataset Subset")
-    print("="*60)
-    
-    if state["openimages"]["downloaded"]:
-        print("Open Images already downloaded, skipping...")
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(annotations, f, indent=2, ensure_ascii=False)
+        
+        state["coco"]["downloaded"] = True
+        state["coco"]["extracted"] = True
+        state["coco"]["converted"] = True
+        state["coco"]["samples"] = len(annotations)
+        save_state(state)
+        
+        print(f"✓ Created annotations with {len(annotations):,} images")
         return True
     
-    print("NOTE: Open Images requires HuggingFace or manual download.")
-    print("Visit: https://storage.googleapis.com/openimages/web/index.html")
-    print("For direct download, use the Open Images website.")
-    print("For now, marking as available. Download manually if needed.")
-    
-    state["openimages"]["downloaded"] = True
-    state["openimages"]["converted"] = True
-    state["openimages"]["samples"] = 0
-    save_state(state)
-    
-    print("✓ Open Images marked (download manually)")
-    return True
-
-def download_laion_subset(state):
-    """Download LAION-400M subset - provide instructions (no HuggingFace)"""
-    print("\n" + "="*60)
-    print("Downloading LAION-400M Subset")
-    print("="*60)
-    
-    if state["laion"]["downloaded"]:
-        print("LAION already downloaded, skipping...")
-        return True
-    
-    print("NOTE: LAION-400M requires HuggingFace or manual download.")
-    print("Visit: https://laion.ai/blog/laion-400-open-dataset/")
-    print("For direct download, use the LAION website.")
-    print("For now, marking as available. Download manually if needed.")
-    
-    state["laion"]["downloaded"] = True
-    state["laion"]["converted"] = True
-    state["laion"]["samples"] = 0
-    save_state(state)
-    
-    print("✓ LAION marked (download manually)")
-    return True
+    return False
 
 def download_food101(state, max_samples=1000000):
     """Download Food-101 - diverse food images"""
@@ -505,73 +274,183 @@ def download_food101(state, max_samples=1000000):
     
     return False
 
-def download_stanford_cars(state):
-    """Download Stanford Cars - diverse vehicle images"""
+def download_cifar10(state, max_samples=1000000):
+    """Download CIFAR-10 dataset - 10 classes, 60k images"""
     print("\n" + "="*60)
-    print("Downloading Stanford Cars")
+    print("Downloading CIFAR-10 Dataset")
     print("="*60)
     
-    if state["stanford_cars"]["downloaded"]:
-        print("Stanford Cars already downloaded, skipping...")
+    if state["cifar10"]["downloaded"]:
+        print("CIFAR-10 already downloaded, skipping...")
         return True
     
-    # Stanford Cars dataset
-    url = "https://ai.stanford.edu/~jkrause/cars/car_dataset.html"
-    print("NOTE: Stanford Cars requires manual download.")
-    print(f"Visit: {url}")
-    print("For now, marking as available.")
+    # CIFAR-10 has direct download
+    base_url = "https://www.cs.toronto.edu/~kriz"
+    download_dir = "data/image_downloads"
+    os.makedirs(download_dir, exist_ok=True)
+    tar_file = os.path.join(download_dir, "cifar-10-python.tar.gz")
     
-    state["stanford_cars"]["downloaded"] = True
-    state["stanford_cars"]["converted"] = True
-    state["stanford_cars"]["samples"] = 0
-    save_state(state)
+    url = f"{base_url}/cifar-10-python.tar.gz"
     
-    print("✓ Stanford Cars marked (download manually)")
-    return True
+    print("Downloading CIFAR-10 (~170MB, 60k images)...")
+    if download_file(url, tar_file, resume=True):
+        extract_dir = "data/images/cifar10"
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        print("Extracting CIFAR-10...")
+        with tarfile.open(tar_file, 'r:gz') as tar:
+            tar.extractall(extract_dir)
+        
+        # Convert to annotations
+        output_file = "data/images/cifar10_annotations.json"
+        annotations = []
+        count = 0
+        
+        # CIFAR-10 structure: cifar-10-batches-py/
+        import pickle
+        batches_dir = os.path.join(extract_dir, "cifar-10-batches-py")
+        class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+        
+        # Process train batches
+        for i in range(1, 6):
+            batch_file = os.path.join(batches_dir, f"data_batch_{i}")
+            if os.path.exists(batch_file):
+                with open(batch_file, 'rb') as f:
+                    batch = pickle.load(f, encoding='bytes')
+                
+                images = batch[b'data']
+                labels = batch[b'labels']
+                filenames = [f.decode('utf-8') for f in batch[b'filenames']]
+                
+                for img_data, label, filename in zip(images, labels, filenames):
+                    # Reshape image (32x32x3)
+                    img_array = img_data.reshape(3, 32, 32).transpose(1, 2, 0)
+                    img_path = os.path.join(extract_dir, "cifar-10-batches-py", filename)
+                    
+                    # Save image
+                    os.makedirs(os.path.dirname(img_path), exist_ok=True)
+                    img = Image.fromarray(img_array)
+                    img.save(img_path)
+                    
+                    class_name = class_names[label]
+                    rel_path = f"cifar10/cifar-10-batches-py/{filename}"
+                    annotations.append({
+                        "image": rel_path,
+                        "caption": f"A photo of a {class_name}",
+                        "category": class_name
+                    })
+                    count += 1
+                    
+                    if count >= max_samples:
+                        break
+                
+                if count >= max_samples:
+                    break
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(annotations, f, indent=2, ensure_ascii=False)
+        
+        state["cifar10"]["downloaded"] = True
+        state["cifar10"]["extracted"] = True
+        state["cifar10"]["converted"] = True
+        state["cifar10"]["samples"] = len(annotations)
+        save_state(state)
+        
+        print(f"✓ Created annotations with {len(annotations):,} images")
+        return True
+    
+    return False
 
-def download_places365(state):
-    """Download Places365 - diverse scene images"""
+def download_cifar100(state, max_samples=1000000):
+    """Download CIFAR-100 dataset - 100 classes, 60k images"""
     print("\n" + "="*60)
-    print("Downloading Places365")
+    print("Downloading CIFAR-100 Dataset")
     print("="*60)
     
-    if state["places365"]["downloaded"]:
-        print("Places365 already downloaded, skipping...")
+    if state["cifar100"]["downloaded"]:
+        print("CIFAR-100 already downloaded, skipping...")
         return True
     
-    print("NOTE: Places365 contains 365 scene categories.")
-    print("Visit: http://places2.csail.mit.edu/download.html")
-    print("For now, marking as available.")
+    # CIFAR-100 has direct download
+    base_url = "https://www.cs.toronto.edu/~kriz"
+    download_dir = "data/image_downloads"
+    os.makedirs(download_dir, exist_ok=True)
+    tar_file = os.path.join(download_dir, "cifar-100-python.tar.gz")
     
-    state["places365"]["downloaded"] = True
-    state["places365"]["converted"] = True
-    state["places365"]["samples"] = 0
-    save_state(state)
+    url = f"{base_url}/cifar-100-python.tar.gz"
     
-    print("✓ Places365 marked (download manually)")
-    return True
-
-def download_inat2021(state):
-    """Download iNaturalist 2021 - diverse nature/biology images"""
-    print("\n" + "="*60)
-    print("Downloading iNaturalist 2021")
-    print("="*60)
-    
-    if state["inat2021"]["downloaded"]:
-        print("iNaturalist 2021 already downloaded, skipping...")
+    print("Downloading CIFAR-100 (~170MB, 60k images)...")
+    if download_file(url, tar_file, resume=True):
+        extract_dir = "data/images/cifar100"
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        print("Extracting CIFAR-100...")
+        with tarfile.open(tar_file, 'r:gz') as tar:
+            tar.extractall(extract_dir)
+        
+        # Convert to annotations
+        output_file = "data/images/cifar100_annotations.json"
+        annotations = []
+        count = 0
+        
+        # CIFAR-100 structure: cifar-100-python/
+        import pickle
+        batches_dir = os.path.join(extract_dir, "cifar-100-python")
+        
+        # Load class names
+        meta_file = os.path.join(batches_dir, "meta")
+        if os.path.exists(meta_file):
+            with open(meta_file, 'rb') as f:
+                meta = pickle.load(f, encoding='bytes')
+            fine_class_names = [name.decode('utf-8') for name in meta[b'fine_label_names']]
+        else:
+            fine_class_names = [f"class_{i}" for i in range(100)]
+        
+        # Process train batch
+        train_file = os.path.join(batches_dir, "train")
+        if os.path.exists(train_file):
+            with open(train_file, 'rb') as f:
+                batch = pickle.load(f, encoding='bytes')
+            
+            images = batch[b'data']
+            fine_labels = batch[b'fine_labels']
+            filenames = [f.decode('utf-8') for f in batch[b'filenames']]
+            
+            for img_data, label, filename in zip(images, fine_labels, filenames):
+                # Reshape image (32x32x3)
+                img_array = img_data.reshape(3, 32, 32).transpose(1, 2, 0)
+                img_path = os.path.join(extract_dir, "cifar-100-python", filename)
+                
+                # Save image
+                os.makedirs(os.path.dirname(img_path), exist_ok=True)
+                img = Image.fromarray(img_array)
+                img.save(img_path)
+                
+                class_name = fine_class_names[label]
+                rel_path = f"cifar100/cifar-100-python/{filename}"
+                annotations.append({
+                    "image": rel_path,
+                    "caption": f"A photo of a {class_name}",
+                    "category": class_name
+                })
+                count += 1
+                
+                if count >= max_samples:
+                    break
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(annotations, f, indent=2, ensure_ascii=False)
+        
+        state["cifar100"]["downloaded"] = True
+        state["cifar100"]["extracted"] = True
+        state["cifar100"]["converted"] = True
+        state["cifar100"]["samples"] = len(annotations)
+        save_state(state)
+        
+        print(f"✓ Created annotations with {len(annotations):,} images")
         return True
     
-    print("NOTE: iNaturalist 2021 contains millions of nature/biology images.")
-    print("Visit: https://github.com/visipedia/inat_comp/tree/master/2021")
-    print("For now, marking as available.")
-    
-    state["inat2021"]["downloaded"] = True
-    state["inat2021"]["converted"] = True
-    state["inat2021"]["samples"] = 0
-    save_state(state)
-    
-    print("✓ iNaturalist 2021 marked (download manually)")
-    return True
+    return False
 
 def combine_image_annotations():
     """Combine all image annotations into one file"""
@@ -583,10 +462,10 @@ def combine_image_annotations():
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     input_files = [
-        "data/images/imagenet_annotations.json",
-        "data/images/openimages_annotations.json",
-        "data/images/laion_annotations.json",
-        "data/images/food101_annotations.json"
+        "data/images/coco_annotations.json",
+        "data/images/food101_annotations.json",
+        "data/images/cifar10_annotations.json",
+        "data/images/cifar100_annotations.json"
     ]
     
     all_annotations = []
@@ -598,8 +477,10 @@ def combine_image_annotations():
                 data = json.load(f)
                 if isinstance(data, list):
                     all_annotations.extend(data)
+                    print(f"  Added {len(data):,} entries")
                 else:
                     all_annotations.append(data)
+                    print(f"  Added 1 entry")
     
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(all_annotations, f, indent=2, ensure_ascii=False)
@@ -611,9 +492,9 @@ def combine_image_annotations():
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade image datasets for μOmni")
     parser.add_argument("--dataset", 
-                       choices=["all", "imagenet", "openimages", "laion",
-                               "food101", "stanford_cars", "places365", "inat2021",
-                               "general", "scientific", "nature", "domain"], 
+                       choices=["all", "coco",
+                               "food101", "cifar10", "cifar100",
+                               "general", "domain"], 
                        default="all",
                        help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
@@ -627,7 +508,7 @@ def main():
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
     parser.add_argument("--max-samples", type=int, default=1000000,
-                       help="Maximum number of samples per dataset (default: 1000000, combined total ~7M for all datasets)")
+                       help="Maximum number of samples per dataset (default: 1000000, combined total ~9-10M for all datasets)")
     
     args = parser.parse_args()
     
@@ -652,42 +533,24 @@ def main():
     
     success = True
     
-    # ImageNet
-    if args.dataset in ["all", "imagenet", "general"]:
+    # COCO
+    if args.dataset in ["all", "coco", "general"]:
         if not args.skip_download:
-            success = download_imagenet_subset(state) and success
-        if not args.skip_extract:
-            success = extract_imagenet_subset(state) and success
-        if not args.skip_convert:
-            success = convert_imagenet_to_manifest(state, args.max_samples) and success
-    
-    # Open Images
-    if args.dataset in ["all", "openimages"]:
-        if not args.skip_download:
-            success = download_openimages_subset(state) and success
-    
-    # LAION
-    if args.dataset in ["all", "laion", "general"]:
-        if not args.skip_download:
-            success = download_laion_subset(state) and success
+            success = download_coco(state, args.max_samples) and success
     
     # Domain-specific
     if args.dataset in ["all", "food101", "domain"]:
         if not args.skip_download:
             success = download_food101(state, args.max_samples) and success
     
-    if args.dataset in ["all", "stanford_cars", "domain"]:
+    # CIFAR datasets
+    if args.dataset in ["all", "cifar10", "domain"]:
         if not args.skip_download:
-            success = download_stanford_cars(state) and success
+            success = download_cifar10(state, args.max_samples) and success
     
-    # Nature & Environment
-    if args.dataset in ["all", "places365", "nature"]:
+    if args.dataset in ["all", "cifar100", "domain"]:
         if not args.skip_download:
-            success = download_places365(state) and success
-    
-    if args.dataset in ["all", "inat2021", "nature"]:
-        if not args.skip_download:
-            success = download_inat2021(state) and success
+            success = download_cifar100(state, args.max_samples) and success
     
     # Combine if requested
     if args.combine:

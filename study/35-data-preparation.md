@@ -32,7 +32,7 @@ Math problem: Solve for x in 2x + 5 = 15.
 **Download:**
 ```bash
 # ⚠️ Always use --combine to create production_corpus.txt (required for training)
-# Download with sample limit (default: 1,000,000 per dataset, ~12M total combined)
+# Download with sample limit (default: 1,000,000 per dataset, ~10M total combined)
 python scripts/download_production_text.py --dataset all --combine
 
 # Or specify custom sample limit per dataset
@@ -47,7 +47,7 @@ python scripts/download_production_text.py --dataset conversations --combine
 - ✅ **`--combine` creates `production_corpus.txt`** - the file that `train_text.py` uses
 - ✅ Fine-grained resumption (checkpoints during processing)
 - ✅ Diverse knowledge: General, Conversations, Scientific, Tools
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~10M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -92,7 +92,7 @@ python scripts/download_production_audio.py --dataset scientific --combine
 - ✅ **`--combine` creates `production_asr.csv` and `production_tts.csv`** - files that `train_audio_enc.py` and `train_talker.py` use
 - ✅ Fine-grained resumption (checkpoints by split/speaker)
 - ✅ Diverse audio: General speech, Scientific talks, Environmental sounds
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~10M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -107,9 +107,9 @@ python scripts/download_production_audio.py --dataset scientific --combine
 ```json
 [
   {
-    "image": "imagenet_subset/train/n01440764/n01440764_18.JPEG",
-    "caption": "An image of n01440764",
-    "category": "n01440764"
+    "image": "coco/train2017/000000000139.jpg",
+    "caption": "A person riding a motorcycle on a dirt road.",
+    "category": "coco"
   },
   {
     "image": "food101/food-101/images/apple_pie/12345.jpg",
@@ -146,7 +146,7 @@ python scripts/download_production_image.py --dataset nature --combine
 - ✅ **`--combine` creates `production_annotations.json`** - the file that `train_vision.py` uses
 - ✅ Fine-grained resumption (checkpoints by class)
 - ✅ Diverse images: General, Scientific/Medical, Art, Nature, Domain-specific
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~10M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -200,7 +200,7 @@ python scripts/download_production_audio.py --dataset all --combine
 **Download:**
 ```bash
 # Download all modalities with sample-based limits (default: 1M per dataset)
-# Combined totals: Text ~12M, Audio ~6M, Images ~7M
+# Combined totals: Text ~10M, Audio ~4M, Images ~4M
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
 python scripts/download_production_audio.py --dataset all --combine
@@ -221,7 +221,7 @@ python scripts/download_production_audio.py --dataset all --combine
 
 ```bash
 # Download all modalities with sample-based limits (default: 1M per dataset)
-# Combined totals: Text ~12M samples (~1.2B tokens), Audio ~6M, Images ~7M
+# Combined totals: Text ~10M samples (~1B tokens), Audio ~4M, Images ~4M
 # Creates: production_corpus.txt, production_asr.csv, production_tts.csv, production_annotations.json
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
@@ -367,14 +367,14 @@ data/audio/librispeech/train-clean-100/19/198/19-198-0001.flac,"THE BOY WHO LIVE
 ```json
 [
   {
-    "image": "imagenet_subset/train/n01440764/n01440764_18.JPEG",
-    "caption": "An image of n01440764",
-    "category": "n01440764"
+    "image": "coco/train2017/000000000139.jpg",
+    "caption": "A person riding a motorcycle on a dirt road.",
+    "category": "coco"
   },
   {
-    "image": "imagenet_subset/train/n01443537/n01443537_42.JPEG",
-    "caption": "An image of n01443537",
-    "category": "n01443537"
+    "image": "food101/food-101/images/apple_pie/12345.jpg",
+    "caption": "A photo of apple pie",
+    "category": "apple_pie"
   }
 ]
 ```
@@ -506,8 +506,10 @@ data/
 │   └── [audio files in subdirectories]
 │
 └── images/
-    ├── imagenet_annotations.json
+    ├── coco_annotations.json
     ├── food101_annotations.json
+    ├── cifar10_annotations.json
+    ├── cifar100_annotations.json
     ├── production_annotations.json  (if --combine used)
     └── [image files in subdirectories]
 ```
@@ -557,9 +559,9 @@ You can also download specific categories using `--dataset <category>`.
 ### Sample-Based Limits
 - Default: 1,000,000 samples per dataset (configurable with `--max-samples`)
 - Combined totals when using `--dataset all`:
-  - **Text**: ~12M samples (~1.2B tokens) from 12 datasets
-  - **Audio**: ~6M samples from 6 datasets
-  - **Images**: ~7M samples from 7 datasets
+  - **Text**: ~10M samples (~1B tokens) from 10 datasets
+  - **Audio**: ~4M samples from 4 datasets
+  - **Images**: ~4M samples from 4 datasets
 - For 25.65M parameter model: Combined total provides sufficient data for single-epoch training
 - Based on Chinchilla scaling laws: 20-200 tokens per parameter (minimum: 513M tokens)
 - Automatically stops when reaching sample limit per dataset
@@ -661,7 +663,7 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for more detail
 ## 💡 Tips
 
 ✅ **Start with sample-based download:** `--dataset all --combine` to download from multiple categories  
-✅ **Production-grade:** Millions of samples (default: 1M per dataset, ~12M combined for text)  
+✅ **Production-grade:** Millions of samples (default: 1M per dataset, ~10M combined for text)  
 ✅ **Fine-grained resumption:** Safe to interrupt and resume  
 ✅ **No formatting needed:** Outputs are in final format ready for training  
 ✅ **Diverse knowledge:** Downloads from multiple categories  

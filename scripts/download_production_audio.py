@@ -4,8 +4,8 @@ Target: Under 30GB, millions of samples
 Includes diverse knowledge: General speech, Scientific/Educational, Music, Multilingual, Podcasts
 
 Supports:
-- General Speech: LibriSpeech, Common Voice, VoxCeleb
-- Scientific/Educational: TED Talks, Academic lectures, Science podcasts
+- General Speech: LibriSpeech, Common Voice
+- Scientific/Educational: Academic lectures, Science podcasts
 - Music & Sound: Music samples, Sound effects, Environmental sounds
 - Multilingual: Common Voice (multiple languages), FLEURS
 - Domain-specific: News, Interviews, Conversations
@@ -33,24 +33,11 @@ def load_state():
     return {
         # General Speech
         "librispeech": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "commonvoice": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "voxceleb": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
+        "ljspeech": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
         
         # Scientific/Educational
-        "ted_lyrics": {"downloaded": False, "converted": False, "samples": 0},
         "musan": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "urbansound": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        
-        # Music & Sound
-        "fma": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "gtzan": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        
-        # Multilingual
-        "commonvoice_multilingual": {"downloaded": False, "converted": False, "samples": 0},
-        
-        # Domain-specific
-        "ami": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "switchboard": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
+        "urbansound": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
     }
 
 def save_state(state):
@@ -94,11 +81,9 @@ def get_audio_dataset_size(ds_name):
     # Map dataset names to their actual data folders
     folder_map = {
         "librispeech": "data/audio/librispeech",
-        "voxceleb": "data/audio/voxceleb",
         "urbansound": "data/audio/urbansound8k",
         "musan": "data/audio/musan",
         "commonvoice": "data/audio/commonvoice",  # If exists
-        "ted_lyrics": "data/audio/ted_lyrics",  # If exists
     }
     
     folder_path = folder_map.get(ds_name)
@@ -156,27 +141,20 @@ def download_librispeech_subset(state):
     download_dir = "data/audio_downloads/librispeech"
     os.makedirs(download_dir, exist_ok=True)
     
-    # LibriSpeech splits (choose subset to stay under 30GB):
-    # - train-clean-100: 6.3GB, ~100 hours
-    # - train-clean-360: 23GB, ~360 hours  
-    # - train-other-500: 30GB, ~500 hours
+    # LibriSpeech splits:
+    # - train-clean-100: 6.3GB, ~100 hours (recommended for ~50GB total budget)
+    # - train-clean-360: 23GB, ~360 hours (optional, large)
     # - dev-clean: 337MB
-    # - dev-other: 314MB
     # - test-clean: 315MB
     
-    # We'll download train-clean-100 + train-clean-360 = ~29GB
+    # We'll download train-clean-100 only (~6.3GB) to keep audio dataset manageable
+    # This provides ~100 hours of high-quality speech data
     downloads = [
         {
             "url": f"{base_url}/train-clean-100.tar.gz",
             "file": os.path.join(download_dir, "train-clean-100.tar.gz"),
             "size_gb": 6.3,
             "desc": "LibriSpeech train-clean-100 (6.3GB)"
-        },
-        {
-            "url": f"{base_url}/train-clean-360.tar.gz",
-            "file": os.path.join(download_dir, "train-clean-360.tar.gz"),
-            "size_gb": 23.0,
-            "desc": "LibriSpeech train-clean-360 (23GB)"
         },
         {
             "url": f"{base_url}/dev-clean.tar.gz",
@@ -194,7 +172,8 @@ def download_librispeech_subset(state):
     
     total_size = sum(d["size_gb"] for d in downloads)
     print(f"Total download size: ~{total_size:.2f} GB")
-    print("This will provide ~460 hours of speech data")
+    print("This will provide ~100 hours of speech data")
+    print("Note: train-clean-360 (23GB) is available but not downloaded by default to save space")
     
     for dl in downloads:
         if os.path.exists(dl["file"]):
@@ -241,7 +220,6 @@ def extract_librispeech_subset(state):
     
     tar_files = [
         "train-clean-100.tar.gz",
-        "train-clean-360.tar.gz",
         "dev-clean.tar.gz",
         "test-clean.tar.gz"
     ]
@@ -322,7 +300,7 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
     print("Scanning LibriSpeech directory structure...")
     
     # Process all splits
-    splits = ["train-clean-100", "train-clean-360", "dev-clean", "test-clean"]
+    splits = ["train-clean-100", "dev-clean", "test-clean"]
     
     with open(output_file, mode, encoding='utf-8', newline='') as csv_f:
         writer = csv.DictWriter(csv_f, fieldnames=['wav', 'text'])
@@ -416,159 +394,74 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
     print(f"  Saved to: {output_file} (ready to use)")
     return True
 
-def download_commonvoice_subset(state):
-    """Download Common Voice subset - provide instructions (no HuggingFace)"""
+def download_ljspeech(state, max_samples=1000000):
+    """Download LJSpeech dataset - single speaker TTS dataset"""
     print("\n" + "="*60)
-    print("Downloading Common Voice Subset")
+    print("Downloading LJSpeech Dataset")
     print("="*60)
     
-    if state["commonvoice"]["downloaded"]:
-        print("Common Voice already downloaded, skipping...")
+    if state["ljspeech"]["downloaded"]:
+        print("LJSpeech already downloaded, skipping...")
         return True
     
-    print("NOTE: Common Voice requires HuggingFace or manual download.")
-    print("Visit: https://commonvoice.mozilla.org/en/datasets")
-    print("For direct download, use the Common Voice website.")
-    print("For now, marking as available. Download manually if needed.")
-    
-    state["commonvoice"]["downloaded"] = True
-    state["commonvoice"]["converted"] = True
-    state["commonvoice"]["samples"] = 0
-    save_state(state)
-    
-    print("✓ Common Voice marked (download manually from Mozilla)")
-    return True
-
-def download_voxceleb_subset(state):
-    """Download VoxCeleb subset (speaker recognition dataset)"""
-    print("\n" + "="*60)
-    print("Downloading VoxCeleb Subset")
-    print("="*60)
-    
-    if state["voxceleb"]["downloaded"]:
-        print("VoxCeleb already downloaded, skipping...")
-        return True
-    
-    print("NOTE: VoxCeleb requires manual download from:")
-    print("  https://www.robots.ox.ac.uk/~vgg/data/voxceleb/")
-    print("\nVoxCeleb1 has ~100k utterances (~7GB)")
-    print("VoxCeleb2 has ~1M utterances (~35GB, exceeds limit)")
-    print("\nFor production use under 30GB, we recommend:")
-    print("  - Download VoxCeleb1 only (~7GB)")
-    print("  - Or download a subset of VoxCeleb2")
-    
-    download_dir = "data/audio_downloads/voxceleb"
+    # LJSpeech has direct download
+    url = "https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2"
+    download_dir = "data/audio_downloads"
     os.makedirs(download_dir, exist_ok=True)
+    tar_file = os.path.join(download_dir, "LJSpeech-1.1.tar.bz2")
     
-    # Check if user has already downloaded
-    voxceleb1_tar = os.path.join(download_dir, "voxceleb1.tar.gz")
-    
-    if os.path.exists(voxceleb1_tar):
-        print(f"\nFound VoxCeleb archive in {download_dir}")
-        print("Proceeding with extraction...")
-        state["voxceleb"]["downloaded"] = True
-        save_state(state)
-        return True
-    else:
-        print(f"\nVoxCeleb archive not found in {download_dir}")
-        print("Please download VoxCeleb1 manually from:")
-        print("  https://www.robots.ox.ac.uk/~vgg/data/voxceleb/voxceleb1.html")
-        print(f"  And place it in: {download_dir}")
-        print("\nOr use --skip-download and manually extract, then run with --skip-extract")
-        return False
-
-def extract_voxceleb_subset(state):
-    """Extract VoxCeleb archive"""
-    print("\n" + "="*60)
-    print("Extracting VoxCeleb Archive")
-    print("="*60)
-    
-    if state["voxceleb"]["extracted"]:
-        print("VoxCeleb already extracted, skipping...")
-        return True
-    
-    download_dir = "data/audio_downloads/voxceleb"
-    extract_dir = "data/audio/voxceleb"
-    os.makedirs(extract_dir, exist_ok=True)
-    
-    tar_file = os.path.join(download_dir, "voxceleb1.tar.gz")
-    
-    if not os.path.exists(tar_file):
-        print(f"ERROR: VoxCeleb archive not found at {tar_file}")
-        return False
-    
-    print("Extracting VoxCeleb (this may take 10-15 minutes)...")
-    try:
-        with tarfile.open(tar_file, 'r:gz') as tar:
+    print("Downloading LJSpeech (~2.6GB, 13k+ clips)...")
+    if download_file(url, tar_file, resume=True):
+        extract_dir = "data/audio/ljspeech"
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        print("Extracting LJSpeech...")
+        with tarfile.open(tar_file, 'r:bz2') as tar:
             tar.extractall(extract_dir)
-        print("✓ VoxCeleb extracted")
         
-        state["voxceleb"]["extracted"] = True
-        save_state(state)
-        return True
-    except Exception as e:
-        print(f"ERROR extracting VoxCeleb: {e}")
-        return False
-
-def convert_voxceleb_to_csv(state, max_samples=1000000):
-    """Convert VoxCeleb to CSV format (for TTS or speaker recognition)"""
-    print("\n" + "="*60)
-    print("Converting VoxCeleb to CSV")
-    print("="*60)
-    
-    if state["voxceleb"]["converted"]:
-        print("VoxCeleb already converted, skipping...")
-        return True
-    
-    base_dir = "data/audio/voxceleb"
-    
-    if not os.path.exists(base_dir):
-        print(f"ERROR: VoxCeleb not extracted. Run extract first.")
-        return False
-    
-    output_file = "data/audio/voxceleb_tts.csv"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    print("Scanning VoxCeleb directory structure...")
-    rows = []
-    
-    # VoxCeleb structure: id*/wav files
-    for speaker_dir in tqdm(sorted(Path(base_dir).rglob("id*")), desc="Processing speakers"):
-        if not speaker_dir.is_dir():
-            continue
+        # Convert to CSV
+        output_file = "data/audio/ljspeech_asr.csv"
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        # Find all audio files
-        audio_files = list(speaker_dir.glob("*.wav")) + list(speaker_dir.glob("*.m4a"))
+        # LJSpeech structure: LJSpeech-1.1/wavs/*.wav and metadata.csv
+        metadata_file = os.path.join(extract_dir, "LJSpeech-1.1", "metadata.csv")
+        wavs_dir = os.path.join(extract_dir, "LJSpeech-1.1", "wavs")
         
-        for audio_file in audio_files:
-            # VoxCeleb doesn't have transcriptions, so we'll use speaker ID as text
-            # For TTS, you might want to use a different approach
-            speaker_id = speaker_dir.name
-            rel_path = os.path.relpath(str(audio_file), ".")
-            rows.append({"wav": rel_path, "text": f"Speaker {speaker_id}"})
+        rows = []
+        count = 0
+        
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                for line in tqdm(f, desc="Processing LJSpeech"):
+                    parts = line.strip().split('|')
+                    if len(parts) >= 2:
+                        wav_name = parts[0]
+                        text = parts[2] if len(parts) > 2 else parts[1]
+                        
+                        wav_path = os.path.join(wavs_dir, f"{wav_name}.wav")
+                        if os.path.exists(wav_path):
+                            rel_path = os.path.relpath(wav_path, ".")
+                            rows.append({"wav": rel_path, "text": text})
+                            count += 1
+                            
+                            if count >= max_samples:
+                                break
             
-            # Stop if we've reached sample limit
-            if len(rows) >= max_samples:
-                break
-        
-        if len(rows) >= max_samples:
-            break
+            with open(output_file, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=['wav', 'text'])
+                writer.writeheader()
+                writer.writerows(rows)
+            
+            state["ljspeech"]["downloaded"] = True
+            state["ljspeech"]["extracted"] = True
+            state["ljspeech"]["converted"] = True
+            state["ljspeech"]["samples"] = len(rows)
+            save_state(state)
+            
+            print(f"✓ Created CSV with {len(rows):,} entries")
+            return True
     
-    # Save CSV
-    print(f"\nWriting {len(rows)} entries to CSV...")
-    with open(output_file, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['wav', 'text'])
-        writer.writeheader()
-        writer.writerows(rows)
-    
-    state["voxceleb"]["converted"] = True
-    state["voxceleb"]["samples"] = len(rows)
-    save_state(state)
-    
-    print(f"\n✓ Created CSV with {len(rows):,} entries")
-    print(f"  Saved to: {output_file}")
-    print("  NOTE: VoxCeleb doesn't have transcriptions, using speaker IDs as text")
-    return True
+    return False
 
 def download_urbansound(state):
     """Download UrbanSound8K - environmental sounds for diverse audio knowledge"""
@@ -630,28 +523,6 @@ def download_urbansound(state):
     
     return False
 
-def download_ted_lyrics(state):
-    """Download TED-LIUM - educational/scientific talks"""
-    print("\n" + "="*60)
-    print("Downloading TED-LIUM (Educational Talks)")
-    print("="*60)
-    
-    if state["ted_lyrics"]["downloaded"]:
-        print("TED-LIUM already downloaded, skipping...")
-        return True
-    
-    print("NOTE: TED-LIUM contains TED talks with transcriptions.")
-    print("Visit: https://www.openslr.org/51/")
-    print("For now, marking as available. Download manually if needed.")
-    
-    state["ted_lyrics"]["downloaded"] = True
-    state["ted_lyrics"]["converted"] = True
-    state["ted_lyrics"]["samples"] = 0
-    save_state(state)
-    
-    print("✓ TED-LIUM marked (download manually from OpenSLR)")
-    return True
-
 def download_musan(state):
     """Download MUSAN - music and speech for diverse audio"""
     print("\n" + "="*60)
@@ -699,9 +570,8 @@ def combine_audio_csvs():
     
     input_files = [
         "data/audio/librispeech_asr.csv",
-        "data/audio/commonvoice_asr.csv",
-        "data/audio/voxceleb_tts.csv",
-        "data/audio/urbansound_asr.csv"
+        "data/audio/ljspeech_asr.csv",
+        "data/audio/urbansound_asr.csv",
     ]
     
     all_rows = []
@@ -742,9 +612,9 @@ def combine_audio_csvs():
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade audio datasets for μOmni")
     parser.add_argument("--dataset", 
-                       choices=["all", "librispeech", "commonvoice", "voxceleb",
-                               "urbansound", "ted_lyrics", "musan",
-                               "general", "scientific", "environmental"], 
+                       choices=["all", "librispeech", "ljspeech",
+                               "urbansound", "musan",
+                               "general", "environmental"], 
                        default="all",
                        help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
@@ -758,7 +628,7 @@ def main():
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
     parser.add_argument("--max-samples", type=int, default=1000000,
-                       help="Maximum number of samples per dataset (default: 1000000, combined total ~6M for all datasets)")
+                       help="Maximum number of samples per dataset (default: 1000000, combined total ~9-10M for all datasets)")
     
     args = parser.parse_args()
     
@@ -792,24 +662,10 @@ def main():
         if not args.skip_convert:
             success = convert_librispeech_to_csv(state, args.max_samples) and success
     
-    # Common Voice
-    if args.dataset in ["all", "commonvoice", "general"]:
+    # LJSpeech
+    if args.dataset in ["all", "ljspeech", "general"]:
         if not args.skip_download:
-            success = download_commonvoice_subset(state) and success
-    
-    # VoxCeleb
-    if args.dataset in ["all", "voxceleb", "general"]:
-        if not args.skip_download:
-            success = download_voxceleb_subset(state) and success
-        if not args.skip_extract:
-            success = extract_voxceleb_subset(state) and success
-        if not args.skip_convert:
-            success = convert_voxceleb_to_csv(state, args.max_samples) and success
-    
-    # Scientific/Educational
-    if args.dataset in ["all", "ted_lyrics", "scientific"]:
-        if not args.skip_download:
-            success = download_ted_lyrics(state) and success
+            success = download_ljspeech(state, args.max_samples) and success
     
     # Environmental/Sound Effects
     if args.dataset in ["all", "urbansound", "environmental"]:

@@ -4,8 +4,7 @@ Target: Under 30GB, millions of samples
 Includes: Conversations, Instruction Following, Tool Calls, Scientific Content (Physics, Chemistry, Math, Biology), English Learning
 
 Supports:
-- Conversations: DialogStudio, Alpaca
-- Tool Calls: ToolBench
+- Conversations: Alpaca
 - Scientific: ArXiv (physics, chemistry, math, biology), PubMed, Math datasets
 - English Learning: Books, Wikipedia
 - Science Education: ScienceQA
@@ -37,11 +36,7 @@ def load_state():
         "books": {"downloaded": False, "extracted": False, "converted": False, "samples": 0, "last_book_id": 0, "last_paragraph": 0},
         
         # Conversations & Instruction Following
-        "dialogstudio": {"downloaded": False, "converted": False, "samples": 0},
         "alpaca": {"downloaded": False, "converted": False, "samples": 0, "last_line": 0},
-        
-        # Tool Calls
-        "toolbench": {"downloaded": False, "converted": False, "samples": 0},
         
         # Scientific Content
         "arxiv_physics": {"downloaded": False, "converted": False, "samples": 0, "last_start": 0, "last_batch": 0},
@@ -203,6 +198,7 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
     # Load checkpoint if resuming
     processed_titles = set()
     article_count = 0
+    page_count = 0
     files_per_dir = 100
     file_count = 0
     subdir = None
@@ -210,8 +206,9 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
     if checkpoint:
         processed_titles = set(checkpoint.get('processed_titles', []))
         article_count = checkpoint.get('article_count', 0)
+        page_count = checkpoint.get('page_count', 0)
         file_count = checkpoint.get('file_count', 0)
-        print(f"Resuming: {article_count} articles already processed, {len(processed_titles)} unique titles")
+        print(f"Resuming: {page_count} pages processed, {article_count} articles extracted, {len(processed_titles)} unique titles")
     
     print("Parsing Wikipedia XML dump (this may take 30-60 minutes)...")
     print("Using custom XML parser (no external dependencies required)...")
@@ -221,13 +218,68 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
     # Parse XML incrementally
     print("Reading and parsing XML file...")
     try:
-        # Handle bz2 compression
+        # Handle bz2 compression - need to open in text mode for XML parsing
         if input_file.endswith('.bz2'):
-            file_handle = bz2.open(input_file, 'rb')
+            file_handle = bz2.open(input_file, 'rt', encoding='utf-8', errors='ignore')
         else:
-            file_handle = open(input_file, 'rb')
+            file_handle = open(input_file, 'rt', encoding='utf-8', errors='ignore')
         
-        # Note: bz2 files don't support seek(), so we track processed titles instead
+        # Detect namespace from root element
+        namespace = None
+        for event, elem in ET.iterparse(file_handle, events=('start',)):
+            if elem.tag.startswith('{'):
+                # Extract namespace from first element
+                namespace = elem.tag[:elem.tag.index('}') + 1]
+            break
+        
+        # Close and reopen to start from beginning
+        file_handle.close()
+        if input_file.endswith('.bz2'):
+            file_handle = bz2.open(input_file, 'rt', encoding='utf-8', errors='ignore')
+        else:
+            file_handle = open(input_file, 'rt', encoding='utf-8', errors='ignore')
+        
+        # Update process_page to use detected namespace
+        def process_page_with_ns(elem):
+            """Extract text from a single page element using detected namespace"""
+            try:
+                ns_prefix = namespace if namespace else ''
+                title_elem = elem.find(f'{ns_prefix}title')
+                ns_elem = elem.find(f'{ns_prefix}ns')
+                revision_elem = elem.find(f'{ns_prefix}revision')
+                if revision_elem is not None:
+                    text_elem = revision_elem.find(f'{ns_prefix}text')
+                else:
+                    text_elem = None
+                
+                if title_elem is None or text_elem is None:
+                    return None
+                
+                title = title_elem.text or ""
+                ns = ns_elem.text if ns_elem is not None else "0"
+                text = text_elem.text or ""
+                
+                # Skip non-article namespaces (0 = main namespace)
+                if ns != "0":
+                    return None
+                
+                # Skip disambiguation pages
+                if "disambiguation" in title.lower() or "(disambiguation)" in title.lower():
+                    return None
+                
+                # Skip redirects
+                if text.strip().startswith("#REDIRECT") or text.strip().startswith("#redirect"):
+                    return None
+                
+                # Clean the text
+                cleaned = clean_wiki_text(text)
+                
+                if len(cleaned) < min_text_length:
+                    return None
+                
+                return (title, cleaned)
+            except Exception as e:
+                return None
         
         # Use iterparse for memory-efficient parsing
         context = ET.iterparse(file_handle, events=('start', 'end'))
@@ -243,13 +295,26 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
         else:
             out_f = None
         
-        page_count = 0
         max_articles = 1000000  # Limit to prevent memory issues
         
-        for event, elem in tqdm(context, desc="Processing pages"):
-            if event == 'end' and elem.tag.endswith('page'):
+        # Track progress for reporting
+        last_report_pages = page_count
+        last_report_articles = article_count
+        checkpoint_interval = 50  # Save checkpoint every 50 pages
+        report_interval = 1000  # Report progress every 1000 pages
+        
+        print(f"Starting extraction from page {page_count}...")
+        
+        for event, elem in context:
+            # Check if this is a page element (handle both with and without namespace)
+            tag_name = elem.tag
+            if '}' in tag_name:
+                tag_name = tag_name.split('}')[1]  # Remove namespace prefix
+            
+            if event == 'end' and tag_name == 'page':
                 page_count += 1
-                article = process_page(elem)
+                article = process_page_with_ns(elem)
+                
                 if article:
                     title, cleaned = article
                     # Skip if already processed
@@ -257,6 +322,7 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
                         # Open new file if needed
                         if out_f is None or (article_count % files_per_dir == 0 and article_count > 0):
                             if out_f:
+                                out_f.flush()  # Ensure data is written
                                 out_f.close()
                             subdir = os.path.join(output_dir, f"AA")
                             os.makedirs(subdir, exist_ok=True)
@@ -265,44 +331,85 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
                             out_f = open(output_file, 'a', encoding='utf-8')
                         
                         out_f.write(f"{title}\n\n{cleaned}\n\n")
+                        out_f.flush()  # Flush after each write for fine-grained resumption
                         processed_titles.add(title)
                         article_count += 1
                         
-                        # Save checkpoint every 1000 articles
-                        if article_count % 1000 == 0:
+                        # Report progress periodically
+                        if page_count - last_report_pages >= report_interval:
+                            print(f"Progress: {page_count:,} pages processed, {article_count:,} articles extracted")
+                            last_report_pages = page_count
+                            last_report_articles = article_count
+                        
+                        # Save checkpoint periodically (every N pages)
+                        if page_count % checkpoint_interval == 0:
                             save_checkpoint("wikipedia_extract", {
                                 'processed_titles': list(processed_titles),  # Keep all for deduplication
                                 'article_count': article_count,
+                                'page_count': page_count,
                                 'file_count': file_count
                             })
                         
                         if article_count >= max_articles:
+                            print(f"Reached maximum article limit ({max_articles})")
                             break
                 
-                # Clear element to free memory
+                # Clear element to free memory after processing each page
                 elem.clear()
                 root.clear()
+                
+                # Save final checkpoint after each page (for fine-grained resumption)
+                # But only every checkpoint_interval pages to avoid too frequent I/O
+                if page_count % checkpoint_interval == 0:
+                    save_checkpoint("wikipedia_extract", {
+                        'processed_titles': list(processed_titles),
+                        'article_count': article_count,
+                        'page_count': page_count,
+                        'file_count': file_count
+                    })
         
         if out_f:
+            out_f.flush()
             out_f.close()
         file_handle.close()
-    except ET.ParseError as e:
-        print(f"XML parsing error: {e}")
-        # Save checkpoint on error
+        
+        # Save final checkpoint
         save_checkpoint("wikipedia_extract", {
             'processed_titles': list(processed_titles),
             'article_count': article_count,
+            'page_count': page_count,
             'file_count': file_count
         })
+        
+    except ET.ParseError as e:
+        print(f"XML parsing error: {e}")
+        # Save checkpoint on error for resumption
+        if out_f:
+            out_f.flush()
+            out_f.close()
+        save_checkpoint("wikipedia_extract", {
+            'processed_titles': list(processed_titles),
+            'article_count': article_count,
+            'page_count': page_count,
+            'file_count': file_count
+        })
+        print(f"Checkpoint saved. Resumed at page {page_count}, {article_count} articles extracted.")
         return False
     except Exception as e:
         print(f"Error reading file: {e}")
-        # Save checkpoint on error
+        import traceback
+        traceback.print_exc()
+        # Save checkpoint on error for resumption
+        if out_f:
+            out_f.flush()
+            out_f.close()
         save_checkpoint("wikipedia_extract", {
             'processed_titles': list(processed_titles),
             'article_count': article_count,
+            'page_count': page_count,
             'file_count': file_count
         })
+        print(f"Checkpoint saved. Resumed at page {page_count}, {article_count} articles extracted.")
         return False
     
     # Clean up checkpoint on success
@@ -310,7 +417,7 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
     
-    print(f"✓ Extracted {article_count} articles")
+    print(f"✓ Extracted {article_count:,} articles from {page_count:,} pages")
     return True
 
 def extract_wikipedia_text(state):
@@ -659,59 +766,6 @@ def extract_conversation_text(item):
     
     return '\n'.join(text_parts) if text_parts else None
 
-def download_dialogstudio(state, max_samples=100000):
-    """Download DialogStudio conversations from GitHub"""
-    print("\n" + "="*60)
-    print("Downloading DialogStudio")
-    print("="*60)
-    
-    if state["dialogstudio"]["downloaded"]:
-        print("DialogStudio already downloaded, skipping...")
-        return True
-    
-    output_file = "data/text/dialogstudio.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    # Download from GitHub (direct links)
-    github_urls = [
-        "https://github.com/Salesforce/DialogStudio/raw/main/data/Conversational_Task_Oriented/ConvAI2/train.json",
-        "https://github.com/Salesforce/DialogStudio/raw/main/data/Conversational_Task_Oriented/MultiWOZ_2.1/train.json",
-    ]
-    
-    count = 0
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for url in github_urls:
-            try:
-                print(f"Downloading from {url}...")
-                response = requests.get(url, timeout=60, stream=True)
-                if response.status_code == 200:
-                    data = response.json()
-                    if isinstance(data, list):
-                        for item in tqdm(data, desc="Processing items"):
-                            text = extract_conversation_text(item)
-                            if text and len(text) > 50:
-                                f.write(text + '\n\n')
-                                count += 1
-                                if count >= max_samples:
-                                    break
-                    if count >= max_samples:
-                        break
-            except Exception as e:
-                print(f"Error downloading from {url}: {e}")
-                continue
-    
-    if count > 0:
-        state["dialogstudio"]["downloaded"] = True
-        state["dialogstudio"]["converted"] = True
-        state["dialogstudio"]["samples"] = count
-        save_state(state)
-        print(f"\n✓ Downloaded {count:,} DialogStudio samples to {output_file}")
-        return True
-    else:
-        print("ERROR: Could not download DialogStudio from any source")
-        return False
-
 def download_alpaca(state, max_samples=500000):
     """Download Alpaca instruction following dataset from GitHub and extended variants"""
     print("\n" + "="*60)
@@ -800,86 +854,6 @@ def download_alpaca(state, max_samples=500000):
         )
 
 
-def download_toolbench(state, max_samples=50000):
-    """Download ToolBench tool calling dataset from GitHub"""
-    print("\n" + "="*60)
-    print("Downloading ToolBench")
-    print("="*60)
-    
-    if state["toolbench"]["downloaded"]:
-        print("ToolBench already downloaded, skipping...")
-        return True
-    
-    output_file = "data/text/toolbench.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    # Download from GitHub (direct links)
-    github_urls = [
-        "https://raw.githubusercontent.com/OpenBMB/ToolBench/main/data/train.json",
-    ]
-    
-    count = 0
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for url in github_urls:
-            try:
-                print(f"Downloading from {url}...")
-                response = requests.get(url, timeout=60, stream=True)
-                if response.status_code == 200:
-                    data = response.json()
-                    if isinstance(data, list):
-                        for item in tqdm(data, desc="Processing items"):
-                            text = extract_tool_call_text(item)
-                            if text and len(text) > 50:
-                                f.write(text + '\n\n')
-                                count += 1
-                                if count >= max_samples:
-                                    break
-                    elif isinstance(data, dict):
-                        # Handle dict format
-                        for key, items in data.items():
-                            if isinstance(items, list):
-                                for item in items:
-                                    text = extract_tool_call_text(item)
-                                    if text and len(text) > 50:
-                                        f.write(text + '\n\n')
-                                        count += 1
-                                        if count >= max_samples:
-                                            break
-                    if count >= max_samples:
-                        break
-            except Exception as e:
-                print(f"Error downloading from {url}: {e}")
-                continue
-    
-    if count > 0:
-        state["toolbench"]["downloaded"] = True
-        state["toolbench"]["converted"] = True
-        state["toolbench"]["samples"] = count
-        save_state(state)
-        print(f"\n✓ Downloaded {count:,} ToolBench samples to {output_file}")
-        return True
-    else:
-        print("ERROR: Could not download ToolBench from any source")
-        return False
-
-def extract_tool_call_text(item):
-    """Extract tool call information from dataset item"""
-    parts = []
-    
-    if 'query' in item:
-        parts.append(f"Query: {item['query']}")
-    if 'tool_name' in item or 'function' in item:
-        tool = item.get('tool_name', item.get('function', ''))
-        parts.append(f"Tool: {tool}")
-    if 'parameters' in item or 'arguments' in item:
-        params = item.get('parameters', item.get('arguments', ''))
-        parts.append(f"Parameters: {params}")
-    if 'result' in item or 'output' in item:
-        result = item.get('result', item.get('output', ''))
-        parts.append(f"Result: {result}")
-    
-    return '\n'.join(parts) if parts else None
 
 def download_arxiv_by_category(state, category, category_key, max_samples=100000):
     """Download ArXiv papers for a specific category using ArXiv API with fine-grained resuming"""
@@ -1428,11 +1402,7 @@ def combine_text_datasets():
         "data/text/books.txt",
         
         # Conversations & Instruction Following
-        "data/text/dialogstudio.txt",
         "data/text/alpaca.txt",
-        
-        # Tool Calls
-        "data/text/toolbench.txt",
         
         # Scientific Content
         "data/text/arxiv_physics.txt",
@@ -1467,8 +1437,7 @@ def main():
     parser = argparse.ArgumentParser(description="Download production-grade text datasets for μOmni")
     parser.add_argument("--dataset", 
                        choices=["all", "wikipedia", "books",
-                               "dialogstudio", "alpaca",
-                               "toolbench",
+                               "alpaca",
                                "arxiv_physics", "arxiv_chemistry", "arxiv_math", "arxiv_biology",
                                "pubmed", "math_datasets", "scienceqa",
                                "conversations", "scientific", "general"], 
@@ -1524,18 +1493,9 @@ def main():
             success = download_books(state, args.max_samples) and success
     
     # Conversations & Instruction Following
-    if args.dataset in ["all", "dialogstudio", "conversations"]:
-        if not args.skip_download:
-            success = download_dialogstudio(state, args.max_samples) and success
-    
     if args.dataset in ["all", "alpaca", "conversations"]:
         if not args.skip_download:
             success = download_alpaca(state, args.max_samples) and success
-    
-    # Tool Calls
-    if args.dataset in ["all", "toolbench"]:
-        if not args.skip_download:
-            success = download_toolbench(state, args.max_samples) and success
     
     # Scientific Content
     if args.dataset in ["all", "arxiv_physics", "scientific"]:
