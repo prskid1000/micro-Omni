@@ -74,7 +74,40 @@ python infer_chat.py \
 
 ---
 
-## 🎤 Example 3: Audio Transcription
+## 🔍 Example 3: OCR (Text Extraction from Images)
+
+### Extract Text from Image
+
+```bash
+# Extract text from image using OCR
+python infer_chat.py \
+    --ckpt_dir checkpoints/ocr_tiny \
+    --image data/ocr/images/000001.png \
+    --ocr
+
+# Output: OCR extracted text: "HELLO"
+#         μOmni (text): Extracted text from image: HELLO. Describe what you see.
+```
+
+### OCR with Text Prompt
+
+```bash
+# Extract text and describe the image
+python infer_chat.py \
+    --ckpt_dir checkpoints/omni_sft_tiny \
+    --image data/ocr/images/000001.png \
+    --text "What text do you see in this image?" \
+    --ocr
+
+# Output: OCR extracted text: "HELLO"
+#         μOmni (text): The image contains the text "HELLO"...
+```
+
+**Note:** OCR model extracts text from images and can be combined with multimodal understanding for richer descriptions.
+
+---
+
+## 🎤 Example 4: Audio Transcription
 
 ### Speech-to-Text
 

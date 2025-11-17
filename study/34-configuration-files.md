@@ -98,6 +98,7 @@ python scripts/update_configs_from_data.py --dry-run
 - Audio: `data/audio/production_asr.csv` or `data/audio/asr.csv`
 - TTS: `data/audio/production_tts.csv` or `data/audio/tts.csv`
 - Vocoder: Uses same audio data as TTS/ASR (no separate check)
+- OCR: `data/ocr/production_ocr.csv` or `data/ocr/ocr_train.csv`
 
 **Note:** The script only checks production and synthetic files, ignoring intermediate dataset files.
 
@@ -163,6 +164,44 @@ python scripts/update_configs_from_data.py --dry-run
 - `max_audio_length`: 8192 (~0.5s, reduce to 4096 if OOM)
 - `gradient_accumulation_steps`: 4 (simulates batch_size=8)
 - `use_amp`: true (FP16 saves ~50% memory)
+
+---
+
+### `configs/ocr_tiny.json` (Optional - OCR Model)
+
+```json
+{
+  "save_dir": "checkpoints/ocr_tiny",
+  "train_csv": "data/ocr/production_ocr.csv",
+  "image_root": "data/ocr",
+  "img_size": 224,
+  "patch": 16,
+  "vision_d_model": 128,
+  "vision_layers": 4,
+  "vision_heads": 2,
+  "vision_d_ff": 512,
+  "decoder_d_model": 256,
+  "decoder_layers": 4,
+  "decoder_heads": 4,
+  "decoder_d_ff": 1024,
+  "dropout": 0.1,
+  "batch_size": 4,
+  "gradient_accumulation_steps": 2,
+  "lr": 3e-4,
+  "max_steps": 10000
+}
+```
+
+**Key Parameters:**
+- `vision_d_model`, `vision_layers`, `vision_heads`: Vision encoder (ViT) architecture
+- `decoder_d_model`, `decoder_layers`, `decoder_heads`: Text decoder architecture
+- `train_csv`: Path to OCR CSV file (format: `image,text`)
+- `image_root`: Root directory for image files
+
+**Architecture:**
+- Vision Encoder: ViT-Tiny (processes image patches)
+- Text Decoder: Autoregressive decoder (generates text from visual features)
+- Training: Teacher forcing with cross-entropy loss
 
 ---
 

@@ -52,7 +52,33 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 - Audio length limiting: 8192 samples (~0.5s) for 12GB VRAM
 - Mixed precision (FP16) enabled
 
-### 4. More Training Data
+### 4. OCR (Text Extraction from Images) ✅ **IMPLEMENTED**
+
+**Current:** OCR model with Vision Encoder + Text Decoder  
+**Status:** OCR training script available (`train_ocr.py`)
+- Extract text from images
+- End-to-end training (image → text)
+- Can be combined with multimodal understanding
+- Training optimized for 12GB VRAM
+
+**Usage:**
+```bash
+# Train OCR model (optional, for text extraction)
+python train_ocr.py --config configs/ocr_tiny.json
+
+# Time: 4-8 hours (on 12GB GPU)
+# Output: checkpoints/ocr_tiny/ocr.pt
+# Use with --ocr flag in inference
+```
+
+**Features:**
+- Vision Encoder (ViT) processes image patches
+- Text Decoder generates text autoregressively
+- Teacher forcing with cross-entropy loss
+- Memory optimized: batch_size=4, gradient accumulation=2
+- Supports synthetic and real-world OCR datasets
+
+### 5. More Training Data
 
 **Current:** Synthetic + small datasets  
 **Upgrade:** Real-world datasets

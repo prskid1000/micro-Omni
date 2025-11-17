@@ -244,6 +244,49 @@ python scripts/download_production_audio.py --dataset all --combine
 
 ---
 
+### Optional: OCR Training (`train_ocr.py`)
+
+**Format:** CSV file with header row
+
+**Location:** `data/ocr/production_ocr.csv` (or individual dataset files)
+
+**Example CSV:**
+```csv
+image,text
+ocr/images/000001.png,"HELLO"
+ocr/images/000002.png,"WORLD"
+ocr/textocr/img1.jpg,"Sample text"
+```
+
+**Config Key:** `train_csv`
+
+**Requirements:**
+- Columns: `image`, `text` (in that order)
+- Image files: JPG/PNG, will be resized to 224×224 during training
+- Text: Ground truth text labels (characters extracted from images)
+- Millions of samples for production training
+
+**Download:**
+```bash
+# ⚠️ Always use --combine to create production_ocr.csv (required for training)
+# Download with sample limit (default: 1,000,000 per dataset)
+python scripts/download_production_ocr.py --dataset all --combine
+
+# Or specify custom sample limit per dataset
+python scripts/download_production_ocr.py --dataset all --combine --max-samples 500000
+```
+
+**Features:**
+- ✅ **`--combine` creates `production_ocr.csv`** - the file that `train_ocr.py` uses
+- ✅ Fine-grained resumption (checkpoints during processing)
+- ✅ Diverse text: Synthetic text, Real-world scene text
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset)
+- ✅ Ready to use - no formatting needed
+
+**Note:** Some OCR datasets (MJSynth, TextOCR) may require manual download. See script output for instructions.
+
+---
+
 ## 🛠️ Production Download Scripts
 
 ### Quick Start (Recommended)
@@ -252,17 +295,19 @@ python scripts/download_production_audio.py --dataset all --combine
 
 ```bash
 # Download all modalities with sample-based limits (default: 1M per dataset)
-# Combined totals: Text ~10M samples (~1B tokens), Audio ~4M, Images ~4M
-# Creates: production_corpus.txt, production_asr.csv, production_tts.csv, production_annotations.json
+# Combined totals: Text ~10M samples (~1B tokens), Audio ~4M, Images ~4M, OCR ~1M
+# Creates: production_corpus.txt, production_asr.csv, production_tts.csv, production_annotations.json, production_ocr.csv
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
 python scripts/download_production_audio.py --dataset all --combine
+python scripts/download_production_ocr.py --dataset all --combine  # Optional
 ```
 
 **What `--combine` does:**
 - **Text**: Combines all `.txt` files → `data/text/production_corpus.txt`
 - **Audio**: Combines all `*_asr.csv` files → `data/audio/production_asr.csv` and `production_tts.csv`
 - **Images**: Combines all `*_annotations.json` files → `data/images/production_annotations.json`
+- **OCR**: Combines all `*_ocr.csv` files → `data/ocr/production_ocr.csv`
 
 These are the files that training scripts (`train_text.py`, `train_audio_enc.py`, etc.) use.
 
@@ -312,6 +357,7 @@ All download scripts output data in the **exact format** required by training sc
 | `train_talker.py` | `tts_csv` | CSV: `text,wav` | `data/audio/production_tts.csv` |
 | `train_vision.py` | `train_manifest`<br>`image_root` | JSON array: `[{"image": "...", "caption": "..."}]` | `data/images/production_annotations.json` |
 | `train_vocoder.py` | `train_csv` | CSV: `wav,text` or `text,wav` | `data/audio/production_tts.csv` or `production_asr.csv` |
+| `train_ocr.py` | `train_csv`<br>`image_root` | CSV: `image,text` | `data/ocr/production_ocr.csv` |
 
 **⚠️ Important: The `--combine` flag is REQUIRED** to create these production files:
 - Without `--combine`: You get individual dataset files (e.g., `wikipedia.txt`, `books.txt`, `librispeech_asr.csv`)
@@ -518,6 +564,14 @@ text,wav
 - [x] Created automatically when using `--combine` flag
 - [x] Same audio files as ASR, different column order
 
+### OCR Data
+- [x] CSV format with header
+- [x] Columns: `image`, `text`
+- [x] Image files accessible (relative to `image_root` or absolute paths)
+- [x] Outputs to `data/ocr/`
+- [x] Combined file available with `--combine`
+- [x] Fine-grained resumption support
+
 ---
 
 ## 📊 File Structure After Download
@@ -537,13 +591,19 @@ data/
 │   ├── production_tts.csv  (if --combine used)
 │   └── [audio files in subdirectories]
 │
-└── images/
-    ├── coco_annotations.json
-    ├── food101_annotations.json
-    ├── cifar10_annotations.json
-    ├── cifar100_annotations.json
-    ├── production_annotations.json  (if --combine used)
-    └── [image files in subdirectories]
+├── images/
+│   ├── coco_annotations.json
+│   ├── food101_annotations.json
+│   ├── cifar10_annotations.json
+│   ├── cifar100_annotations.json
+│   ├── production_annotations.json  (if --combine used)
+│   └── [image files in subdirectories]
+│
+└── ocr/
+    ├── mjsynth_ocr.csv
+    ├── textocr_ocr.csv
+    ├── production_ocr.csv  (if --combine used)
+    └── [OCR image files in subdirectories]
 ```
 
 ---
@@ -574,6 +634,12 @@ data/
    ```bash
    python scripts/download_production_audio.py --dataset all --combine
    # Use: data/audio/production_tts.csv (automatically created)
+   ```
+
+5. **OCR:**
+   ```bash
+   python scripts/download_production_ocr.py --dataset all --combine
+   # Use: data/ocr/production_ocr.csv
    ```
 
 ---

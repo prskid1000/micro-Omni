@@ -805,6 +805,10 @@ Requires:
 ✅ Text-to-Speech
    Input: "Hello world"
    Output: 🔊 [Audio waveform]
+
+✅ OCR (Text Extraction from Images)
+   Input: 🖼️ [Image with text] + --ocr flag
+   Output: Extracted text (can be integrated with multimodal understanding)
 ```
 
 ### What μOmni Cannot Do (Yet)
@@ -911,7 +915,7 @@ def multimodal_forward(image, audio, text):
 1. What does "multimodal" mean in AI?
 2. What are the three fusion strategies for multimodal learning?
 3. Why do we need projectors in μOmni's architecture?
-4. Name three things μOmni can do with multimodal inputs.
+4. Name three things μOmni can do with multimodal inputs (including OCR).
 5. What is the "modality gap" problem?
 
 <details>
@@ -920,7 +924,7 @@ def multimodal_forward(image, audio, text):
 1. Multimodal AI systems can understand and generate multiple types of data (text, images, audio, video) simultaneously
 2. Early fusion (combine inputs first), Late fusion (process separately, combine results), Hybrid fusion (specialized encoders + unified processing)
 3. Projectors map different modality embeddings (different dimensions) to the same dimension (d_model) so they can be processed together
-4. Any three: image description, VQA, audio transcription, multimodal reasoning, text-to-speech
+4. Any three: image description, VQA, audio transcription, multimodal reasoning, text-to-speech, OCR (text extraction from images)
 5. Different modalities have different statistical properties and tend to cluster separately in embedding space, requiring alignment
 </details>
 

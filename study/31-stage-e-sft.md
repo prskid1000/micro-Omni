@@ -17,6 +17,7 @@ Train on mixed batches with different modality combinations:
 - **Image+Text:** [cat image] + "What animal?" → "This is a cat"
 - **Audio+Text:** [audio of "hello"] + "Transcribe" → "hello"
 - **All modalities:** [image] + [audio] + "Describe" → Multimodal response
+- **OCR-enhanced:** [image with text] + OCR extraction → Enhanced understanding with extracted text
 
 ---
 

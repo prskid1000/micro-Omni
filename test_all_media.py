@@ -228,6 +228,33 @@ def main():
         print(f"SKIP: No image files found in data/images/")
         results.append(("Image+Text+TTS", None))
     
+    # Test 8: OCR (Optical Character Recognition) - extract text from image
+    print("\n[TEST 8] OCR - Extract text from image")
+    if sample_image and os.path.exists(sample_image):
+        results.append(("OCR", run_inference(
+            ["--ckpt_dir", "checkpoints/ocr_tiny",
+             "--image", sample_image,
+             "--ocr"],
+            f"OCR text extraction from image (using: {os.path.basename(sample_image)})"
+        )))
+    else:
+        print(f"SKIP: No image files found in data/images/")
+        results.append(("OCR", None))
+    
+    # Test 8b: OCR + Text prompt - extract text and describe
+    print("\n[TEST 8b] OCR + Text prompt")
+    if sample_image and os.path.exists(sample_image):
+        results.append(("OCR+Text", run_inference(
+            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
+             "--image", sample_image,
+             "--text", "What text do you see in this image?",
+             "--ocr"],
+            f"OCR with text prompt (using: {os.path.basename(sample_image)})"
+        )))
+    else:
+        print(f"SKIP: No image files found in data/images/")
+        results.append(("OCR+Text", None))
+    
     # Test 7: Video (if available) - check data/images for video or create from images
     print("\n[TEST 7] Video")
     sample_video = find_random_file("data/images", [".mp4", ".avi", ".mov"], recursive=True)

@@ -173,6 +173,43 @@ def calculate_codec_params(codebooks, codebook_size, dim):
     params += codebooks * codebook_size * dim
     return params
 
+def calculate_ocr_params(img_size, patch, vision_d_model, vision_layers, vision_heads, vision_d_ff,
+                        decoder_d_model, decoder_layers, decoder_heads, decoder_d_ff, vocab_size):
+    """Calculate OCR model parameters"""
+    params = 0
+    
+    # Vision encoder (ViT) - same as vision encoder
+    params += calculate_vision_encoder_params(img_size, patch, vision_d_model, vision_layers, vision_heads, vision_d_ff)
+    
+    # Text decoder
+    # Character embeddings
+    params += vocab_size * decoder_d_model
+    
+    # Decoder layers
+    # Self-attention: Q, K, V projections
+    attn_params = decoder_d_model * decoder_d_model * 4  # Q, K, V, output
+    # Cross-attention: MultiheadAttention (Q, K, V projections)
+    cross_attn_params = decoder_d_model * decoder_d_model * 3  # Q, K, V (output is separate)
+    cross_attn_params += decoder_d_model * decoder_d_model  # output projection
+    # MLP (SwiGLU)
+    mlp_params = decoder_d_model * decoder_d_ff * 3  # gate, up, down
+    # Normalization (RMSNorm)
+    norm_params = decoder_d_model * 3  # 3 RMSNorm per block (self-attn, cross-attn, MLP)
+    
+    block_params = attn_params + cross_attn_params + mlp_params + norm_params
+    params += block_params * decoder_layers
+    
+    # Final norm
+    params += decoder_d_model
+    
+    # Output head
+    params += decoder_d_model * vocab_size
+    
+    # Image feature projection (vision_d_model -> decoder_d_model)
+    params += vision_d_model * decoder_d_model
+    
+    return params
+
 def calculate_model_sizes():
     """Calculate sizes for all models based on config files"""
     
@@ -294,8 +331,38 @@ def calculate_model_sizes():
     print(f"  Codebooks: 2, codebook_size: 128, dim: 192")
     print(f"  Parameters: {params:,} ({format_size(params)})")
     
-    # 6. Projectors (for SFT)
-    print("\n6. Projectors (Vision & Audio)")
+    # 6. OCR Model
+    print("\n6. OCR Model (Vision Encoder + Text Decoder)")
+    print("-" * 60)
+    ocr_cfg_path = "configs/ocr_tiny.json"
+    if os.path.exists(ocr_cfg_path):
+        with open(ocr_cfg_path, 'r') as f:
+            cfg = json.load(f)
+        
+        params = calculate_ocr_params(
+            img_size=cfg.get("img_size", 224),
+            patch=cfg.get("patch", 16),
+            vision_d_model=cfg.get("vision_d_model", 128),
+            vision_layers=cfg.get("vision_layers", 4),
+            vision_heads=cfg.get("vision_heads", 2),
+            vision_d_ff=cfg.get("vision_d_ff", 512),
+            decoder_d_model=cfg.get("decoder_d_model", 256),
+            decoder_layers=cfg.get("decoder_layers", 4),
+            decoder_heads=cfg.get("decoder_heads", 4),
+            decoder_d_ff=cfg.get("decoder_d_ff", 1024),
+            vocab_size=cfg.get("vocab_size", 128)
+        )
+        total_params += params
+        results["ocr"] = params
+        print(f"  Vision: {cfg.get('vision_layers', 4)} layers, d_model={cfg.get('vision_d_model', 128)}")
+        print(f"  Decoder: {cfg.get('decoder_layers', 4)} layers, d_model={cfg.get('decoder_d_model', 256)}")
+        print(f"  Vocab size: {cfg.get('vocab_size', 128)}")
+        print(f"  Parameters: {params:,} ({format_size(params)})")
+    else:
+        print("  Config file not found (optional)")
+    
+    # 7. Projectors (for SFT)
+    print("\n7. Projectors (Vision & Audio)")
     print("-" * 60)
     # Vision projector: 128 → 256
     vision_proj_params = 128 * 256 + 256  # Linear with bias

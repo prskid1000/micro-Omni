@@ -137,6 +137,48 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 
 **Note:** Griffin-Lim works without training, but HiFi-GAN provides significantly better quality.
 
+### 7. Customize OCR Model
+
+**Train OCR for Text Extraction:**
+```bash
+# Train OCR model (optional, for text extraction from images)
+python train_ocr.py --config configs/ocr_tiny.json
+
+# Customize for your GPU:
+# - 12GB VRAM: batch_size=4, gradient_accumulation_steps=2
+# - 24GB VRAM: batch_size=8, gradient_accumulation_steps=1
+# - 6GB VRAM: batch_size=2, gradient_accumulation_steps=4
+```
+
+**Adjust OCR Config:**
+```json
+{
+  "vision_d_model": 128,        // Vision encoder dimension
+  "vision_layers": 4,           // Vision encoder layers
+  "decoder_d_model": 256,        // Text decoder dimension
+  "decoder_layers": 4,          // Text decoder layers
+  "batch_size": 4,              // Reduce if OOM
+  "gradient_accumulation_steps": 2,  // Simulate larger batch
+  "lr": 3e-4                    // Learning rate
+}
+```
+
+**Usage in Inference:**
+```bash
+# Extract text from image
+python infer_chat.py \
+    --ckpt_dir checkpoints/ocr_tiny \
+    --image path/to/image.png \
+    --ocr
+
+# Combine OCR with multimodal understanding
+python infer_chat.py \
+    --ckpt_dir checkpoints/omni_sft_tiny \
+    --image path/to/image.png \
+    --text "What text do you see?" \
+    --ocr
+```
+
 ---
 
 ## 🎯 Common Use Cases

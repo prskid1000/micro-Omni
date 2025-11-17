@@ -65,6 +65,8 @@ checkpoints/vision_encoder_tiny/
 
 Used in Stage E for multimodal image understanding!
 
+**Note:** The same Vision Encoder architecture (ViT) is also used in the optional OCR model (`train_ocr.py`) for text extraction from images. OCR uses a similar ViT encoder but with a text decoder for sequence-to-sequence text generation.
+
 ---
 
 [Continue to Chapter 30: Stage D - Talker →](30-stage-d-talker.md)

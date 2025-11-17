@@ -11,6 +11,7 @@ from omni.vision_encoder import ViTTiny
 from omni.codec import RVQ, GriffinLimVocoder, NeuralVocoder, HiFiGANVocoder
 from omni.talker import TalkerTiny
 from omni.tokenizer import BPETokenizer
+from omni.ocr_model import OCRModel
 
 def extract_video_frames(video_path, num_frames=4):
     """Extract evenly spaced frames from video"""
@@ -222,6 +223,7 @@ def main():
     ap.add_argument("--audio_out", default=None, help="Path to save audio output file (TTS)")
     ap.add_argument("--text", default=None, help="Text prompt (optional, for multimodal)")
     ap.add_argument("--prompt", default=None, help="Override default prompt")
+    ap.add_argument("--ocr", action="store_true", help="Extract text from image using OCR")
     args, rest = ap.parse_known_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -457,6 +459,88 @@ def main():
             print("Loaded Thinker from omni checkpoint")
     else:
         print("Warning: omni.pt not found, multimodal features will not be used")
+    
+    # Determine input types first
+    has_image = args.image is not None
+    has_video = args.video is not None
+    has_audio = args.audio_in is not None
+    has_text = args.text is not None
+    use_ocr = args.ocr
+    
+    # Load OCR model if OCR is requested
+    ocr_model = None
+    if use_ocr and has_image:
+        try:
+            ocr_cfg_path = "configs/ocr_tiny.json"
+            ocr_cfg = {}
+            if os.path.exists(ocr_cfg_path):
+                ocr_cfg = json.load(open(ocr_cfg_path))
+            else:
+                ocr_cfg = {
+                    "img_size": 224,
+                    "patch": 16,
+                    "vision_d_model": 128,
+                    "vision_layers": 4,
+                    "vision_heads": 2,
+                    "vision_d_ff": 512,
+                    "decoder_d_model": 256,
+                    "decoder_layers": 4,
+                    "decoder_heads": 4,
+                    "decoder_d_ff": 1024,
+                    "vocab_size": 128,
+                    "dropout": 0.1
+                }
+            
+            ocr_model = OCRModel(
+                img_size=ocr_cfg.get("img_size", 224),
+                patch=ocr_cfg.get("patch", 16),
+                vision_d_model=ocr_cfg.get("vision_d_model", 128),
+                vision_layers=ocr_cfg.get("vision_layers", 4),
+                vision_heads=ocr_cfg.get("vision_heads", 2),
+                vision_d_ff=ocr_cfg.get("vision_d_ff", 512),
+                decoder_d_model=ocr_cfg.get("decoder_d_model", 256),
+                decoder_layers=ocr_cfg.get("decoder_layers", 4),
+                decoder_heads=ocr_cfg.get("decoder_heads", 4),
+                decoder_d_ff=ocr_cfg.get("decoder_d_ff", 1024),
+                vocab_size=ocr_cfg.get("vocab_size", 128),
+                dropout=ocr_cfg.get("dropout", 0.1)
+            ).to(device)
+            
+            # Try to load OCR checkpoint
+            ocr_path = os.path.join(args.ckpt_dir, "ocr.pt")
+            if not os.path.exists(ocr_path):
+                ocr_path = "checkpoints/ocr_tiny/ocr.pt"
+            
+            if os.path.exists(ocr_path):
+                ocr_checkpoint = torch.load(ocr_path, map_location=device)
+                if "model" in ocr_checkpoint:
+                    ocr_model.load_state_dict(ocr_checkpoint["model"])
+                    print("Loaded OCR model")
+                    if "char_to_idx" in ocr_checkpoint:
+                        ocr_char_to_idx = ocr_checkpoint["char_to_idx"]
+                        ocr_idx_to_char = ocr_checkpoint.get("idx_to_char", {v: k for k, v in ocr_char_to_idx.items()})
+                    else:
+                        ocr_char_to_idx = None
+                        ocr_idx_to_char = None
+                else:
+                    ocr_model.load_state_dict(ocr_checkpoint)
+                    print("Loaded OCR model (legacy format)")
+                    ocr_char_to_idx = None
+                    ocr_idx_to_char = None
+            else:
+                print("Warning: OCR checkpoint not found, using untrained model")
+                ocr_char_to_idx = None
+                ocr_idx_to_char = None
+            
+            ocr_model.eval()
+        except Exception as e:
+            print(f"Warning: Failed to load OCR model: {e}")
+            ocr_model = None
+            ocr_char_to_idx = None
+            ocr_idx_to_char = None
+    else:
+        ocr_char_to_idx = None
+        ocr_idx_to_char = None
 
     # Image transform
     tf = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
@@ -469,12 +553,6 @@ def main():
             win_length=400, n_mels=128
         ).to(device)
 
-    # Multimodal processing
-    has_image = args.image is not None
-    has_video = args.video is not None
-    has_audio = args.audio_in is not None
-    has_text = args.text is not None
-    
     # Load vocoder if needed (for audio output TTS)
     voc = None
     if args.audio_out:  # Load if we need to generate audio output
@@ -535,6 +613,59 @@ def main():
             print(f"Processing image: {args.image}")
             img = Image.open(args.image).convert("RGB")
             img_tensor = tf(img).unsqueeze(0).to(device)
+            
+            # OCR processing if requested
+            if use_ocr and ocr_model is not None:
+                print("Extracting text from image using OCR...")
+                try:
+                    # Generate text using OCR model (autoregressive)
+                    ocr_model.eval()
+                    max_ocr_len = 128
+                    with torch.no_grad():
+                        # Start with BOS token
+                        if ocr_char_to_idx is not None:
+                            bos_id = ocr_char_to_idx.get('<BOS>', 1)
+                            eos_id = ocr_char_to_idx.get('<EOS>', 2)
+                        else:
+                            bos_id = 1
+                            eos_id = 2
+                        
+                        text_ids = torch.tensor([[bos_id]], dtype=torch.long, device=device)
+                        ocr_text = ""
+                        
+                        for _ in range(max_ocr_len):
+                            if device == "cuda":
+                                with autocast(device_type='cuda'):
+                                    logits = ocr_model(img_tensor, text_ids)  # (1, T, vocab_size)
+                            else:
+                                logits = ocr_model(img_tensor, text_ids)
+                            
+                            next_id = int(torch.argmax(logits[0, -1]))
+                            if next_id == eos_id or next_id == 0:  # EOS or PAD
+                                break
+                            
+                            if ocr_idx_to_char is not None:
+                                char = ocr_idx_to_char.get(next_id, '')
+                                if char and char not in ['<BOS>', '<EOS>', '<PAD>', '<UNK>']:
+                                    ocr_text += char
+                            else:
+                                # Fallback: use ASCII if no mapping
+                                if 32 <= next_id < 127:
+                                    ocr_text += chr(next_id)
+                            
+                            text_ids = torch.cat([text_ids, torch.tensor([[next_id]], dtype=torch.long, device=device)], dim=1)
+                        
+                        if ocr_text:
+                            print(f"OCR extracted text: {ocr_text}")
+                            # Use OCR text as part of the prompt or multimodal input
+                            if not has_text:
+                                args.text = f"Extracted text from image: {ocr_text}. Describe what you see."
+                            else:
+                                args.text = f"{args.text} (OCR extracted: {ocr_text})"
+                except Exception as e:
+                    print(f"Warning: OCR extraction failed: {e}")
+            
+            # Regular vision processing
             if device == "cuda":
                 with autocast(device_type='cuda'):
                     cls, _ = vis(img_tensor)

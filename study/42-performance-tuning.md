@@ -145,6 +145,7 @@ print(f"Peak memory: {peak_memory:.2f} GB")
 - Image processing: <100ms per image
 - Audio transcription: 2-3x real-time
 - Text-to-speech: 1-2x real-time
+- OCR (text extraction): <200ms per image
 
 **Training (12GB GPU):**
 - Stage A: 8-12 hours
@@ -153,6 +154,8 @@ print(f"Peak memory: {peak_memory:.2f} GB")
 - Stage D: 10-15 hours
 - Stage E: 6-12 hours
 - **Total: 40-60 hours**
+- Optional OCR: 4-8 hours
+- Optional HiFi-GAN: 2-4 hours
 
 ---
 

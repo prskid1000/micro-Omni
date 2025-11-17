@@ -288,6 +288,8 @@ This progressive approach ensures stable, effective learning!
 | **C** | Vision Encoder | Classification | Images + Labels | Cross-Entropy | Accuracy | 4-8h | None |
 | **D** | RVQ + Talker | Speech Gen | Audio (TTS) | MSE + CE | Recon Error | 10-15h | None (RVQ), Then Talker needs RVQ |
 | **E** | All (Joint) | Multimodal QA | Mixed Modalities | Cross-Entropy | Task Acc | 6-12h | A, B, C, D |
+| **Optional** | OCR | Text Extraction | Images + Text | Cross-Entropy | Character Acc | 4-8h | None |
+| **Optional** | HiFi-GAN | Vocoder | Audio (TTS) | Adversarial | Quality | 2-4h | None |
 
 **Total Estimated Time: 40-60 hours** on single 12GB GPU (tiny model, 25.65M params)
 

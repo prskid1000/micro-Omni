@@ -116,7 +116,7 @@ def calculate_training_params(
         "checkpoint_freq": checkpoint_freq,
     }
 
-def update_data_paths(config: Dict) -> Dict:
+def update_data_paths(config: Dict, config_path: str = "") -> Dict:
     """Update data paths to use production or synthetic files if they exist"""
     # Text paths - only production or synthetic
     if "train_text" in config:
@@ -161,6 +161,24 @@ def update_data_paths(config: Dict) -> Dict:
             elif os.path.exists("data/audio/tts.csv"):
                 print(f"  → Updating tts_csv: {config['tts_csv']} → data/audio/tts.csv")
                 config["tts_csv"] = "data/audio/tts.csv"
+    
+    # OCR paths - only production or synthetic
+    # Check if this is an OCR config by checking config_path or save_dir
+    is_ocr_config = False
+    if config_path:
+        is_ocr_config = "ocr" in config_path.lower()
+    elif "save_dir" in config:
+        is_ocr_config = "ocr" in config["save_dir"].lower()
+    
+    if is_ocr_config and "train_csv" in config:
+        if not os.path.exists(config["train_csv"]):
+            # Try production first, then synthetic
+            if os.path.exists("data/ocr/production_ocr.csv"):
+                print(f"  → Updating train_csv: {config['train_csv']} → data/ocr/production_ocr.csv")
+                config["train_csv"] = "data/ocr/production_ocr.csv"
+            elif os.path.exists("data/ocr/ocr_train.csv"):
+                print(f"  → Updating train_csv: {config['train_csv']} → data/ocr/ocr_train.csv")
+                config["train_csv"] = "data/ocr/ocr_train.csv"
     
     # Multimodal paths - only production or synthetic
     if "sft_mix" in config:
@@ -219,7 +237,8 @@ def update_config_file(
     
     # Update data paths if requested
     if update_paths:
-        config = update_data_paths(config)
+        # Pass config_path to update_data_paths for OCR detection
+        config = update_data_paths(config, config_path)
     
     # Update training parameters
     config["max_steps"] = params["max_steps"]
@@ -437,6 +456,43 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     else:
         print("  ⚠ No multimodal data found, skipping...")
     
+    # OCR Training (ocr_tiny.json)
+    print("\n[OCR] OCR Training (ocr_tiny.json)")
+    ocr_files = [
+        "data/ocr/production_ocr.csv",  # Production file
+        "data/ocr/ocr_train.csv",        # Synthetic file from make_synthetic_datasets.py
+    ]
+    ocr_samples = 0
+    ocr_csv = None
+    for ocrf in ocr_files:
+        if os.path.exists(ocrf):
+            count = count_audio_samples(ocrf)  # OCR uses same CSV format as audio
+            if count > ocr_samples:
+                ocr_samples = count
+                ocr_csv = ocrf
+    if ocr_samples > 0:
+        ocr_params = calculate_training_params(
+            ocr_samples,
+            batch_size=4,  # From config
+            gradient_accumulation=2,  # From config
+            val_split=0.1
+        )
+        print(f"  Samples: {ocr_params['num_samples']:,}")
+        print(f"  Steps/epoch: {ocr_params['steps_per_epoch']:,}")
+        print(f"  Recommended epochs: {ocr_params['recommended_epochs']}")
+        print(f"  Max steps: {ocr_params['max_steps']:,}")
+        print(f"  Warmup steps: {ocr_params['warmup_steps']:,}")
+        
+        if not dry_run:
+            update_config_file(
+                "configs/ocr_tiny.json",
+                ocr_params,
+                preserve_keys=["train_csv", "image_root"],  # Preserve data paths
+                update_paths=True
+            )
+    else:
+        print("  ⚠ No OCR data found, skipping...")
+    
     print("\n" + "="*60)
     if dry_run:
         print("DRY RUN: No files were modified")
@@ -450,6 +506,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     print(f"  Text samples: {text_samples:,}")
     print(f"  Image samples: {image_samples:,}")
     print(f"  Audio samples: {audio_samples:,}")
+    print(f"  OCR samples: {ocr_samples:,}")
     print(f"  Multimodal (max): {multimodal_samples:,}")
 
 def main():

@@ -97,6 +97,23 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 - If you want higher quality speech output
 - Griffin-Lim works fine for basic TTS, but HiFi-GAN is better
 
+### Optional: OCR Training
+
+```bash
+# Train OCR model for text extraction from images (optional)
+python train_ocr.py --config configs/ocr_tiny.json
+
+# Time: 4-8 hours (on 12GB GPU)
+# Target: Accurate text extraction from images
+# Output: checkpoints/ocr_tiny/ocr.pt
+# Note: Can be used with --ocr flag in inference
+```
+
+**When to train:**
+- If you need text extraction from images
+- For document processing, scene text recognition
+- Can be combined with multimodal understanding in Stage E
+
 ---
 
 ## 📊 Monitoring Training

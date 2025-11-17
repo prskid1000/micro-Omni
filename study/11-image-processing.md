@@ -436,7 +436,10 @@ ViT: Global attention from layer 1 (patch interactions)
 ✅ **Patch embeddings** reduce sequence length (196 patches)  
 ✅ **CLS token** aggregates global image information  
 ✅ **μOmni uses ViT-Tiny** (128-dim, 4 layers)  
-✅ **Output**: Single 256-dim vector per image
+✅ **Output**: Single 256-dim vector per image  
+✅ **Applications**: Image understanding, OCR (text extraction), multimodal fusion
+
+**Note:** The same ViT architecture is used in μOmni's Vision Encoder (for general image understanding) and OCR model (for text extraction from images). OCR uses ViT to process image patches, then a text decoder generates the extracted text sequence.
 
 ---
 

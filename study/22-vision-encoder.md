@@ -644,7 +644,10 @@ With vision encoder:
 ✅ **Projects to 256-dim** to align with Thinker  
 ✅ **Single embedding** represents entire image  
 ✅ **~914K parameters** - compact and efficient  
-✅ **Enables multimodal** text+image+audio understanding
+✅ **Enables multimodal** text+image+audio understanding  
+✅ **Also used in OCR** model for text extraction from images
+
+**Note:** The Vision Encoder (ViT) architecture is also used in the optional OCR model (`train_ocr.py`), where it processes image patches to extract visual features that are then decoded into text sequences.
 
 ---
 
