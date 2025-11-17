@@ -4,6 +4,7 @@ from torch import nn
 from typing import Optional
 import numpy as np
 import warnings
+import os
 
 class RVQ(nn.Module):
     """ 
@@ -243,3 +244,437 @@ class GriffinLimVocoder:
                 t = np.linspace(0, duration, int(self.sr * duration))
                 y = 0.1 * np.sin(2 * np.pi * 440 * t)  # A4 note
                 return y
+
+
+class HiFiGANVocoder(nn.Module):
+    """
+    Neural vocoder based on HiFi-GAN architecture.
+    Converts mel spectrograms to high-quality audio waveforms.
+    
+    Architecture:
+    - Generator: Multi-receptive field fusion (MRF) with transposed convolutions
+    - Discriminator: Multi-period discriminator (MPD) + Multi-scale discriminator (MSD)
+    
+    This implementation provides a lightweight HiFi-GAN suitable for 16kHz audio.
+    Can use pretrained weights or train from scratch.
+    """
+    def __init__(self, sample_rate: int = 16000, n_mels: int = 128, 
+                 n_fft: int = 1024, hop_length: int = 256, 
+                 upsample_rates: list = [8, 8, 2, 2],
+                 upsample_kernel_sizes: list = [16, 16, 4, 4],
+                 upsample_initial_channel: int = 512,
+                 resblock_kernel_sizes: list = [3, 7, 11],
+                 resblock_dilation_sizes: list = [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+                 checkpoint_path: Optional[str] = None) -> None:
+        """
+        Initialize HiFi-GAN vocoder.
+        
+        Args:
+            sample_rate: Audio sample rate (default: 16000)
+            n_mels: Number of mel bins (default: 128)
+            n_fft: FFT size (default: 1024)
+            hop_length: Hop length for STFT (default: 256)
+            upsample_rates: Upsampling rates for each layer
+            upsample_kernel_sizes: Kernel sizes for upsampling
+            upsample_initial_channel: Initial channel size
+            resblock_kernel_sizes: Kernel sizes for residual blocks
+            resblock_dilation_sizes: Dilation sizes for residual blocks
+            checkpoint_path: Path to pretrained checkpoint (optional)
+        """
+        super().__init__()
+        self.sample_rate = sample_rate
+        self.n_mels = n_mels
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        
+        # Generator network
+        self.num_kernels = len(resblock_kernel_sizes)
+        self.num_upsamples = len(upsample_rates)
+        
+        # Initial convolution
+        self.conv_pre = nn.Conv1d(n_mels, upsample_initial_channel, 7, 1, padding=3)
+        
+        # Upsampling layers
+        self.ups = nn.ModuleList()
+        for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
+            self.ups.append(nn.ConvTranspose1d(
+                upsample_initial_channel // (2 ** i),
+                upsample_initial_channel // (2 ** (i + 1)),
+                k, u, padding=(k - u) // 2
+            ))
+        
+        # Multi-receptive field fusion (MRF) blocks
+        self.resblocks = nn.ModuleList()
+        for i in range(len(self.ups)):
+            ch = upsample_initial_channel // (2 ** (i + 1))
+            for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
+                self.resblocks.append(ResBlock(ch, k, d))
+        
+        # Final convolution
+        self.conv_post = nn.Conv1d(ch, 1, 7, 1, padding=3)
+        self.activation_post = nn.Tanh()
+        
+        # Load pretrained weights if available
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            self.load_checkpoint(checkpoint_path)
+    
+    def forward(self, mel: torch.Tensor) -> torch.Tensor:
+        """
+        Convert mel spectrogram to audio waveform.
+        
+        Args:
+            mel: (B, n_mels, T) or (n_mels, T) mel spectrogram
+        
+        Returns:
+            audio: (B, T_audio) or (T_audio,) audio waveform
+        """
+        # Handle input shape
+        if mel.dim() == 2:
+            mel = mel.unsqueeze(0)  # (n_mels, T) -> (1, n_mels, T)
+        if mel.dim() == 3 and mel.shape[1] != self.n_mels:
+            mel = mel.transpose(1, 2)  # (B, T, n_mels) -> (B, n_mels, T)
+        
+        # Ensure mel is in correct range (normalized to [-1, 1] or [0, 1])
+        if mel.max() > 1.0:
+            mel = mel / (mel.max() + 1e-8) * 2.0 - 1.0  # Normalize to [-1, 1]
+        
+        # Generator forward pass
+        x = self.conv_pre(mel)
+        
+        for i in range(self.num_upsamples):
+            x = torch.nn.functional.leaky_relu(x, 0.1)
+            x = self.ups[i](x)
+            
+            # Apply MRF blocks
+            xs = None
+            for j in range(self.num_kernels):
+                if xs is None:
+                    xs = self.resblocks[i * self.num_kernels + j](x)
+                else:
+                    xs += self.resblocks[i * self.num_kernels + j](x)
+            x = xs / self.num_kernels
+        
+        x = torch.nn.functional.leaky_relu(x)
+        x = self.conv_post(x)
+        x = self.activation_post(x)
+        
+        # Remove batch dimension if input was 2D
+        if mel.dim() == 2 or (mel.dim() == 3 and mel.shape[0] == 1):
+            x = x.squeeze(0)
+        
+        return x.squeeze(0) if x.dim() > 1 else x
+    
+    def mel_to_audio(self, mel: np.ndarray) -> np.ndarray:
+        """
+        Convert mel spectrogram (numpy) to audio waveform.
+        
+        Args:
+            mel: (T, n_mels) or (n_mels, T) mel spectrogram
+        
+        Returns:
+            audio: (n_samples,) audio waveform
+        """
+        # Convert to torch tensor
+        if isinstance(mel, np.ndarray):
+            mel_tensor = torch.from_numpy(mel).float()
+        else:
+            mel_tensor = mel.float()
+        
+        # Handle shape: convert to (n_mels, T)
+        if mel_tensor.shape[0] > mel_tensor.shape[1]:
+            mel_tensor = mel_tensor.T  # (T, n_mels) -> (n_mels, T)
+        
+        # Add batch dimension if needed
+        if mel_tensor.dim() == 2:
+            mel_tensor = mel_tensor.unsqueeze(0)  # (n_mels, T) -> (1, n_mels, T)
+        
+        # Generate audio
+        self.eval()
+        with torch.no_grad():
+            audio_tensor = self.forward(mel_tensor)
+        
+        # Convert to numpy
+        audio = audio_tensor.cpu().numpy() if isinstance(audio_tensor, torch.Tensor) else audio_tensor
+        
+        # Normalize to prevent clipping
+        if np.max(np.abs(audio)) > 0:
+            audio = audio / (np.max(np.abs(audio)) + 1e-8) * 0.95
+        
+        return audio
+    
+    def load_checkpoint(self, checkpoint_path: str) -> None:
+        """Load pretrained weights from checkpoint."""
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            if 'generator' in checkpoint:
+                self.load_state_dict(checkpoint['generator'])
+            elif 'model' in checkpoint:
+                self.load_state_dict(checkpoint['model'])
+            else:
+                self.load_state_dict(checkpoint)
+            print(f"✓ Loaded HiFi-GAN checkpoint from {checkpoint_path}")
+        except Exception as e:
+            warnings.warn(f"Failed to load HiFi-GAN checkpoint: {e}. Using random initialization.")
+
+
+class ResBlock(nn.Module):
+    """Residual block with dilated convolutions for multi-receptive field fusion."""
+    def __init__(self, channels: int, kernel_size: int = 3, dilations: list = [1, 3, 5]) -> None:
+        super().__init__()
+        self.convs1 = nn.ModuleList([
+            nn.Conv1d(channels, channels, kernel_size, 1, 
+                     dilation=d, padding=(kernel_size - 1) * d // 2)
+            for d in dilations
+        ])
+        self.convs2 = nn.ModuleList([
+            nn.Conv1d(channels, channels, kernel_size, 1, 
+                     dilation=1, padding=(kernel_size - 1) // 2)
+            for _ in dilations
+        ])
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for c1, c2 in zip(self.convs1, self.convs2):
+            xt = torch.nn.functional.leaky_relu(x, 0.1)
+            xt = c1(xt)
+            xt = torch.nn.functional.leaky_relu(xt, 0.1)
+            xt = c2(xt)
+            x = x + xt
+        return x
+
+
+class MultiPeriodDiscriminator(nn.Module):
+    """
+    Multi-Period Discriminator (MPD) for HiFi-GAN training.
+    Uses multiple sub-discriminators with different periods to capture different temporal patterns.
+    """
+    def __init__(self, periods: list = [2, 3, 5, 7, 11]) -> None:
+        super().__init__()
+        self.discriminators = nn.ModuleList([
+            DiscriminatorP(period) for period in periods
+        ])
+    
+    def forward(self, x: torch.Tensor) -> tuple:
+        """
+        Forward pass through all period discriminators.
+        
+        Args:
+            x: (B, 1, T) audio waveform
+        
+        Returns:
+            outputs: List of discriminator outputs
+            feature_maps: List of feature maps for feature matching loss
+        """
+        outputs = []
+        feature_maps = []
+        for disc in self.discriminators:
+            out, feats = disc(x)
+            outputs.append(out)
+            feature_maps.append(feats)
+        return outputs, feature_maps
+
+
+class DiscriminatorP(nn.Module):
+    """Period discriminator for a specific period."""
+    def __init__(self, period: int, kernel_size: int = 5, stride: int = 3) -> None:
+        super().__init__()
+        self.period = period
+        self.convs = nn.ModuleList([
+            nn.Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(2, 0)),
+            nn.Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(2, 0)),
+            nn.Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(2, 0)),
+            nn.Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(2, 0)),
+            nn.Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(2, 0)),
+        ])
+        self.conv_post = nn.Conv2d(1024, 1, (3, 1), 1, padding=(1, 0))
+    
+    def forward(self, x: torch.Tensor) -> tuple:
+        """
+        Args:
+            x: (B, 1, T) audio waveform
+        
+        Returns:
+            output: (B, 1, T') discriminator output
+            feature_maps: List of intermediate feature maps
+        """
+        # Reshape to (B, 1, period, T//period)
+        if x.shape[-1] % self.period != 0:
+            pad_len = self.period - (x.shape[-1] % self.period)
+            x = torch.nn.functional.pad(x, (0, pad_len))
+        
+        b, c, t = x.shape
+        x = x.view(b, c, t // self.period, self.period)
+        
+        feature_maps = []
+        for conv in self.convs:
+            x = conv(x)
+            x = torch.nn.functional.leaky_relu(x, 0.1)
+            feature_maps.append(x)
+        
+        x = self.conv_post(x)
+        feature_maps.append(x)
+        
+        return x, feature_maps
+
+
+class MultiScaleDiscriminator(nn.Module):
+    """
+    Multi-Scale Discriminator (MSD) for HiFi-GAN training.
+    Uses multiple sub-discriminators at different scales to capture different frequency patterns.
+    """
+    def __init__(self) -> None:
+        super().__init__()
+        self.discriminators = nn.ModuleList([
+            DiscriminatorS(use_spectral_norm=True),
+            DiscriminatorS(),
+            DiscriminatorS(),
+        ])
+        self.pools = nn.ModuleList([
+            nn.AvgPool1d(4, 2, padding=2),
+            nn.AvgPool1d(4, 2, padding=2),
+        ])
+    
+    def forward(self, x: torch.Tensor) -> tuple:
+        """
+        Args:
+            x: (B, 1, T) audio waveform
+        
+        Returns:
+            outputs: List of discriminator outputs at different scales
+            feature_maps: List of feature maps for feature matching loss
+        """
+        outputs = []
+        feature_maps = []
+        
+        for i, disc in enumerate(self.discriminators):
+            if i > 0:
+                x = self.pools[i - 1](x)
+            out, feats = disc(x)
+            outputs.append(out)
+            feature_maps.append(feats)
+        
+        return outputs, feature_maps
+
+
+class DiscriminatorS(nn.Module):
+    """Scale discriminator."""
+    def __init__(self, use_spectral_norm: bool = False) -> None:
+        super().__init__()
+        norm_f = nn.utils.spectral_norm if use_spectral_norm else lambda x: x
+        
+        self.convs = nn.ModuleList([
+            norm_f(nn.Conv1d(1, 128, 15, 1, padding=7)),
+            norm_f(nn.Conv1d(128, 128, 41, 2, groups=4, padding=20)),
+            norm_f(nn.Conv1d(128, 256, 41, 2, groups=16, padding=20)),
+            norm_f(nn.Conv1d(256, 512, 41, 4, groups=16, padding=20)),
+            norm_f(nn.Conv1d(512, 1024, 41, 4, groups=16, padding=20)),
+            norm_f(nn.Conv1d(1024, 1024, 41, 1, groups=16, padding=20)),
+            norm_f(nn.Conv1d(1024, 1024, 5, 1, padding=2)),
+        ])
+        self.conv_post = norm_f(nn.Conv1d(1024, 1, 3, 1, padding=1))
+    
+    def forward(self, x: torch.Tensor) -> tuple:
+        """
+        Args:
+            x: (B, 1, T) audio waveform
+        
+        Returns:
+            output: (B, 1, T') discriminator output
+            feature_maps: List of intermediate feature maps
+        """
+        feature_maps = []
+        for conv in self.convs:
+            x = conv(x)
+            x = torch.nn.functional.leaky_relu(x, 0.1)
+            feature_maps.append(x)
+        
+        x = self.conv_post(x)
+        feature_maps.append(x)
+        
+        return x, feature_maps
+
+
+class NeuralVocoder:
+    """
+    Wrapper class that automatically selects the best available vocoder.
+    Tries HiFi-GAN first, falls back to Griffin-Lim if neural vocoder unavailable.
+    """
+    def __init__(self, sample_rate: int = 16000, n_mels: int = 128,
+                 checkpoint_path: Optional[str] = None, 
+                 prefer_neural: bool = True) -> None:
+        """
+        Initialize vocoder with automatic fallback.
+        
+        Args:
+            sample_rate: Audio sample rate
+            n_mels: Number of mel bins
+            checkpoint_path: Path to HiFi-GAN checkpoint (optional)
+            prefer_neural: If True, try neural vocoder first (default: True)
+        """
+        self.sample_rate = sample_rate
+        self.n_mels = n_mels
+        self.vocoder = None
+        self.vocoder_type = None
+        
+        # Try to load neural vocoder
+        if prefer_neural:
+            try:
+                # Check if checkpoint exists
+                if checkpoint_path and os.path.exists(checkpoint_path):
+                    self.vocoder = HiFiGANVocoder(
+                        sample_rate=sample_rate,
+                        n_mels=n_mels,
+                        checkpoint_path=checkpoint_path
+                    )
+                    self.vocoder_type = "hifigan"
+                    print("✓ Using HiFi-GAN neural vocoder (pretrained)")
+                else:
+                    # Initialize untrained HiFi-GAN (will need training)
+                    self.vocoder = HiFiGANVocoder(
+                        sample_rate=sample_rate,
+                        n_mels=n_mels
+                    )
+                    self.vocoder_type = "hifigan"
+                    print("✓ Using HiFi-GAN neural vocoder (untrained - will need training)")
+            except Exception as e:
+                warnings.warn(f"Failed to initialize HiFi-GAN: {e}. Falling back to Griffin-Lim.")
+                self.vocoder = None
+        
+        # Fallback to Griffin-Lim
+        if self.vocoder is None:
+            try:
+                import librosa
+                self.vocoder = GriffinLimVocoder(
+                    sample_rate=sample_rate,
+                    n_mels=n_mels
+                )
+                self.vocoder_type = "griffin_lim"
+                print("✓ Using Griffin-Lim vocoder (fallback)")
+            except ImportError:
+                raise ImportError("Neither HiFi-GAN nor Griffin-Lim available. Install librosa for Griffin-Lim.")
+    
+    def mel_to_audio(self, mel: np.ndarray) -> np.ndarray:
+        """
+        Convert mel spectrogram to audio waveform.
+        
+        Args:
+            mel: (T, n_mels) or (n_mels, T) mel spectrogram
+        
+        Returns:
+            audio: (n_samples,) audio waveform
+        """
+        if self.vocoder_type == "hifigan":
+            return self.vocoder.mel_to_audio(mel)
+        else:
+            return self.vocoder.mel_to_audio(mel)
+    
+    def to(self, device: str) -> 'NeuralVocoder':
+        """Move vocoder to device (for neural vocoders)."""
+        if self.vocoder_type == "hifigan" and isinstance(self.vocoder, nn.Module):
+            self.vocoder = self.vocoder.to(device)
+        return self
+    
+    def eval(self) -> 'NeuralVocoder':
+        """Set vocoder to evaluation mode (for neural vocoders)."""
+        if self.vocoder_type == "hifigan" and isinstance(self.vocoder, nn.Module):
+            self.vocoder.eval()
+        return self

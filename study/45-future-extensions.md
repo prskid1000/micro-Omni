@@ -27,13 +27,30 @@ Ideas for extending μOmni beyond its current capabilities.
 - Requires: Optimized attention (Flash Attention 2)
 - Benefit: Handle longer conversations/documents
 
-### 3. Improved Speech Quality
+### 3. Improved Speech Quality ✅ **IMPLEMENTED**
 
-**Current:** Griffin-Lim vocoder (classical)  
-**Upgrade:** Neural vocoder (WaveNet, HiFi-GAN)
-- More natural speech
-- Better prosody
-- Requires additional training
+**Current:** Griffin-Lim vocoder (classical) + HiFi-GAN neural vocoder (optional)  
+**Status:** HiFi-GAN training script available (`train_vocoder.py`)
+- More natural speech with neural vocoder
+- Better prosody and quality
+- Automatic fallback to Griffin-Lim if HiFi-GAN unavailable
+- Training optimized for 12GB VRAM
+
+**Usage:**
+```bash
+# Train HiFi-GAN vocoder (optional, improves speech quality)
+python train_vocoder.py --config configs/vocoder_tiny.json
+
+# Time: 2-4 hours (on 12GB GPU)
+# Output: checkpoints/vocoder_tiny/hifigan.pt
+# Inference automatically uses HiFi-GAN if checkpoint available
+```
+
+**Features:**
+- Adversarial training (Generator vs MPD + MSD discriminators)
+- Memory optimized: batch_size=2, gradient accumulation=4
+- Audio length limiting: 8192 samples (~0.5s) for 12GB VRAM
+- Mixed precision (FP16) enabled
 
 ### 4. More Training Data
 

@@ -589,6 +589,23 @@ gradient ───→ quantized ←─── gradient
 
 ## 🔊 Vocoder: Mel to Waveform
 
+### Vocoder Options
+
+**μOmni supports two vocoders:**
+
+1. **HiFi-GAN (Neural Vocoder)** - Recommended for production
+   - ✅ High quality, natural speech
+   - ✅ Better prosody
+   - ⚠️ Requires training (~2-4 hours)
+   - ✅ Automatic fallback to Griffin-Lim if unavailable
+
+2. **Griffin-Lim (Classical Algorithm)** - Default fallback
+   - ✅ No training required
+   - ✅ Deterministic
+   - ✅ Fast inference
+   - ❌ Lower quality than neural vocoders
+   - ❌ Can sound robotic
+
 ### Griffin-Lim Algorithm
 
 ```
@@ -604,18 +621,21 @@ Steps:
    - Keep magnitude, update phase
    - Repeat 32 times
 4. Final ISTFT → audio waveform
-
-Benefits:
-✅ No training required
-✅ Deterministic
-✅ Fast inference
-
-Drawbacks:
-❌ Lower quality than neural vocoders (HiFi-GAN, etc.)
-❌ Can sound robotic
-
-μOmni uses Griffin-Lim for simplicity!
 ```
+
+### Training HiFi-GAN
+
+```bash
+# Train neural vocoder (optional, improves quality)
+python train_vocoder.py --config configs/vocoder_tiny.json
+```
+
+**Training Details:**
+- Uses adversarial training (Generator vs Discriminators)
+- Multi-Period Discriminator (MPD) + Multi-Scale Discriminator (MSD)
+- Optimized for 12GB VRAM (batch_size=2, gradient accumulation=4)
+- Audio length limit: 8192 samples (~0.5s)
+- Mixed precision (FP16) enabled
 
 ---
 
@@ -647,7 +667,9 @@ for t in range(codes.shape[1]):
 mel = torch.stack(mel_frames, dim=0)  # (T, 128)
 
 # 3. Vocoder: Mel to audio
-vocoder = GriffinLimVocoder()
+# Automatically uses HiFi-GAN if available, falls back to Griffin-Lim
+from omni.codec import NeuralVocoder
+vocoder = NeuralVocoder(checkpoint_path="checkpoints/vocoder_tiny/hifigan.pt")
 audio = vocoder.mel_to_audio(mel.numpy())
 
 # 4. Save
@@ -664,7 +686,7 @@ sf.write("output.wav", audio, 16000)
 ✅ **RVQ** uses multiple codebooks for progressive refinement  
 ✅ **μOmni uses 2 codebooks** of 128 codes each (16,384 combinations)  
 ✅ **Straight-through estimator** enables gradient flow  
-✅ **Griffin-Lim vocoder** converts mel to audio (no training)  
+✅ **Vocoder** converts mel to audio (HiFi-GAN if trained, else Griffin-Lim)  
 ✅ **Enables autoregressive speech generation** like text!
 
 ---

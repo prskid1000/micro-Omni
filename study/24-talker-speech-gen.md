@@ -356,14 +356,10 @@ for i in range(200):
 
 mel_spectrogram = stack(mel_frames)  # (200, 128)
 
-Step 2: Griffin-Lim Vocoder (Mel → Audio)
+Step 2: Vocoder (Mel → Audio)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-audio_waveform = griffin_lim(
-    mel_spectrogram,
-    n_fft=2048,
-    hop_length=256,
-    n_iter=32
-)
+# Uses HiFi-GAN if available, falls back to Griffin-Lim
+audio_waveform = vocoder.mel_to_audio(mel_spectrogram)
 
 Step 3: Save Audio
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -406,7 +402,7 @@ def generate_speech(talker, rvq, vocoder, max_frames=200):
         mel_frames.append(mel)
     mel_spectrogram = torch.stack(mel_frames)  # (200, 128)
     
-    # Vocode with Griffin-Lim
+    # Vocode (HiFi-GAN if available, else Griffin-Lim)
     audio = vocoder.mel_to_audio(mel_spectrogram)
     
     return audio
@@ -689,7 +685,7 @@ Result: Complete text-to-speech system!
 ✅ **Autoregressive** code prediction  
 ✅ **2 separate heads** (base + residual)  
 ✅ **Uses KV caching** for speed  
-✅ **Works with RVQ + Griffin-Lim** vocoder
+✅ **Works with RVQ + vocoder** (HiFi-GAN or Griffin-Lim)
 
 ---
 

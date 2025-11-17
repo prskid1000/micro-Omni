@@ -93,6 +93,34 @@ Enables text-to-speech in final system!
 
 ---
 
+## 🔊 Optional: HiFi-GAN Neural Vocoder Training
+
+**After Stage D**, you can optionally train a neural vocoder for higher quality speech:
+
+```bash
+# Train HiFi-GAN vocoder (optional, improves speech quality)
+python train_vocoder.py --config configs/vocoder_tiny.json
+
+# Time: 2-4 hours (on 12GB GPU)
+# Target: Natural-sounding speech
+# Output: checkpoints/vocoder_tiny/hifigan.pt
+```
+
+**Benefits:**
+- ✅ More natural speech than Griffin-Lim
+- ✅ Better prosody and quality
+- ✅ Automatic fallback to Griffin-Lim if unavailable
+
+**Memory Optimized:**
+- Batch size: 2 (with gradient accumulation: effective batch size 8)
+- Audio length limit: 8192 samples (~0.5s)
+- Mixed precision (FP16) enabled
+- Optimized for 12GB VRAM
+
+**Note:** Griffin-Lim vocoder works without training, but HiFi-GAN provides better quality.
+
+---
+
 [Continue to Chapter 31: Stage E - Multimodal SFT →](31-stage-e-sft.md)
 
 **Chapter Progress:** Training Pipeline ●●●●●○ (5/6 complete)

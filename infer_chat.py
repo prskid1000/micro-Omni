@@ -1,5 +1,6 @@
 
 import argparse, os, torch, torchaudio, json
+import torch.nn as nn
 from PIL import Image
 from torch.amp import autocast
 from torchvision import transforms
@@ -7,7 +8,7 @@ import torchvision.io as tvio
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.codec import RVQ, GriffinLimVocoder
+from omni.codec import RVQ, GriffinLimVocoder, NeuralVocoder, HiFiGANVocoder
 from omni.talker import TalkerTiny
 from omni.tokenizer import BPETokenizer
 
@@ -173,29 +174,30 @@ def generate_audio(talker, rvq, voc, text_tokens, device, max_frames=None):
         mel = torch.stack(mel_frames, dim=0)  # (T, 128)
         
         # Convert mel to audio using vocoder
-        # Vocoder expects (T, mel_bins) which we have
         import numpy as np
-        mel_np = mel.cpu().numpy()  # (T, 128)
         
-        # Ensure we have variation in the mel spectrogram
-        # If all values are the same, add some variation
-        if mel_np.max() <= mel_np.min() + 1e-6:
-            # Add some variation based on frame position
-            t_indices = np.arange(mel_np.shape[0])[:, None]
-            mel_np = mel_np + 0.1 * np.sin(2 * np.pi * t_indices / 10) * np.random.randn(1, mel_np.shape[1])
-        
-        # Normalize to [0, 1] range for vocoder
-        mel_min = mel_np.min()
-        mel_max = mel_np.max()
+        # Normalize mel spectrogram
+        mel_min = mel.min()
+        mel_max = mel.max()
         if mel_max > mel_min + 1e-6:
-            mel_np = (mel_np - mel_min) / (mel_max - mel_min + 1e-8)
+            mel_normalized = (mel - mel_min) / (mel_max - mel_min + 1e-8)
         else:
-            # If still no variation, create a simple pattern
-            t = np.arange(mel_np.shape[0])[:, None]
-            mel_np = 0.5 + 0.3 * np.sin(2 * np.pi * t / 20)
+            # If no variation, create a simple pattern
+            t = torch.arange(mel.shape[0], device=mel.device, dtype=mel.dtype)[:, None]
+            mel_normalized = 0.5 + 0.3 * torch.sin(2 * np.pi * t / 20)
         
+        # Handle neural vocoder (can use torch tensors directly) vs Griffin-Lim (needs numpy)
         try:
-            audio = voc.mel_to_audio(mel_np)
+            if voc.vocoder_type == "hifigan" and isinstance(voc.vocoder, nn.Module):
+                # Neural vocoder: use torch tensor directly (more efficient)
+                mel_tensor = mel_normalized.T.unsqueeze(0)  # (1, n_mels, T)
+                with torch.no_grad():
+                    audio_tensor = voc.vocoder(mel_tensor)
+                audio = audio_tensor.squeeze().cpu().numpy()
+            else:
+                # Griffin-Lim: convert to numpy
+                mel_np = mel_normalized.cpu().numpy()  # (T, 128)
+                audio = voc.mel_to_audio(mel_np)
             # Ensure audio has actual content
             if np.max(np.abs(audio)) < 1e-6:
                 print("Warning: Generated audio is too quiet, adding variation")
@@ -477,10 +479,26 @@ def main():
     voc = None
     if args.audio_out:  # Load if we need to generate audio output
         try:
-            voc = GriffinLimVocoder()
-            print("Loaded Vocoder for audio output")
-        except ImportError:
-            print("Warning: librosa not available, audio output disabled")
+            # Try to use neural vocoder (HiFi-GAN) with automatic fallback to Griffin-Lim
+            # Check for pretrained checkpoint
+            hifigan_checkpoint = os.path.join(args.ckpt_dir, "hifigan.pt")
+            if not os.path.exists(hifigan_checkpoint):
+                # Also check in checkpoints root
+                hifigan_checkpoint = "checkpoints/hifigan.pt"
+            
+            voc = NeuralVocoder(
+                sample_rate=16000,
+                n_mels=128,
+                checkpoint_path=hifigan_checkpoint if os.path.exists(hifigan_checkpoint) else None,
+                prefer_neural=True
+            )
+            # Move neural vocoder to device if needed
+            if voc.vocoder_type == "hifigan":
+                voc = voc.to(device).eval()
+            print(f"Loaded {voc.vocoder_type} vocoder for audio output")
+        except Exception as e:
+            print(f"Warning: Failed to load vocoder: {e}. Audio output disabled.")
+            voc = None
 
     if has_image or has_video or has_audio or has_text:
         # Collect multimodal embeddings

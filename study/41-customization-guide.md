@@ -110,6 +110,33 @@ class LocalAttention(nn.Module):
         # Reduces computation for long sequences
 ```
 
+### 6. Customize Vocoder
+
+**Use HiFi-GAN for Better Quality:**
+```bash
+# Train neural vocoder (optional, improves speech quality)
+python train_vocoder.py --config configs/vocoder_tiny.json
+
+# Customize for your GPU:
+# - 12GB VRAM: batch_size=2, max_audio_length=8192
+# - 24GB VRAM: batch_size=4, max_audio_length=16384
+# - 6GB VRAM: batch_size=1, max_audio_length=4096
+```
+
+**Adjust Vocoder Config:**
+```json
+{
+  "batch_size": 2,              // Reduce if OOM
+  "max_audio_length": 8192,     // Shorter = less memory
+  "gradient_accumulation_steps": 4,  // Simulate larger batch
+  "lambda_mel": 45.0,           // Mel loss weight
+  "lambda_fm": 2.0,             // Feature matching weight
+  "lambda_adv": 1.0             // Adversarial loss weight
+}
+```
+
+**Note:** Griffin-Lim works without training, but HiFi-GAN provides significantly better quality.
+
 ---
 
 ## 🎯 Common Use Cases

@@ -517,8 +517,9 @@ COMPLETE SPEECH GENERATION FLOW:
        mel_frames.append(mel)
    mel_spectrogram = stack(mel_frames)  # (200, 128)
    
-6. Vocoder (Griffin-Lim) converts mel to audio:
-   audio_waveform = griffin_lim(mel_spectrogram)
+6. Vocoder converts mel to audio:
+   # Uses HiFi-GAN if available, falls back to Griffin-Lim
+   audio_waveform = vocoder.mel_to_audio(mel_spectrogram)
    
 7. Save audio file:
    save_wav("output.wav", audio_waveform)
@@ -622,7 +623,7 @@ Codes: [[42,87], [56,91], [12,34], ...]  ← Discrete!
       ↓
 Mel: (T, 128) ← Continuous!
       ↓
-   Griffin-Lim Vocoder
+   Vocoder (HiFi-GAN or Griffin-Lim)
       ↓
 Audio waveform
       ↓
@@ -644,7 +645,12 @@ TRAINING PREPARATION:
 3. Inference:
    - Talker generates codes
    - RVQ decodes to mel
-   - Vocoder creates audio
+   - Vocoder creates audio (HiFi-GAN if trained, else Griffin-Lim)
+
+4. Optional: Train HiFi-GAN vocoder:
+   - Run `train_vocoder.py` after Stage D
+   - Improves speech quality significantly
+   - Automatic fallback to Griffin-Lim if unavailable
 ```
 
 ---

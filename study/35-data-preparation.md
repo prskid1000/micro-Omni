@@ -213,6 +213,37 @@ python scripts/download_production_audio.py --dataset all --combine
 
 ---
 
+### Optional: HiFi-GAN Vocoder Training (`train_vocoder.py`)
+
+**Format:** Uses same audio data as TTS (CSV with `wav` or `text,wav` columns)
+
+**Location:** `data/audio/production_tts.csv` or `data/audio/production_asr.csv`
+
+**Config Key:** `train_csv`
+
+**Requirements:**
+- Same format as TTS/ASR data
+- Audio files: 16kHz WAV/FLAC
+- Clean speech, 1-10 seconds recommended
+- Audio length automatically limited to 8192 samples (~0.5s) during training for memory efficiency
+
+**Download:**
+```bash
+# Uses same audio data as Stage D (TTS)
+python scripts/download_production_audio.py --dataset all --combine
+# Uses: data/audio/production_tts.csv (or production_asr.csv as fallback)
+```
+
+**Features:**
+- ✅ Uses existing TTS/ASR data (no additional download needed)
+- ✅ Automatically handles both CSV formats (`wav,text` or `text,wav`)
+- ✅ Audio length limiting for 12GB VRAM optimization
+- ✅ Random cropping for data augmentation
+
+**Note:** This is optional - Griffin-Lim vocoder works without training, but HiFi-GAN provides better quality.
+
+---
+
 ## 🛠️ Production Download Scripts
 
 ### Quick Start (Recommended)
@@ -280,6 +311,7 @@ All download scripts output data in the **exact format** required by training sc
 | `train_audio_enc.py` | `train_csv` | CSV: `wav,text` | `data/audio/production_asr.csv` |
 | `train_talker.py` | `tts_csv` | CSV: `text,wav` | `data/audio/production_tts.csv` |
 | `train_vision.py` | `train_manifest`<br>`image_root` | JSON array: `[{"image": "...", "caption": "..."}]` | `data/images/production_annotations.json` |
+| `train_vocoder.py` | `train_csv` | CSV: `wav,text` or `text,wav` | `data/audio/production_tts.csv` or `production_asr.csv` |
 
 **⚠️ Important: The `--combine` flag is REQUIRED** to create these production files:
 - Without `--combine`: You get individual dataset files (e.g., `wikipedia.txt`, `books.txt`, `librispeech_asr.csv`)

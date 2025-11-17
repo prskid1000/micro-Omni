@@ -18,6 +18,7 @@ configs/
 ├── audio_enc_tiny.json    # Stage B: Audio encoder
 ├── vision_tiny.json       # Stage C: Vision encoder
 ├── talker_tiny.json       # Stage D: Speech generation
+├── vocoder_tiny.json      # Optional: HiFi-GAN neural vocoder
 └── omni_sft_tiny.json     # Stage E: Multimodal SFT
 ```
 
@@ -96,6 +97,7 @@ python scripts/update_configs_from_data.py --dry-run
 - Images: `data/images/production_annotations.json` or `data/images/annotations.json`
 - Audio: `data/audio/production_asr.csv` or `data/audio/asr.csv`
 - TTS: `data/audio/production_tts.csv` or `data/audio/tts.csv`
+- Vocoder: Uses same audio data as TTS/ASR (no separate check)
 
 **Note:** The script only checks production and synthetic files, ignoring intermediate dataset files.
 
@@ -121,6 +123,46 @@ python scripts/update_configs_from_data.py --dry-run
 **Automatic tuning:**
 - Use `scripts/update_configs_from_data.py` to automatically set epochs/steps based on your dataset size
 - Ensures optimal training duration without manual calculation
+
+---
+
+## 📋 Example Configuration Files
+
+### `configs/vocoder_tiny.json` (Optional - HiFi-GAN Neural Vocoder)
+
+```json
+{
+  "save_dir": "checkpoints/vocoder_tiny",
+  "train_csv": "data/audio/production_tts.csv",
+  "sample_rate": 16000,
+  "n_mels": 128,
+  "n_fft": 1024,
+  "hop_length": 256,
+  "batch_size": 2,
+  "num_workers": 1,
+  "max_audio_length": 8192,
+  "gradient_accumulation_steps": 4,
+  "lr_g": 0.0002,
+  "lr_d": 0.0002,
+  "max_steps": 100000,
+  "use_amp": true,
+  "lambda_mel": 45.0,
+  "lambda_fm": 2.0,
+  "lambda_adv": 1.0
+}
+```
+
+**Key Parameters:**
+- `max_audio_length`: Limits audio to 8192 samples (~0.5s) for 12GB VRAM
+- `gradient_accumulation_steps`: 4 (effective batch size = 2 × 4 = 8)
+- `lr_g`, `lr_d`: Separate learning rates for generator and discriminators
+- `lambda_mel`, `lambda_fm`, `lambda_adv`: Loss weights for training
+
+**Memory Optimization (12GB VRAM):**
+- `batch_size`: 2 (reduce to 1 if OOM)
+- `max_audio_length`: 8192 (~0.5s, reduce to 4096 if OOM)
+- `gradient_accumulation_steps`: 4 (simulates batch_size=8)
+- `use_amp`: true (FP16 saves ~50% memory)
 
 ---
 

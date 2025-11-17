@@ -80,6 +80,23 @@ python sft_omni.py --config configs/omni_sft_tiny.json
 # Output: checkpoints/omni_sft_tiny/omni_final.pt
 ```
 
+### Optional: HiFi-GAN Vocoder Training
+
+```bash
+# Train neural vocoder for better speech quality (optional)
+python train_vocoder.py --config configs/vocoder_tiny.json
+
+# Time: 2-4 hours (on 12GB GPU)
+# Target: Natural-sounding speech
+# Output: checkpoints/vocoder_tiny/hifigan.pt
+# Note: Falls back to Griffin-Lim if checkpoint not available
+```
+
+**When to train:**
+- After Stage D (Talker) is complete
+- If you want higher quality speech output
+- Griffin-Lim works fine for basic TTS, but HiFi-GAN is better
+
 ---
 
 ## 📊 Monitoring Training
