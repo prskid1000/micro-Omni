@@ -54,6 +54,13 @@ def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f, indent=2)
 
+def print_progress_with_remaining(current, max_count, label="samples", report_interval=100):
+    """Print progress with remaining count and percentage"""
+    if current % report_interval == 0 or current >= max_count:
+        remaining = max_count - current
+        percent = (current / max_count * 100) if max_count > 0 else 0
+        print(f"Progress: {current:,} {label} ({percent:.1f}%) - Remaining: ~{remaining:,} {label}")
+
 def save_checkpoint(dataset_name, checkpoint_data):
     """Save fine-grained checkpoint for resuming"""
     checkpoint_file = f"data/.checkpoint_{dataset_name}.json"
@@ -364,7 +371,23 @@ def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100, c
                         
                         # Report progress periodically
                         if page_count - last_report_pages >= report_interval:
-                            print(f"Progress: {page_count:,} pages processed, {article_count:,} articles extracted")
+                            remaining_articles = max_articles - article_count
+                            article_percent = (article_count / max_articles * 100) if max_articles > 0 else 0
+                            
+                            # Estimate remaining pages based on current extraction rate
+                            if article_count > 0 and page_count > 0:
+                                articles_per_page = article_count / page_count
+                                if articles_per_page > 0:
+                                    estimated_remaining_pages = int(remaining_articles / articles_per_page)
+                                    print(f"Progress: {page_count:,} pages processed, {article_count:,} articles extracted ({article_percent:.1f}%)")
+                                    print(f"  Remaining: ~{remaining_articles:,} articles (~{estimated_remaining_pages:,} pages estimated)")
+                                else:
+                                    print(f"Progress: {page_count:,} pages processed, {article_count:,} articles extracted ({article_percent:.1f}%)")
+                                    print(f"  Remaining: ~{remaining_articles:,} articles")
+                            else:
+                                print(f"Progress: {page_count:,} pages processed, {article_count:,} articles extracted ({article_percent:.1f}%)")
+                                print(f"  Remaining: ~{remaining_articles:,} articles")
+                            
                             last_report_pages = page_count
                             last_report_articles = article_count
                         
@@ -631,13 +654,19 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
         last_line = checkpoint.get('last_line', 0)
         count = checkpoint.get('count', 0)
         mode = 'a'  # Append mode
+        catching_up = (last_line > 0)
     else:
         last_line = 0
         count = 0
         mode = 'w'  # Write mode
+        catching_up = False
     
     # Process JSON file
     print("Processing JSON file...")
+    
+    if catching_up:
+        print(f"Fast-forwarding through {last_line:,} already-processed lines...")
+        print("(Skipping processing to speed up resumption)")
     
     with open(output_file, mode, encoding='utf-8') as f:
         # Try to read as JSONL (one JSON per line) or regular JSON array
@@ -648,9 +677,16 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
                 for line in tqdm(in_f, desc=f"Processing {dataset_name}"):
                     line_num += 1
                     
-                    # Skip already processed lines
-                    if line_num <= last_line:
+                    # Fast-forward: skip already processed lines
+                    if catching_up and line_num <= last_line:
+                        if line_num % 10000 == 0:
+                            print(f"Fast-forward: {line_num:,} / {last_line:,} lines...")
                         continue
+                    
+                    # We've caught up - start processing normally
+                    if catching_up and line_num > last_line:
+                        catching_up = False
+                        print(f"Caught up! Starting processing from line {line_num:,}...")
                     
                     try:
                         item = json.loads(line.strip())
@@ -662,6 +698,9 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
                         if text and len(text) > 50:
                             f.write(text + '\n\n')
                             count += 1
+                            
+                            # Print progress with remaining
+                            print_progress_with_remaining(count, max_samples, "samples", report_interval=100)
                             
                             # Save checkpoint every 100 items
                             if count % 100 == 0:
@@ -684,10 +723,21 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
                     in_f.seek(0)
                     data = json.load(in_f)
                     if isinstance(data, list):
+                        catching_up_array = (last_line > 0)
+                        if catching_up_array:
+                            print(f"Fast-forwarding through {last_line:,} already-processed items...")
+                        
                         for idx, item in enumerate(tqdm(data, desc=f"Processing {dataset_name}")):
-                            # Skip already processed items
-                            if idx < last_line:
+                            # Fast-forward: skip already processed items
+                            if catching_up_array and idx < last_line:
+                                if idx % 10000 == 0:
+                                    print(f"Fast-forward: {idx:,} / {last_line:,} items...")
                                 continue
+                            
+                            # We've caught up - start processing normally
+                            if catching_up_array and idx >= last_line:
+                                catching_up_array = False
+                                print(f"Caught up! Starting processing from item {idx:,}...")
                             
                             try:
                                 if extract_func:
@@ -698,6 +748,9 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
                                 if text and len(text) > 50:
                                     f.write(text + '\n\n')
                                     count += 1
+                                    
+                                    # Print progress with remaining
+                                    print_progress_with_remaining(count, max_samples, "samples", report_interval=100)
                                     
                                     # Save checkpoint every 100 items
                                     if count % 100 == 0:
@@ -905,10 +958,15 @@ def download_arxiv_by_category(state, category, category_key, max_samples=100000
         count = checkpoint.get('count', 0)
         start = checkpoint.get('last_start', 0)
         mode = 'a'  # Append mode
+        catching_up = (count > 0)
     else:
         count = 0
         start = 0
         mode = 'w'  # Write mode
+        catching_up = False
+    
+    if catching_up:
+        print(f"Fast-forwarding: Already have {count:,} papers, starting from batch {start // batch_size + 1}...")
     
     # Category to ArXiv category code mapping
     category_map = {
@@ -970,12 +1028,18 @@ def download_arxiv_by_category(state, category, category_key, max_samples=100000
                                 f.write(text + '\n\n')
                                 count += 1
                                 
+                                # Print progress with remaining
+                                print_progress_with_remaining(count, max_samples, "papers", report_interval=50)
+                                
                                 if count >= max_samples:
                                     break
                     except Exception as e:
                         continue
                 
                 start += batch_size
+                
+                # Print progress with remaining
+                print_progress_with_remaining(count, max_samples, "papers", report_interval=50)
                 
                 # Save checkpoint after each batch
                 save_checkpoint(category_key, {
@@ -1122,10 +1186,16 @@ def download_pubmed(state, max_samples=500000):
                                     f.write(text + '\n\n')
                                     count += 1
                                     
+                                    # Print progress with remaining
+                                    print_progress_with_remaining(count, max_abstracts, "abstracts", report_interval=100)
+                                    
                                     if count >= max_abstracts:
                                         break
                         except Exception as e:
                             continue
+                    
+                    # Print progress with remaining
+                    print_progress_with_remaining(count, max_abstracts, "abstracts", report_interval=100)
                     
                     # Save checkpoint after each batch
                     save_checkpoint("pubmed", {
@@ -1204,10 +1274,32 @@ def download_math_datasets(state, max_samples=100000):
     os.makedirs(download_dir, exist_ok=True)
     gsm8k_file = os.path.join(download_dir, "gsm8k.jsonl")
     
+    # Load checkpoint for math datasets
+    checkpoint = load_checkpoint("math_datasets")
+    last_line_gsm8k = checkpoint.get('last_line_gsm8k', 0) if checkpoint else 0
+    catching_up_gsm8k = (last_line_gsm8k > 0)
+    
+    if catching_up_gsm8k:
+        print(f"Fast-forwarding through {last_line_gsm8k:,} already-processed GSM8K lines...")
+    
     if download_file(gsm8k_url, gsm8k_file, resume=True):
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with open(output_file, 'a' if catching_up_gsm8k else 'w', encoding='utf-8') as f:
             with open(gsm8k_file, 'r', encoding='utf-8') as in_f:
+                line_num = 0
                 for line in tqdm(in_f, desc="Processing GSM8K"):
+                    line_num += 1
+                    
+                    # Fast-forward: skip already processed lines
+                    if catching_up_gsm8k and line_num <= last_line_gsm8k:
+                        if line_num % 10000 == 0:
+                            print(f"Fast-forward: {line_num:,} / {last_line_gsm8k:,} lines...")
+                        continue
+                    
+                    # We've caught up - start processing normally
+                    if catching_up_gsm8k and line_num > last_line_gsm8k:
+                        catching_up_gsm8k = False
+                        print(f"Caught up! Starting processing from line {line_num:,}...")
+                    
                     try:
                         item = json.loads(line.strip())
                         question = item.get('question', '')
@@ -1218,6 +1310,16 @@ def download_math_datasets(state, max_samples=100000):
                             if len(text) > 50:
                                 f.write(text + '\n\n')
                                 count += 1
+                                
+                                # Print progress with remaining
+                                print_progress_with_remaining(count, max_samples, "problems", report_interval=100)
+                                
+                                # Save checkpoint
+                                if count % 100 == 0:
+                                    save_checkpoint("math_datasets", {
+                                        'last_line_gsm8k': line_num,
+                                        'count': count
+                                    })
                                 
                                 if count >= max_samples:
                                     break
@@ -1230,10 +1332,28 @@ def download_math_datasets(state, max_samples=100000):
     
     if download_file(math_url, math_file, resume=True) and count < max_samples:
         print("Downloading MATH competition dataset...")
+        checkpoint_math = load_checkpoint("math_datasets")
+        last_idx_math = checkpoint_math.get('last_idx_math', 0) if checkpoint_math else 0
+        catching_up_math = (last_idx_math > 0)
+        
+        if catching_up_math:
+            print(f"Fast-forwarding through {last_idx_math:,} already-processed MATH items...")
+        
         with open(output_file, 'a', encoding='utf-8') as f:
             with open(math_file, 'r', encoding='utf-8') as in_f:
                 data = json.load(in_f)
-                for item in tqdm(data, desc="Processing MATH"):
+                for idx, item in enumerate(tqdm(data, desc="Processing MATH")):
+                    # Fast-forward: skip already processed items
+                    if catching_up_math and idx < last_idx_math:
+                        if idx % 10000 == 0:
+                            print(f"Fast-forward: {idx:,} / {last_idx_math:,} items...")
+                        continue
+                    
+                    # We've caught up - start processing normally
+                    if catching_up_math and idx >= last_idx_math:
+                        catching_up_math = False
+                        print(f"Caught up! Starting processing from item {idx:,}...")
+                    
                     try:
                         problem = item.get('problem', '')
                         solution = item.get('solution', '')
@@ -1243,6 +1363,17 @@ def download_math_datasets(state, max_samples=100000):
                             if len(text) > 50:
                                 f.write(text + '\n\n')
                                 count += 1
+                                
+                                # Print progress with remaining
+                                print_progress_with_remaining(count, max_samples, "problems", report_interval=100)
+                                
+                                # Save checkpoint
+                                if count % 100 == 0:
+                                    save_checkpoint("math_datasets", {
+                                        'last_line_gsm8k': last_line_gsm8k,
+                                        'last_idx_math': idx + 1,
+                                        'count': count
+                                    })
                                 
                                 if count >= max_samples:
                                     break
@@ -1277,13 +1408,30 @@ def download_scienceqa(state, max_samples=50000):
     os.makedirs(download_dir, exist_ok=True)
     scienceqa_file = os.path.join(download_dir, "scienceqa.json")
     
+    # Load checkpoint for ScienceQA
+    checkpoint = load_checkpoint("scienceqa")
+    last_idx = checkpoint.get('last_idx', 0) if checkpoint else 0
+    count = checkpoint.get('count', 0) if checkpoint else 0
+    catching_up = (last_idx > 0)
+    
+    if catching_up:
+        print(f"Resuming: Already have {count:,} samples, fast-forwarding through {last_idx:,} items...")
+    
     if download_file(scienceqa_url, scienceqa_file, resume=True):
-        count = 0
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with open(output_file, 'a' if catching_up else 'w', encoding='utf-8') as f:
             with open(scienceqa_file, 'r', encoding='utf-8') as in_f:
                 data = json.load(in_f)
-                for item in tqdm(data, desc="Processing ScienceQA"):
+                for idx, item in enumerate(tqdm(data, desc="Processing ScienceQA")):
+                    # Fast-forward: skip already processed items
+                    if catching_up and idx < last_idx:
+                        if idx % 10000 == 0:
+                            print(f"Fast-forward: {idx:,} / {last_idx:,} items...")
+                        continue
+                    
+                    # We've caught up - start processing normally
+                    if catching_up and idx >= last_idx:
+                        catching_up = False
+                        print(f"Caught up! Starting processing from item {idx:,}...")
                     try:
                         question = item.get('question', '')
                         choices = item.get('choices', {})
@@ -1303,6 +1451,16 @@ def download_scienceqa(state, max_samples=50000):
                             if len(text) > 50:
                                 f.write(text + '\n\n')
                                 count += 1
+                                
+                                # Print progress with remaining
+                                print_progress_with_remaining(count, max_samples, "samples", report_interval=100)
+                                
+                                # Save checkpoint
+                                if count % 100 == 0:
+                                    save_checkpoint("scienceqa", {
+                                        'last_idx': idx + 1,
+                                        'count': count
+                                    })
                                 
                                 if count >= max_samples:
                                     break
@@ -1390,6 +1548,9 @@ def download_books(state, max_samples=500000):
                                 if len(para) > 200:
                                     f.write(para + '\n\n')
                                     count += 1
+                                    
+                                    # Print progress with remaining
+                                    print_progress_with_remaining(count, max_samples, "passages", report_interval=100)
                                     
                                     if count >= max_samples:
                                         break

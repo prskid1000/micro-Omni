@@ -40,6 +40,13 @@ def load_state():
         "urbansound": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
     }
 
+def print_progress_with_remaining(current, max_count, label="samples", report_interval=100):
+    """Print progress with remaining count and percentage"""
+    if current % report_interval == 0 or current >= max_count:
+        remaining = max_count - current
+        percent = (current / max_count * 100) if max_count > 0 else 0
+        print(f"Progress: {current:,} {label} ({percent:.1f}%) - Remaining: ~{remaining:,} {label}")
+
 def save_state(state):
     """Save download/conversion state"""
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
@@ -335,8 +342,30 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
                     
                     txt_file = txt_files[0]
                     
+                    # Load checkpoint for this chapter
+                    checkpoint_chapter = checkpoint.get('last_chapter', {}) if checkpoint else {}
+                    last_line_chapter = checkpoint_chapter.get(f"{split_name}/{speaker_dir.name}/{chapter_dir.name}", 0)
+                    catching_up_chapter = (last_line_chapter > 0)
+                    
+                    if catching_up_chapter:
+                        print(f"  Fast-forwarding {speaker_dir.name}/{chapter_dir.name}: {last_line_chapter:,} lines...")
+                    
                     with open(txt_file, 'r', encoding='utf-8') as f:
+                        line_num = 0
                         for line in tqdm(f, desc=f"  {speaker_dir.name}/{chapter_dir.name}", leave=False):
+                            line_num += 1
+                            
+                            # Fast-forward: skip already processed lines
+                            if catching_up_chapter and line_num <= last_line_chapter:
+                                if line_num % 10000 == 0:
+                                    print(f"    Fast-forward: {line_num:,} / {last_line_chapter:,} lines...")
+                                continue
+                            
+                            # We've caught up - start processing normally
+                            if catching_up_chapter and line_num > last_line_chapter:
+                                catching_up_chapter = False
+                                print(f"    Caught up! Starting from line {line_num:,}...")
+                            
                             parts = line.strip().split(' ', 1)
                             if len(parts) == 2:
                                 audio_id, text = parts
@@ -350,10 +379,13 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
                                     
                                     # Save checkpoint every 1000 entries
                                     if len(rows) % 1000 == 0:
+                                        chapter_key = f"{split_name}/{speaker_dir.name}/{chapter_dir.name}"
+                                        checkpoint_chapter[chapter_key] = line_num
                                         save_checkpoint("librispeech", {
                                             'processed_splits': list(processed_splits),
                                             'rows': rows[-1000:],  # Keep last 1000 for reference
                                             'last_split': split_name,
+                                            'last_chapter': checkpoint_chapter,
                                             'count': len(rows)
                                         })
                                         save_state(state)
@@ -362,6 +394,10 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
                                     if len(rows) >= max_samples:
                                         print(f"\nReached sample limit ({max_samples:,}), stopping...")
                                         break
+                                    
+                                    # Print progress with remaining
+                                    if len(rows) % 1000 == 0:
+                                        print_progress_with_remaining(len(rows), max_samples, "samples", report_interval=1000)
                         
                         if len(rows) >= max_samples:
                             break
@@ -430,9 +466,32 @@ def download_ljspeech(state, max_samples=1000000):
         rows = []
         count = 0
         
+        # Load checkpoint for LJSpeech
+        checkpoint = load_checkpoint("ljspeech")
+        last_line = checkpoint.get('last_line', 0) if checkpoint else 0
+        count = checkpoint.get('count', 0) if checkpoint else 0
+        catching_up = (last_line > 0)
+        
+        if catching_up:
+            print(f"Fast-forwarding through {last_line:,} already-processed lines...")
+        
         if os.path.exists(metadata_file):
             with open(metadata_file, 'r', encoding='utf-8') as f:
+                line_num = 0
                 for line in tqdm(f, desc="Processing LJSpeech"):
+                    line_num += 1
+                    
+                    # Fast-forward: skip already processed lines
+                    if catching_up and line_num <= last_line:
+                        if line_num % 10000 == 0:
+                            print(f"Fast-forward: {line_num:,} / {last_line:,} lines...")
+                        continue
+                    
+                    # We've caught up - start processing normally
+                    if catching_up and line_num > last_line:
+                        catching_up = False
+                        print(f"Caught up! Starting processing from line {line_num:,}...")
+                    
                     parts = line.strip().split('|')
                     if len(parts) >= 2:
                         wav_name = parts[0]
@@ -443,6 +502,16 @@ def download_ljspeech(state, max_samples=1000000):
                             rel_path = os.path.relpath(wav_path, ".")
                             rows.append({"wav": rel_path, "text": text})
                             count += 1
+                            
+                            # Print progress with remaining
+                            print_progress_with_remaining(count, max_samples, "samples", report_interval=100)
+                            
+                            # Save checkpoint
+                            if count % 100 == 0:
+                                save_checkpoint("ljspeech", {
+                                    'last_line': line_num,
+                                    'count': count
+                                })
                             
                             if count >= max_samples:
                                 break

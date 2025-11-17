@@ -38,6 +38,13 @@ def load_state():
         "cifar10": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
     }
 
+def print_progress_with_remaining(current, max_count, label="samples", report_interval=100):
+    """Print progress with remaining count and percentage"""
+    if current % report_interval == 0 or current >= max_count:
+        remaining = max_count - current
+        percent = (current / max_count * 100) if max_count > 0 else 0
+        print(f"Progress: {current:,} {label} ({percent:.1f}%) - Remaining: ~{remaining:,} {label}")
+
 def save_state(state):
     """Save download/conversion state"""
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
@@ -194,6 +201,9 @@ def download_coco(state, max_samples=1000000):
                     })
                     count += 1
                     
+                    # Print progress with remaining
+                    print_progress_with_remaining(count, max_samples, "images", report_interval=1000)
+                    
                     if count >= max_samples:
                         break
         
@@ -340,6 +350,9 @@ def download_cifar10(state, max_samples=1000000):
                         "category": class_name
                     })
                     count += 1
+                    
+                    # Print progress with remaining
+                    print_progress_with_remaining(count, max_samples, "images", report_interval=1000)
                     
                     if count >= max_samples:
                         break
