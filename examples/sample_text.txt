@@ -1,1 +1,0 @@
-This is a sample text prompt for testing the multimodal interface.

@@ -115,10 +115,10 @@ model = torch.quantization.quantize_dynamic(
 
 | Dataset | Files | Optimization | Memory Savings |
 |---------|-------|--------------|----------------|
-| **TextDataset** | `train_text.py`, `post_train.py` | File offset indexing | ~8 bytes/line vs full text |
-| **ASRDataset** | `train_audio_enc.py`, `post_train.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
-| **TTSDataset** | `train_talker.py`, `post_train.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
-| **ImgCapDataset** | `train_vision.py`, `post_train.py` | JSON object offset indexing | ~16 bytes/object vs full JSON |
+| **TextDataset** | `train_text.py` | File offset indexing | ~8 bytes/line vs full text |
+| **ASRDataset** | `train_audio_enc.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
+| **TTSDataset** | `train_talker.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
+| **ImgCapDataset** | `train_vision.py` | JSON object offset indexing | ~16 bytes/object vs full JSON |
 | **MixDataset** | `sft_omni.py` | All three types (text, CSV, JSON) | Combined savings |
 
 **Implementation Details:**

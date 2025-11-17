@@ -558,7 +558,9 @@ def main(cfg):
             final_path = os.path.join(cfg["save_dir"], "vision.pt")
             checkpoint_data = {
                 "vit": vit.state_dict(),
-                "head": head.state_dict(),
+                "img_proj": img_proj.state_dict(),
+                "text_proj": text_proj.state_dict(),
+                "text_embed": text_embed.state_dict(),
                 "optimizer": opt.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "step": step

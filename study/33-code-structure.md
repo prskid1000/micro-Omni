@@ -29,8 +29,7 @@
 ├── scripts/                   # Utility scripts
 │   ├── check_setup.py        # Verify installation
 │   ├── download_datasets.py  # Download data
-│   ├── make_synthetic_datasets.py
-│   └── prep_post_training_data.py
+│   └── make_synthetic_datasets.py
 │
 ├── train_text.py             # Stage A: Thinker pretraining
 ├── train_audio_enc.py        # Stage B: Audio encoder

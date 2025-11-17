@@ -1,11 +1,13 @@
 """
 Test script for μOmni multimodal inference interface
 Tests all media types: text, image, audio, and video
+Picks random samples from actual data folders for testing
 """
 
 import os
 import subprocess
 import sys
+import random
 from pathlib import Path
 
 def run_inference(cmd_args, description):
@@ -34,146 +36,216 @@ def run_inference(cmd_args, description):
         print(f"ERROR: {e}")
         return False
 
+def find_random_file(directory, extensions, recursive=True):
+    """Find a random file with given extensions in directory"""
+    if not os.path.exists(directory):
+        return None
+    
+    files = []
+    path = Path(directory)
+    
+    if recursive:
+        for ext in extensions:
+            files.extend(path.rglob(f"*{ext}"))
+    else:
+        for ext in extensions:
+            files.extend(path.glob(f"*{ext}"))
+    
+    # Filter out hidden files and checkpoints
+    files = [f for f in files if not any(part.startswith('.') for part in f.parts)]
+    
+    if files:
+        return str(random.choice(files))
+    return None
+
+def get_random_text_sample(text_dir="data/text"):
+    """Get a random line from text corpus files"""
+    if not os.path.exists(text_dir):
+        return "Hello, how are you?"
+    
+    # Find all .txt files
+    text_files = list(Path(text_dir).glob("*.txt"))
+    if not text_files:
+        return "Hello, how are you?"
+    
+    # Pick random file and random line
+    text_file = random.choice(text_files)
+    try:
+        with open(text_file, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = [line.strip() for line in f if line.strip()]
+            if lines:
+                # Return a random line, but limit length for testing
+                line = random.choice(lines)
+                return line[:200] if len(line) > 200 else line
+    except Exception:
+        pass
+    
+    return "Hello, how are you?"
+
 def main():
     """Run all media type tests"""
     print("μOmni Multimodal Inference Test Suite")
     print("=" * 60)
+    print("Picking random samples from data folders...")
     
-    # Check if example files exist
+    # Find random samples from actual data folders
+    print("\nScanning data folders for test samples...")
+    
+    # Find random image
+    sample_image = find_random_file(
+        "data/images",
+        [".jpg", ".jpeg", ".png", ".JPEG", ".PNG"],
+        recursive=True
+    )
+    if sample_image:
+        print(f"  ✓ Found image: {sample_image}")
+    else:
+        print("  ⚠ No images found in data/images/")
+    
+    # Find random audio file
+    sample_audio = find_random_file(
+        "data/audio",
+        [".wav", ".flac", ".WAV", ".FLAC"],
+        recursive=True
+    )
+    if sample_audio:
+        print(f"  ✓ Found audio: {sample_audio}")
+    else:
+        print("  ⚠ No audio files found in data/audio/")
+    
+    # Get random text sample
+    sample_text = get_random_text_sample("data/text")
+    print(f"  ✓ Using text sample: {sample_text[:50]}...")
+    
+    # Ensure examples directory exists for output files
     examples_dir = Path("examples")
-    data_dir = Path("data")
-    
-    # Ensure we have sample files
     if not examples_dir.exists():
         examples_dir.mkdir()
-    
-    # Use existing data files or examples
-    sample_image = "examples/sample_image.png"
-    if not os.path.exists(sample_image):
-        sample_image = "data/images/images/000000.png"
-    
-    sample_audio = "examples/sample_audio.wav"
-    if not os.path.exists(sample_audio):
-        sample_audio = "data/audio/wav/000000.wav"
-    
-    sample_text = "examples/sample_text.txt"
-    if not os.path.exists(sample_text):
-        with open(sample_text, "w") as f:
-            f.write("This is a test prompt.")
     
     # Test results
     results = []
     
-    # Test 1: Text only (text output)
+    # Test 1: Text only (text output) - using random text sample
     print("\n[TEST 1] Text-only inference (text output)")
+    test_text = sample_text[:100] if len(sample_text) > 100 else sample_text
     results.append(("Text-only", run_inference(
-        ["--ckpt_dir", "checkpoints/thinker_tiny", "--text", "Hello, how are you?"],
-        "Text-only chat"
+        ["--ckpt_dir", "checkpoints/thinker_tiny", "--text", test_text],
+        f"Text-only chat (sample: {test_text[:30]}...)"
     )))
     
-    # Test 1b: Text with audio output (TTS)
+    # Test 1b: Text with audio output (TTS) - using random text sample
     print("\n[TEST 1b] Text with audio output (TTS)")
     audio_out_path = "examples/test_output_text_tts.wav"
+    tts_text = sample_text[:150] if len(sample_text) > 150 else sample_text
     results.append(("Text+TTS", run_inference(
         ["--ckpt_dir", "checkpoints/omni_sft_tiny", 
-         "--text", "This is a test of text to speech.",
+         "--text", tts_text,
          "--audio_out", audio_out_path],
-        "Text input with audio output (TTS)"
+        f"Text input with audio output (TTS) (sample: {tts_text[:30]}...)"
     )))
     
-    # Test 2: Image + Text
+    # Test 2: Image + Text - using random image from data
     print("\n[TEST 2] Image + Text")
-    if os.path.exists(sample_image):
+    if sample_image and os.path.exists(sample_image):
         results.append(("Image+Text", run_inference(
             ["--ckpt_dir", "checkpoints/omni_sft_tiny", 
              "--image", sample_image, 
              "--text", "What do you see in this image?"],
-            "Image with text prompt"
+            f"Image with text prompt (using: {os.path.basename(sample_image)})"
         )))
     else:
-        print(f"SKIP: Image file not found: {sample_image}")
-        results.append(("Image+Text", False))
+        print(f"SKIP: No image files found in data/images/")
+        results.append(("Image+Text", None))
     
-    # Test 3: Audio + Text
+    # Test 3: Audio + Text - using random audio from data
     print("\n[TEST 3] Audio + Text")
-    if os.path.exists(sample_audio):
+    if sample_audio and os.path.exists(sample_audio):
         results.append(("Audio+Text", run_inference(
             ["--ckpt_dir", "checkpoints/omni_sft_tiny",
              "--audio_in", sample_audio,
              "--text", "What did you hear?"],
-            "Audio with text prompt"
+            f"Audio with text prompt (using: {os.path.basename(sample_audio)})"
         )))
     else:
-        print(f"SKIP: Audio file not found: {sample_audio}")
-        results.append(("Audio+Text", False))
+        print(f"SKIP: No audio files found in data/audio/")
+        results.append(("Audio+Text", None))
     
-    # Test 4: Image only (default prompt)
+    # Test 4: Image only (default prompt) - using random image
     print("\n[TEST 4] Image only")
-    if os.path.exists(sample_image):
+    if sample_image and os.path.exists(sample_image):
         results.append(("Image-only", run_inference(
             ["--ckpt_dir", "checkpoints/omni_sft_tiny",
              "--image", sample_image],
-            "Image with default prompt"
+            f"Image with default prompt (using: {os.path.basename(sample_image)})"
         )))
     else:
-        print(f"SKIP: Image file not found: {sample_image}")
-        results.append(("Image-only", False))
+        print(f"SKIP: No image files found in data/images/")
+        results.append(("Image-only", None))
     
-    # Test 5: Audio only
+    # Test 5: Audio only - using random audio
     print("\n[TEST 5] Audio only")
-    if os.path.exists(sample_audio):
+    if sample_audio and os.path.exists(sample_audio):
         results.append(("Audio-only", run_inference(
             ["--ckpt_dir", "checkpoints/omni_sft_tiny",
              "--audio_in", sample_audio],
-            "Audio with default prompt"
+            f"Audio with default prompt (using: {os.path.basename(sample_audio)})"
         )))
     else:
-        print(f"SKIP: Audio file not found: {sample_audio}")
-        results.append(("Audio-only", False))
+        print(f"SKIP: No audio files found in data/audio/")
+        results.append(("Audio-only", None))
     
-    # Test 6: Image + Audio + Text (multimodal)
+    # Test 6: Image + Audio + Text (multimodal) - using random samples
     print("\n[TEST 6] Image + Audio + Text (Multimodal)")
-    if os.path.exists(sample_image) and os.path.exists(sample_audio):
+    if sample_image and sample_audio and os.path.exists(sample_image) and os.path.exists(sample_audio):
         results.append(("Multimodal", run_inference(
             ["--ckpt_dir", "checkpoints/omni_sft_tiny",
              "--image", sample_image,
              "--audio_in", sample_audio,
              "--text", "Describe what you see and hear."],
-            "Combined image, audio, and text"
+            f"Combined image, audio, and text (using random samples from data/)"
         )))
     else:
-        print(f"SKIP: Missing files (image: {os.path.exists(sample_image)}, audio: {os.path.exists(sample_audio)})")
-        results.append(("Multimodal", False))
+        missing = []
+        if not sample_image or not os.path.exists(sample_image):
+            missing.append("image")
+        if not sample_audio or not os.path.exists(sample_audio):
+            missing.append("audio")
+        print(f"SKIP: Missing {', '.join(missing)} files in data/")
+        results.append(("Multimodal", None))
     
-    # Test 6b: Image + Text with audio output
+    # Test 6b: Image + Text with audio output - using random image
     print("\n[TEST 6b] Image + Text with audio output")
-    if os.path.exists(sample_image):
+    if sample_image and os.path.exists(sample_image):
         audio_out_path = "examples/test_output_image_tts.wav"
         results.append(("Image+Text+TTS", run_inference(
             ["--ckpt_dir", "checkpoints/omni_sft_tiny",
              "--image", sample_image,
              "--text", "Describe this image.",
              "--audio_out", audio_out_path],
-            "Image input with text and audio output"
+            f"Image input with text and audio output (using: {os.path.basename(sample_image)})"
         )))
     else:
-        print(f"SKIP: Image file not found: {sample_image}")
-        results.append(("Image+Text+TTS", False))
+        print(f"SKIP: No image files found in data/images/")
+        results.append(("Image+Text+TTS", None))
     
-    # Test 7: Video (if available)
+    # Test 7: Video (if available) - check data/images for video or create from images
     print("\n[TEST 7] Video")
-    sample_video = "examples/sample_video.mp4"
-    if os.path.exists(sample_video):
+    sample_video = find_random_file("data/images", [".mp4", ".avi", ".mov"], recursive=True)
+    if not sample_video:
+        # Try examples as fallback
+        sample_video = "examples/sample_video.mp4"
+    
+    if sample_video and os.path.exists(sample_video):
         results.append(("Video", run_inference(
             ["--ckpt_dir", "checkpoints/omni_sft_tiny",
              "--video", sample_video,
              "--text", "Describe the video."],
-            "Video with text prompt"
+            f"Video with text prompt (using: {os.path.basename(sample_video)})"
         )))
     else:
-        print(f"SKIP: Video file not found: {sample_video}")
-        print("      Note: Create a test video with:")
-        print("      ffmpeg -framerate 1 -i data/images/images/%06d.png -c:v libx264 -pix_fmt yuv420p examples/sample_video.mp4")
+        print(f"SKIP: No video files found")
+        print("      Note: Create a test video from images with:")
+        print("      ffmpeg -framerate 1 -pattern_type glob -i 'data/images/**/*.jpg' -c:v libx264 -pix_fmt yuv420p examples/sample_video.mp4")
         results.append(("Video", None))
     
     # Summary
