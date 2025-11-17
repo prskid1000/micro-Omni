@@ -678,12 +678,12 @@ def main():
         # Individual dataset downloads
         # ImageNet
         if args.dataset == "imagenet":
-        if not args.skip_download:
-            success = download_imagenet_subset(state) and success
-        if not args.skip_extract:
-            success = extract_imagenet_subset(state) and success
-        if not args.skip_convert:
-            success = convert_imagenet_to_manifest(state) and success
+            if not args.skip_download:
+                success = download_imagenet_subset(state) and success
+            if not args.skip_extract:
+                success = extract_imagenet_subset(state) and success
+            if not args.skip_convert:
+                success = convert_imagenet_to_manifest(state) and success
     
     # Open Images
     if args.dataset in ["all", "openimages"]:

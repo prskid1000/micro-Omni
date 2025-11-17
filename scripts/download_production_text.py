@@ -1579,12 +1579,12 @@ def main():
         # Individual dataset downloads
         # General knowledge & English learning
         if args.dataset in ["wikipedia", "general"]:
-        if not args.skip_download:
-            success = download_wikipedia(state) and success
-        if not args.skip_extract:
-            success = extract_wikipedia_text(state) and success
-        if not args.skip_convert:
-            success = convert_wikipedia_to_text(state) and success
+            if not args.skip_download:
+                success = download_wikipedia(state) and success
+            if not args.skip_extract:
+                success = extract_wikipedia_text(state) and success
+            if not args.skip_convert:
+                success = convert_wikipedia_to_text(state) and success
     
     if args.dataset in ["all", "c4", "general"]:
         if not args.skip_download:

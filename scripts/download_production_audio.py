@@ -303,8 +303,8 @@ def convert_librispeech_to_csv(state):
                                 # LibriSpeech uses .flac files
                                 flac_path = chapter_dir / f"{audio_id}.flac"
                                 if flac_path.exists():
-                                    # Use relative path from data/audio
-                                    rel_path = os.path.relpath(str(flac_path), "data/audio")
+                                    # Use path relative to project root (include data/audio prefix)
+                                    rel_path = os.path.relpath(str(flac_path), ".")
                                     writer.writerow({"wav": rel_path, "text": text})
                                     rows.append({"wav": rel_path, "text": text})
                                     
@@ -468,7 +468,7 @@ def convert_voxceleb_to_csv(state):
             # VoxCeleb doesn't have transcriptions, so we'll use speaker ID as text
             # For TTS, you might want to use a different approach
             speaker_id = speaker_dir.name
-            rel_path = os.path.relpath(str(audio_file), "data/audio")
+            rel_path = os.path.relpath(str(audio_file), ".")
             rows.append({"wav": rel_path, "text": f"Speaker {speaker_id}"})
     
     # Save CSV
@@ -528,7 +528,8 @@ def download_urbansound(state):
                     fold = row.get('fold', '')
                     file = row.get('slice_file_name', '')
                     class_label = row.get('class', '')
-                    rel_path = f"urbansound8k/UrbanSound8K-Dataset-master/audio/fold{fold}/{file}"
+                    # Use path relative to project root (include data/audio prefix)
+                    rel_path = f"data/audio/urbansound8k/UrbanSound8K-Dataset-master/audio/fold{fold}/{file}"
                     rows.append({"wav": rel_path, "text": f"Environmental sound: {class_label}"})
             
             with open(output_file, 'w', encoding='utf-8', newline='') as f:
@@ -795,12 +796,12 @@ def main():
         # Individual dataset downloads
         # LibriSpeech
         if args.dataset == "librispeech":
-        if not args.skip_download:
-            success = download_librispeech_subset(state) and success
-        if not args.skip_extract:
-            success = extract_librispeech_subset(state) and success
-        if not args.skip_convert:
-            success = convert_librispeech_to_csv(state) and success
+            if not args.skip_download:
+                success = download_librispeech_subset(state) and success
+            if not args.skip_extract:
+                success = extract_librispeech_subset(state) and success
+            if not args.skip_convert:
+                success = convert_librispeech_to_csv(state) and success
     
     # Common Voice
     if args.dataset in ["all", "commonvoice"]:
