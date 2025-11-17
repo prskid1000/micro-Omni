@@ -209,15 +209,13 @@ def extract_imagenet_subset(state):
     # Otherwise, check if we can download a pre-made subset
     if os.path.exists(train_tar):
         print("Extracting ImageNet train set (this will take 30-60 minutes)...")
-        print("Creating subset to stay under 30GB...")
+        print("Creating subset (200 classes)...")
         
         # Extract only a subset of classes
-        # ImageNet has 1000 classes, we'll take ~200 classes to stay under 30GB
+        # ImageNet has 1000 classes, we'll take ~200 classes
         # Each class has ~1300 images, 200 classes = ~260k images
         
         max_classes = 200
-        max_size_gb = 30
-        current_size = 0
         
         # Extract train tar
         print("Extracting train archive...")
@@ -240,18 +238,8 @@ def extract_imagenet_subset(state):
                 with tarfile.open(class_tar_path, 'r') as class_tar:
                     class_tar.extractall(class_dir)
                 
-                # Check size
-                class_size = sum(os.path.getsize(os.path.join(class_dir, f)) 
-                                for f in os.listdir(class_dir) 
-                                if os.path.isfile(os.path.join(class_dir, f)))
-                current_size += class_size
-                
                 # Keep class tar files - may need them for re-extraction with different parameters
                 # (No cleanup - all downloaded/extracted files are preserved)
-                
-                if current_size > max_size_gb * 1024**3 * 0.9:
-                    print(f"\nReached size limit, extracted {i+1} classes")
-                    break
         
         # Extract validation set
         if os.path.exists(val_tar):
@@ -270,7 +258,7 @@ def extract_imagenet_subset(state):
         print("ImageNet archives not found. Please download first.")
         return False
 
-def convert_imagenet_to_manifest(state):
+def convert_imagenet_to_manifest(state, max_samples=1000000):
     """Convert ImageNet subset to annotation format with fine-grained resuming"""
     print("\n" + "="*60)
     print("Converting ImageNet to Annotation Format")
@@ -323,6 +311,10 @@ def convert_imagenet_to_manifest(state):
                         "category": class_name
                     })
                     count += 1
+                    
+                    # Stop if we've reached sample limit
+                    if count >= max_samples:
+                        break
             
             processed_classes.add(class_name)
             
@@ -335,19 +327,26 @@ def convert_imagenet_to_manifest(state):
                     'count': count
                 })
                 save_state(state)
+            
+            if count >= max_samples:
+                break
     
-    # Process val images
-    val_dir = os.path.join(extract_dir, "val")
-    if os.path.exists(val_dir):
-        for img_file in tqdm(os.listdir(val_dir), desc="Processing validation"):
-            if img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                img_path = os.path.join("imagenet_subset/val", img_file)
-                annotations.append({
-                    "image": img_path,
-                    "caption": "A validation image",
-                    "category": "unknown"
-                })
-                count += 1
+    # Process val images (only if we haven't reached limit)
+    if count < max_samples:
+        val_dir = os.path.join(extract_dir, "val")
+        if os.path.exists(val_dir):
+            for img_file in tqdm(os.listdir(val_dir), desc="Processing validation"):
+                if img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    img_path = os.path.join("imagenet_subset/val", img_file)
+                    annotations.append({
+                        "image": img_path,
+                        "caption": "A validation image",
+                        "category": "unknown"
+                    })
+                    count += 1
+                    
+                    if count >= max_samples:
+                        break
     
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(annotations, f, indent=2, ensure_ascii=False)
@@ -411,7 +410,7 @@ def download_laion_subset(state):
     print("✓ LAION marked (download manually)")
     return True
 
-def download_food101(state):
+def download_food101(state, max_samples=1000000):
     """Download Food-101 - diverse food images"""
     print("\n" + "="*60)
     print("Downloading Food-101")
@@ -439,6 +438,7 @@ def download_food101(state):
         # Convert to annotations
         output_file = "data/images/food101_annotations.json"
         annotations = []
+        count = 0
         
         images_dir = os.path.join(extract_dir, "food-101", "images")
         if os.path.exists(images_dir):
@@ -452,6 +452,13 @@ def download_food101(state):
                                 "caption": f"A photo of {class_dir.replace('_', ' ')}",
                                 "category": class_dir
                             })
+                            count += 1
+                            
+                            if count >= max_samples:
+                                break
+                    
+                    if count >= max_samples:
+                        break
         
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(annotations, f, indent=2, ensure_ascii=False)
@@ -568,95 +575,6 @@ def combine_image_annotations():
     print(f"\n✓ Combined {len(all_annotations):,} image annotations")
     print(f"  Saved to: {output_file}")
 
-def intelligent_download_all_image(state, min_gb=25, max_gb=30):
-    """Intelligently download diverse image datasets to reach 25-30GB target"""
-    print("\n" + "="*60)
-    print("Intelligent Download: Diverse Image Datasets")
-    print(f"Target: {min_gb}-{max_gb} GB with balanced diversity")
-    print("="*60)
-    
-    # Define dataset categories with target sizes
-    categories = {
-        "general": [
-            ("imagenet", 20.0, download_imagenet_subset, extract_imagenet_subset, convert_imagenet_to_manifest),
-            ("openimages", 5.0, download_openimages_subset, None, None),
-            ("laion", 5.0, download_laion_subset, None, None),
-        ],
-        "domain_specific": [
-            ("food101", 5.0, download_food101, None, None),
-            ("stanford_cars", 2.0, download_stanford_cars, None, None),
-        ],
-        "nature": [
-            ("places365", 3.0, download_places365, None, None),
-            ("inat2021", 2.0, download_inat2021, None, None),
-        ]
-    }
-    
-    total_size = 0
-    downloaded = []
-    target_per_category = (max_gb - min_gb) / len(categories)
-    
-    print(f"\nDownloading from each category to ensure diversity...")
-    print(f"Target: ~{target_per_category:.1f} GB per category\n")
-    
-    for category_name, datasets in categories.items():
-        print(f"\n{'='*60}")
-        print(f"Category: {category_name.upper()}")
-        print("="*60)
-        
-        category_size = 0
-        for ds_name, target_size, download_func, extract_func, convert_func in datasets:
-            if total_size >= max_gb * 1024**3:
-                break
-            
-            if category_size >= target_per_category * 1024**3 * 1.2:
-                break
-            
-            print(f"\nDownloading {ds_name} (target: {target_size}GB)...")
-            
-            # Check existing - use actual data folder size, not annotation file size
-            existing_size = get_image_dataset_size(ds_name)
-            if existing_size > 0:
-                total_size += existing_size
-                category_size += existing_size
-                print(f"  Already downloaded: {existing_size / (1024**3):.2f} GB (actual data)")
-                downloaded.append(ds_name)
-                continue
-            
-            try:
-                if download_func:
-                    success = download_func(state)
-                    if success and extract_func:
-                        success = extract_func(state) and success
-                    if success and convert_func:
-                        success = convert_func(state) and success
-                    
-                    if success:
-                        # Check actual data folder size, not annotation file size
-                        actual_size = get_image_dataset_size(ds_name)
-                        if actual_size > 0:
-                            total_size += actual_size
-                            category_size += actual_size
-                            downloaded.append(ds_name)
-                            print(f"  ✓ Downloaded: {actual_size / (1024**3):.2f} GB (actual data)")
-                            
-                            # Stop if we've reached max size
-                            if total_size >= max_gb * 1024**3:
-                                print(f"\nReached max size ({max_gb}GB), stopping...")
-                                break
-            except Exception as e:
-                print(f"  ✗ Error: {e}")
-                continue
-    
-    final_size_gb = total_size / (1024**3)
-    print(f"\n{'='*60}")
-    print(f"Download Summary")
-    print("="*60)
-    print(f"Total size: {final_size_gb:.2f} GB")
-    print(f"Target range: {min_gb}-{max_gb} GB")
-    print(f"Datasets: {', '.join(downloaded)}")
-    
-    return final_size_gb >= min_gb * 0.9
 
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade image datasets for μOmni")
@@ -665,7 +583,7 @@ def main():
                                "food101", "stanford_cars", "places365", "inat2021",
                                "general", "scientific", "nature", "domain"], 
                        default="all",
-                       help="Which dataset to download (default: all - intelligently fetches diverse 25-30GB)")
+                       help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
                        help="Skip download, only extract/convert existing data")
     parser.add_argument("--skip-extract", action="store_true",
@@ -676,10 +594,8 @@ def main():
                        help="Combine all downloaded datasets into one annotation file (outputs to data/images/production_annotations.json)")
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
-    parser.add_argument("--min-gb", type=float, default=25.0,
-                       help="Minimum total size in GB (default: 25)")
-    parser.add_argument("--max-gb", type=float, default=30.0,
-                       help="Maximum total size in GB (default: 30)")
+    parser.add_argument("--max-samples", type=int, default=1000000,
+                       help="Maximum number of samples per dataset (default: 1000000, combined total ~7M for all datasets)")
     
     args = parser.parse_args()
     
@@ -700,28 +616,18 @@ def main():
     print("="*60)
     print(f"State file: {STATE_FILE}")
     print(f"Dataset: {args.dataset}")
-    if args.dataset == "all":
-        print(f"Intelligent mode: {args.min_gb}-{args.max_gb} GB with diversity balancing")
     print("="*60)
     
     success = True
     
-    # Intelligent download for "all"
-    if args.dataset == "all":
+    # ImageNet
+    if args.dataset in ["all", "imagenet", "general"]:
         if not args.skip_download:
-            success = intelligent_download_all_image(state, args.min_gb, args.max_gb) and success
-        if args.combine:
-            combine_image_annotations()
-    else:
-        # Individual dataset downloads
-        # ImageNet
-        if args.dataset == "imagenet":
-            if not args.skip_download:
-                success = download_imagenet_subset(state) and success
-            if not args.skip_extract:
-                success = extract_imagenet_subset(state) and success
-            if not args.skip_convert:
-                success = convert_imagenet_to_manifest(state) and success
+            success = download_imagenet_subset(state) and success
+        if not args.skip_extract:
+            success = extract_imagenet_subset(state) and success
+        if not args.skip_convert:
+            success = convert_imagenet_to_manifest(state, args.max_samples) and success
     
     # Open Images
     if args.dataset in ["all", "openimages"]:
@@ -736,7 +642,7 @@ def main():
     # Domain-specific
     if args.dataset in ["all", "food101", "domain"]:
         if not args.skip_download:
-            success = download_food101(state) and success
+            success = download_food101(state, args.max_samples) and success
     
     if args.dataset in ["all", "stanford_cars", "domain"]:
         if not args.skip_download:

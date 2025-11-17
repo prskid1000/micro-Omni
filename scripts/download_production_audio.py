@@ -258,7 +258,7 @@ def extract_librispeech_subset(state):
     print("\n✓ All LibriSpeech archives extracted")
     return True
 
-def convert_librispeech_to_csv(state):
+def convert_librispeech_to_csv(state, max_samples=1000000):
     """Convert LibriSpeech to ASR CSV format with fine-grained resuming"""
     print("\n" + "="*60)
     print("Converting LibriSpeech to ASR CSV")
@@ -349,6 +349,20 @@ def convert_librispeech_to_csv(state):
                                             'count': len(rows)
                                         })
                                         save_state(state)
+                                    
+                                    # Stop if we've reached sample limit
+                                    if len(rows) >= max_samples:
+                                        print(f"\nReached sample limit ({max_samples:,}), stopping...")
+                                        break
+                        
+                        if len(rows) >= max_samples:
+                            break
+                    
+                    if len(rows) >= max_samples:
+                        break
+                
+                if len(rows) >= max_samples:
+                    break
             
             processed_splits.add(split_name)
             save_checkpoint("librispeech", {
@@ -466,7 +480,7 @@ def extract_voxceleb_subset(state):
         print(f"ERROR extracting VoxCeleb: {e}")
         return False
 
-def convert_voxceleb_to_csv(state):
+def convert_voxceleb_to_csv(state, max_samples=1000000):
     """Convert VoxCeleb to CSV format (for TTS or speaker recognition)"""
     print("\n" + "="*60)
     print("Converting VoxCeleb to CSV")
@@ -502,6 +516,13 @@ def convert_voxceleb_to_csv(state):
             speaker_id = speaker_dir.name
             rel_path = os.path.relpath(str(audio_file), ".")
             rows.append({"wav": rel_path, "text": f"Speaker {speaker_id}"})
+            
+            # Stop if we've reached sample limit
+            if len(rows) >= max_samples:
+                break
+        
+        if len(rows) >= max_samples:
+            break
     
     # Save CSV
     print(f"\nWriting {len(rows)} entries to CSV...")
@@ -687,93 +708,6 @@ def combine_audio_csvs():
     print(f"✓ Created TTS CSV: {tts_output_file}")
     print(f"  Format: text,wav (for train_talker.py)")
 
-def intelligent_download_all_audio(state, min_gb=25, max_gb=30):
-    """Intelligently download diverse audio datasets to reach 25-30GB target"""
-    print("\n" + "="*60)
-    print("Intelligent Download: Diverse Audio Datasets")
-    print(f"Target: {min_gb}-{max_gb} GB with balanced diversity")
-    print("="*60)
-    
-    # Define dataset categories with target sizes
-    categories = {
-        "general_speech": [
-            ("librispeech", 25.0, download_librispeech_subset, extract_librispeech_subset, convert_librispeech_to_csv),
-            ("commonvoice", 5.0, download_commonvoice_subset, None, None),
-        ],
-        "scientific": [
-            ("ted_lyrics", 2.0, download_ted_lyrics, None, None),
-        ],
-        "environmental": [
-            ("urbansound", 0.1, download_urbansound, None, None),
-            ("musan", 15.0, download_musan, None, None),
-        ]
-    }
-    
-    total_size = 0
-    downloaded = []
-    target_per_category = (max_gb - min_gb) / len(categories)
-    
-    print(f"\nDownloading from each category to ensure diversity...")
-    print(f"Target: ~{target_per_category:.1f} GB per category\n")
-    
-    for category_name, datasets in categories.items():
-        print(f"\n{'='*60}")
-        print(f"Category: {category_name.upper()}")
-        print("="*60)
-        
-        category_size = 0
-        for ds_name, target_size, download_func, extract_func, convert_func in datasets:
-            if total_size >= max_gb * 1024**3:
-                break
-            
-            if category_size >= target_per_category * 1024**3 * 1.2:
-                break
-            
-            print(f"\nDownloading {ds_name} (target: {target_size}GB)...")
-            
-            # Check existing - use actual data folder size, not CSV file size
-            existing_size = get_audio_dataset_size(ds_name)
-            if existing_size > 0:
-                total_size += existing_size
-                category_size += existing_size
-                print(f"  Already downloaded: {existing_size / (1024**3):.2f} GB (actual data)")
-                downloaded.append(ds_name)
-                continue
-            
-            try:
-                if download_func:
-                    success = download_func(state)
-                    if success and extract_func:
-                        success = extract_func(state) and success
-                    if success and convert_func:
-                        success = convert_func(state) and success
-                    
-                    if success:
-                        # Check actual data folder size, not CSV file size
-                        actual_size = get_audio_dataset_size(ds_name)
-                        if actual_size > 0:
-                            total_size += actual_size
-                            category_size += actual_size
-                            downloaded.append(ds_name)
-                            print(f"  ✓ Downloaded: {actual_size / (1024**3):.2f} GB (actual data)")
-                            
-                            # Stop if we've reached max size
-                            if total_size >= max_gb * 1024**3:
-                                print(f"\nReached max size ({max_gb}GB), stopping...")
-                                break
-            except Exception as e:
-                print(f"  ✗ Error: {e}")
-                continue
-    
-    final_size_gb = total_size / (1024**3)
-    print(f"\n{'='*60}")
-    print(f"Download Summary")
-    print("="*60)
-    print(f"Total size: {final_size_gb:.2f} GB")
-    print(f"Target range: {min_gb}-{max_gb} GB")
-    print(f"Datasets: {', '.join(downloaded)}")
-    
-    return final_size_gb >= min_gb * 0.9
 
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade audio datasets for μOmni")
@@ -782,7 +716,7 @@ def main():
                                "urbansound", "ted_lyrics", "musan",
                                "general", "scientific", "environmental"], 
                        default="all",
-                       help="Which dataset to download (default: all - intelligently fetches diverse 25-30GB)")
+                       help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
                        help="Skip download, only extract/convert existing data")
     parser.add_argument("--skip-extract", action="store_true",
@@ -793,10 +727,8 @@ def main():
                        help="Combine all downloaded datasets into one CSV (outputs to data/audio/production_asr.csv)")
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
-    parser.add_argument("--min-gb", type=float, default=25.0,
-                       help="Minimum total size in GB (default: 25)")
-    parser.add_argument("--max-gb", type=float, default=30.0,
-                       help="Maximum total size in GB (default: 30)")
+    parser.add_argument("--max-samples", type=int, default=1000000,
+                       help="Maximum number of samples per dataset (default: 1000000, combined total ~6M for all datasets)")
     
     args = parser.parse_args()
     
@@ -817,31 +749,21 @@ def main():
     print("="*60)
     print(f"State file: {STATE_FILE}")
     print(f"Dataset: {args.dataset}")
-    if args.dataset == "all":
-        print(f"Intelligent mode: {args.min_gb}-{args.max_gb} GB with diversity balancing")
     print("="*60)
     
     success = True
     
-    # Intelligent download for "all"
-    if args.dataset == "all":
+    # LibriSpeech
+    if args.dataset in ["all", "librispeech", "general"]:
         if not args.skip_download:
-            success = intelligent_download_all_audio(state, args.min_gb, args.max_gb) and success
-        if args.combine:
-            combine_audio_csvs()
-    else:
-        # Individual dataset downloads
-        # LibriSpeech
-        if args.dataset == "librispeech":
-            if not args.skip_download:
-                success = download_librispeech_subset(state) and success
-            if not args.skip_extract:
-                success = extract_librispeech_subset(state) and success
-            if not args.skip_convert:
-                success = convert_librispeech_to_csv(state) and success
+            success = download_librispeech_subset(state) and success
+        if not args.skip_extract:
+            success = extract_librispeech_subset(state) and success
+        if not args.skip_convert:
+            success = convert_librispeech_to_csv(state, args.max_samples) and success
     
     # Common Voice
-    if args.dataset in ["all", "commonvoice"]:
+    if args.dataset in ["all", "commonvoice", "general"]:
         if not args.skip_download:
             success = download_commonvoice_subset(state) and success
     
@@ -852,7 +774,7 @@ def main():
         if not args.skip_extract:
             success = extract_voxceleb_subset(state) and success
         if not args.skip_convert:
-            success = convert_voxceleb_to_csv(state) and success
+            success = convert_voxceleb_to_csv(state, args.max_samples) and success
     
     # Scientific/Educational
     if args.dataset in ["all", "ted_lyrics", "scientific"]:
@@ -865,11 +787,9 @@ def main():
             success = download_urbansound(state) and success
     
     # Music & Sound
-    if args.dataset in ["all", "musan"]:
+    if args.dataset in ["all", "musan", "environmental"]:
         if not args.skip_download:
             success = download_musan(state) and success
-        if not args.skip_extract:
-            success = download_musan(state) and success  # Already extracts in download
     
     # Combine if requested
     if args.combine:

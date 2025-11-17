@@ -31,8 +31,11 @@ Math problem: Solve for x in 2x + 5 = 15.
 
 **Download:**
 ```bash
-# Intelligent download (25-30GB, diverse knowledge)
+# Download with sample limit (default: 1,000,000 per dataset, ~12M total combined)
 python scripts/download_production_text.py --dataset all --combine
+
+# Or specify custom sample limit per dataset
+python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~6M total
 
 # Or download specific categories
 python scripts/download_production_text.py --dataset scientific --combine
@@ -42,7 +45,7 @@ python scripts/download_production_text.py --dataset conversations --combine
 **Features:**
 - ✅ Fine-grained resumption (checkpoints during processing)
 - ✅ Diverse knowledge: General, Conversations, Scientific, Tools
-- ✅ Automatic size management (25-30GB target)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -71,8 +74,11 @@ data/audio/commonvoice/clip1.wav,"hello world"
 
 **Download:**
 ```bash
-# Intelligent download (25-30GB, diverse audio)
+# Download with sample limit (default: 1,000,000 per dataset, ~6M total combined)
 python scripts/download_production_audio.py --dataset all --combine
+
+# Or specify custom sample limit per dataset
+python scripts/download_production_audio.py --dataset all --combine --max-samples 500000  # ~3M total
 
 # Or download specific categories
 python scripts/download_production_audio.py --dataset general --combine
@@ -82,7 +88,7 @@ python scripts/download_production_audio.py --dataset scientific --combine
 **Features:**
 - ✅ Fine-grained resumption (checkpoints by split/speaker)
 - ✅ Diverse audio: General speech, Scientific talks, Environmental sounds
-- ✅ Automatic size management (25-30GB target)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -120,8 +126,11 @@ python scripts/download_production_audio.py --dataset scientific --combine
 
 **Download:**
 ```bash
-# Intelligent download (25-30GB, diverse images)
+# Download with sample limit (default: 1,000,000 per dataset, ~7M total combined)
 python scripts/download_production_image.py --dataset all --combine
+
+# Or specify custom sample limit per dataset
+python scripts/download_production_image.py --dataset all --combine --max-samples 500000  # ~3.5M total
 
 # Or download specific categories
 python scripts/download_production_image.py --dataset general --combine
@@ -131,7 +140,7 @@ python scripts/download_production_image.py --dataset nature --combine
 **Features:**
 - ✅ Fine-grained resumption (checkpoints by class)
 - ✅ Diverse images: General, Scientific/Medical, Art, Nature, Domain-specific
-- ✅ Automatic size management (25-30GB target)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~12M, Audio ~6M, Images ~7M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -184,7 +193,8 @@ python scripts/download_production_audio.py --dataset all --combine
 
 **Download:**
 ```bash
-# Download all modalities with intelligent diversity balancing
+# Download all modalities with sample-based limits (default: 1M per dataset)
+# Combined totals: Text ~12M, Audio ~6M, Images ~7M
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
 python scripts/download_production_audio.py --dataset all --combine
@@ -192,7 +202,7 @@ python scripts/download_production_audio.py --dataset all --combine
 
 **Features:**
 - ✅ All formats match training script requirements
-- ✅ Balanced diversity across modalities
+- ✅ Downloads from multiple categories when using `--dataset all`
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -202,15 +212,21 @@ python scripts/download_production_audio.py --dataset all --combine
 ### Quick Start (Recommended)
 
 ```bash
-# Download all modalities with intelligent 25-30GB diversity balancing
-python scripts/download_production_text.py --dataset all --combine --min-gb 25 --max-gb 30
-python scripts/download_production_image.py --dataset all --combine --min-gb 25 --max-gb 30
-python scripts/download_production_audio.py --dataset all --combine --min-gb 25 --max-gb 30
+# Download all modalities with sample-based limits (default: 1M per dataset)
+# Combined totals: Text ~12M samples (~1.2B tokens), Audio ~6M, Images ~7M
+python scripts/download_production_text.py --dataset all --combine
+python scripts/download_production_image.py --dataset all --combine
+python scripts/download_production_audio.py --dataset all --combine
 ```
 
 ### Advanced Options
 
 ```bash
+# Specify custom sample limits per dataset (reduces combined totals)
+python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~6M total
+python scripts/download_production_image.py --dataset all --combine --max-samples 500000  # ~3.5M total
+python scripts/download_production_audio.py --dataset all --combine --max-samples 500000  # ~3M total
+
 # Download specific categories only
 python scripts/download_production_text.py --dataset scientific --combine
 python scripts/download_production_image.py --dataset nature --combine
@@ -508,18 +524,26 @@ data/
 
 ---
 
-## 🎯 Intelligent Download Features
+## 🎯 Download Features
 
-### Diversity Balancing
-When using `--dataset all`, scripts intelligently download from multiple categories:
+### Multiple Categories
+When using `--dataset all`, scripts download from multiple categories:
 - **Text**: General, Conversations, Scientific, Tools
 - **Audio**: General speech, Scientific talks, Environmental sounds
 - **Images**: General, Scientific/Medical, Art, Nature, Domain-specific
 
-### Size Management
-- Target: 25-30GB per modality (configurable with `--min-gb` and `--max-gb`)
-- Automatically stops when reaching size limits
-- Ensures balanced distribution across categories
+You can also download specific categories using `--dataset <category>`.
+
+### Sample-Based Limits
+- Default: 1,000,000 samples per dataset (configurable with `--max-samples`)
+- Combined totals when using `--dataset all`:
+  - **Text**: ~12M samples (~1.2B tokens) from 12 datasets
+  - **Audio**: ~6M samples from 6 datasets
+  - **Images**: ~7M samples from 7 datasets
+- For 25.65M parameter model: Combined total provides sufficient data for single-epoch training
+- Based on Chinchilla scaling laws: 20-200 tokens per parameter (minimum: 513M tokens)
+- Automatically stops when reaching sample limit per dataset
+- Example: `--max-samples 500000` for smaller combined totals (~6M text samples)
 
 ### Fine-Grained Resumption
 - Checkpoints saved during processing (by file, line, class, etc.)
@@ -616,11 +640,12 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for more detail
 
 ## 💡 Tips
 
-✅ **Start with intelligent download:** `--dataset all --combine` for balanced diversity  
-✅ **Production-grade:** Millions of samples, 25-30GB per modality  
+✅ **Start with sample-based download:** `--dataset all --combine` to download from multiple categories  
+✅ **Production-grade:** Millions of samples (default: 1M per dataset, ~12M combined for text)  
 ✅ **Fine-grained resumption:** Safe to interrupt and resume  
 ✅ **No formatting needed:** Outputs are in final format ready for training  
-✅ **Diverse knowledge:** Automatically balances across categories  
+✅ **Diverse knowledge:** Downloads from multiple categories  
+✅ **Custom limits:** Use `--max-samples` to control dataset size  
 ✅ **Synthetic data:** Use `make_synthetic_datasets.py` for quick testing  
 ✅ **Update configs:** Run `scripts/update_configs_from_data.py` after downloading to optimize training parameters
 
@@ -631,7 +656,7 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for more detail
 - ✅ All scripts support fine-grained resumption (checkpoints saved during processing)
 - ✅ All outputs are in final format - no additional formatting needed
 - ✅ Combined files are automatically created when using `--combine` flag
-- ✅ Intelligent download (`--dataset all`) ensures 25-30GB with diversity balancing
+- ✅ Sample-based limits (`--max-samples`) control dataset size (default: 5,000,000 samples, optimized for single-epoch training)
 - ✅ Paths in CSV/JSON are relative to working directory or can be absolute
 - ✅ TTS format (`text,wav`) is automatically created from ASR data when using `--combine`
 - ✅ Audio files may be FLAC format (LibriSpeech) - training scripts handle both WAV and FLAC

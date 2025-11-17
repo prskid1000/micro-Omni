@@ -4,17 +4,18 @@ Target: Under 30GB, millions of samples
 Includes: Conversations, Instruction Following, Tool Calls, Scientific Content (Physics, Chemistry, Math, Biology), English Learning
 
 Supports:
-- Conversations: DialogStudio, Alpaca, ShareGPT, OpenAssistant
-- Tool Calls: ToolBench, API datasets
+- Conversations: DialogStudio, Alpaca
+- Tool Calls: ToolBench
 - Scientific: ArXiv (physics, chemistry, math, biology), PubMed, Math datasets
-- English Learning: Books, Wikipedia, C4
-- Science Education: ScienceQA, textbooks
+- English Learning: Books, Wikipedia
+- Science Education: ScienceQA
 """
 
 import os
 import json
 import argparse
 import subprocess
+import sys
 import requests
 from pathlib import Path
 from tqdm import tqdm
@@ -33,18 +34,14 @@ def load_state():
     return {
         # General knowledge & English learning
         "wikipedia": {"downloaded": False, "extracted": False, "converted": False, "samples": 0, "last_processed_file": "", "last_offset": 0},
-        "c4": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
         "books": {"downloaded": False, "extracted": False, "converted": False, "samples": 0, "last_book_id": 0, "last_paragraph": 0},
         
         # Conversations & Instruction Following
         "dialogstudio": {"downloaded": False, "converted": False, "samples": 0},
         "alpaca": {"downloaded": False, "converted": False, "samples": 0, "last_line": 0},
-        "sharegpt": {"downloaded": False, "converted": False, "samples": 0},
-        "openassistant": {"downloaded": False, "converted": False, "samples": 0},
         
         # Tool Calls
         "toolbench": {"downloaded": False, "converted": False, "samples": 0},
-        "apibank": {"downloaded": False, "converted": False, "samples": 0},
         
         # Scientific Content
         "arxiv_physics": {"downloaded": False, "converted": False, "samples": 0, "last_start": 0, "last_batch": 0},
@@ -144,8 +141,132 @@ def download_wikipedia(state):
         print("✗ Failed to download Wikipedia")
         return False
 
+def extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100):
+    """Custom Wikipedia XML parser - extracts text without external dependencies"""
+    import xml.etree.ElementTree as ET
+    import re
+    from multiprocessing import Pool
+    
+    def clean_wiki_text(text):
+        """Simple wiki text cleaning"""
+        if not text:
+            return ""
+        
+        # Remove wiki markup patterns
+        text = re.sub(r'\[\[([^\]]+)\]\]', r'\1', text)  # [[link]] -> link
+        text = re.sub(r'\[([^\]]+)\]', r'\1', text)  # [url] -> url
+        text = re.sub(r'{{[^}]+}}', '', text)  # Remove templates
+        text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)  # Remove refs
+        text = re.sub(r'<[^>]+>', '', text)  # Remove HTML tags
+        text = re.sub(r"''+", '', text)  # Remove bold/italic markers
+        text = re.sub(r'={2,}', '', text)  # Remove section headers
+        text = re.sub(r'\n{3,}', '\n\n', text)  # Normalize newlines
+        text = text.strip()
+        
+        return text
+    
+    def process_page(elem):
+        """Extract text from a single page element"""
+        try:
+            title_elem = elem.find('{http://www.mediawiki.org/xml/export-0.10/}title')
+            ns_elem = elem.find('{http://www.mediawiki.org/xml/export-0.10/}ns')
+            text_elem = elem.find('{http://www.mediawiki.org/xml/export-0.10/}revision/{http://www.mediawiki.org/xml/export-0.10/}text')
+            
+            if title_elem is None or text_elem is None:
+                return None
+            
+            title = title_elem.text or ""
+            ns = ns_elem.text if ns_elem is not None else "0"
+            text = text_elem.text or ""
+            
+            # Skip non-article namespaces (0 = main namespace)
+            if ns != "0":
+                return None
+            
+            # Skip disambiguation pages
+            if "disambiguation" in title.lower() or "(disambiguation)" in title.lower():
+                return None
+            
+            # Skip redirects
+            if text.strip().startswith("#REDIRECT") or text.strip().startswith("#redirect"):
+                return None
+            
+            # Clean the text
+            cleaned = clean_wiki_text(text)
+            
+            if len(cleaned) < min_text_length:
+                return None
+            
+            return f"{title}\n\n{cleaned}"
+        except Exception as e:
+            return None
+    
+    print("Parsing Wikipedia XML dump (this may take 30-60 minutes)...")
+    print("Using custom XML parser (no external dependencies required)...")
+    
+    articles = []
+    article_count = 0
+    max_articles = 1000000  # Limit to prevent memory issues
+    
+    # Parse XML incrementally
+    print("Reading and parsing XML file...")
+    try:
+        # Handle bz2 compression
+        if input_file.endswith('.bz2'):
+            file_handle = bz2.open(input_file, 'rb')
+        else:
+            file_handle = open(input_file, 'rb')
+        
+        # Use iterparse for memory-efficient parsing
+        context = ET.iterparse(file_handle, events=('start', 'end'))
+        context = iter(context)
+        event, root = next(context)
+        
+        for event, elem in tqdm(context, desc="Processing pages"):
+            if event == 'end' and elem.tag.endswith('page'):
+                article = process_page(elem)
+                if article:
+                    articles.append(article)
+                    article_count += 1
+                    if article_count >= max_articles:
+                        break
+                # Clear element to free memory
+                elem.clear()
+                root.clear()
+        
+        file_handle.close()
+    except ET.ParseError as e:
+        print(f"XML parsing error: {e}")
+        return False
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return False
+    
+    # Write articles to files
+    print(f"Writing {len(articles)} articles to output directory...")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Split into multiple files (similar to WikiExtractor output format)
+    files_per_dir = 100
+    file_count = 0
+    
+    for i, article in enumerate(tqdm(articles, desc="Writing articles")):
+        if i % files_per_dir == 0:
+            subdir = os.path.join(output_dir, f"AA")
+            os.makedirs(subdir, exist_ok=True)
+            file_count = 0
+        
+        output_file = os.path.join(subdir, f"wiki_{file_count:02d}")
+        with open(output_file, 'a', encoding='utf-8') as f:
+            f.write(article + '\n\n')
+        
+        file_count += 1
+    
+    print(f"✓ Extracted {len(articles)} articles")
+    return True
+
 def extract_wikipedia_text(state):
-    """Extract text from Wikipedia XML dump using WikiExtractor"""
+    """Extract text from Wikipedia XML dump using custom parser"""
     print("\n" + "="*60)
     print("Extracting Text from Wikipedia Dump")
     print("="*60)
@@ -161,49 +282,30 @@ def extract_wikipedia_text(state):
         print(f"ERROR: Wikipedia dump not found at {input_file}")
         return False
     
-    # Check if WikiExtractor is installed
-    try:
-        import wikiextractor
-    except ImportError:
-        print("WikiExtractor not found. Installing...")
-        subprocess.check_call(["pip", "install", "wikiextractor"])
-    
-    os.makedirs(output_dir, exist_ok=True)
-    
-    print("Extracting Wikipedia text (this may take 30-60 minutes)...")
-    print("Using WikiExtractor to parse XML and extract clean text...")
+    # Handle bz2 compression - parse directly from compressed file
+    import bz2
+    if input_file.endswith('.bz2'):
+        print("Parsing directly from bz2 compressed file...")
+        # We'll handle decompression in the parser
     
     try:
-        # Use WikiExtractor to extract text
-        # -o: output directory
-        # --no-templates: skip templates
-        # --processes: use multiple processes
-        # --min_text_length: minimum text length
-        # --filter_disambig_pages: filter disambiguation pages
-        cmd = [
-            "python", "-m", "wikiextractor.WikiExtractor",
-            input_file,
-            "-o", output_dir,
-            "--no-templates",
-            "--processes", "4",
-            "--min_text_length", "100",
-            "--filter_disambig_pages"
-        ]
+        success = extract_wikipedia_text_custom(input_file, output_dir, min_text_length=100)
         
-        subprocess.run(cmd, check=True)
-        
-        state["wikipedia"]["extracted"] = True
-        save_state(state)
-        print("✓ Wikipedia text extracted successfully")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR extracting Wikipedia: {e}")
-        return False
+        if success:
+            state["wikipedia"]["extracted"] = True
+            save_state(state)
+            print("✓ Wikipedia text extracted successfully")
+            return True
+        else:
+            print("ERROR: Extraction failed")
+            return False
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"ERROR extracting Wikipedia: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
-def convert_wikipedia_to_text(state):
+def convert_wikipedia_to_text(state, max_samples=1000000):
     """Convert extracted Wikipedia files to single text file with fine-grained resuming"""
     print("\n" + "="*60)
     print("Converting Wikipedia to Text Format")
@@ -228,17 +330,13 @@ def convert_wikipedia_to_text(state):
         print(f"Resuming from checkpoint: {checkpoint.get('last_file', 'start')}")
         processed_files = set(checkpoint.get('processed_files', []))
         count = checkpoint.get('count', 0)
-        total_size = checkpoint.get('total_size', 0)
         last_file = checkpoint.get('last_file', '')
         mode = 'a'  # Append mode
     else:
         processed_files = set()
         count = 0
-        total_size = 0
         last_file = ''
         mode = 'w'  # Write mode
-    
-    max_size_gb = 30  # Keep under 30GB
     resume_from_last = (last_file != '')
     
     print("Combining Wikipedia articles into single text file...")
@@ -283,7 +381,6 @@ def convert_wikipedia_to_text(state):
                     if len(content) > 100:  # Skip very short articles
                         out_f.write(content + '\n\n')
                         count += 1
-                        total_size += len(content.encode('utf-8'))
                         processed_files.add(rel_path)
                         
                         # Save checkpoint every 1000 files
@@ -291,19 +388,18 @@ def convert_wikipedia_to_text(state):
                             save_checkpoint("wikipedia", {
                                 'processed_files': list(processed_files),
                                 'count': count,
-                                'total_size': total_size,
                                 'last_file': rel_path
                             })
                             save_state(state)
                         
-                        # Stop if we're approaching 30GB
-                        if total_size > max_size_gb * 1024**3 * 0.9:  # 90% of 30GB
-                            print(f"\nReached size limit (~{max_size_gb}GB), stopping...")
+                        # Stop if we've reached sample limit
+                        if count >= max_samples:
+                            print(f"\nReached sample limit ({max_samples:,}), stopping...")
                             break
             except Exception as e:
                 continue
             
-            if total_size > max_size_gb * 1024**3 * 0.9:
+            if count >= max_samples:
                 break
     
     state["wikipedia"]["converted"] = True
@@ -315,126 +411,9 @@ def convert_wikipedia_to_text(state):
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
     
-    file_size_gb = os.path.getsize(output_file) / (1024**3)
     print(f"\n✓ Converted {count:,} Wikipedia articles to {output_file}")
-    print(f"  File size: {file_size_gb:.2f} GB")
     return True
 
-def download_openwebtext2_subset(state):
-    """Download OpenWebText2 subset from HuggingFace"""
-    print("\n" + "="*60)
-    print("Downloading OpenWebText2 Subset")
-    print("="*60)
-    
-    if state["openwebtext2"]["downloaded"]:
-        print("OpenWebText2 already downloaded, skipping...")
-        return True
-    
-    try:
-        from datasets import load_dataset
-        
-        print("Loading OpenWebText2 from HuggingFace...")
-        print("This will download a subset to stay under 30GB...")
-        print("NOTE: OpenWebText2 is large, we'll download a manageable subset")
-        
-        # Load a subset - OpenWebText2 is huge, so we'll take a sample
-        # The full dataset is ~194GB, we'll take ~10% which should be ~20GB
-        print("Downloading subset (this may take 1-2 hours)...")
-        
-        # Load with streaming to avoid downloading everything
-        dataset = load_dataset("openwebtext", streaming=True, split="train")
-        
-        output_file = "data/text/openwebtext2.txt"
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        
-        count = 0
-        max_size_gb = 30
-        total_size = 0
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            for item in tqdm(dataset, desc="Downloading samples"):
-                text = item.get('text', '')
-                if len(text) > 100:  # Skip very short texts
-                    f.write(text + '\n\n')
-                    count += 1
-                    total_size += len(text.encode('utf-8'))
-                    
-                    # Stop at ~25GB to be safe
-                    if total_size > max_size_gb * 1024**3 * 0.85:
-                        print(f"\nReached size limit (~{max_size_gb}GB), stopping...")
-                        break
-                    
-                    # Also limit by count (millions of samples)
-                    if count >= 2_000_000:  # 2 million samples
-                        print(f"\nReached sample limit (2M samples), stopping...")
-                        break
-        
-        state["openwebtext2"]["downloaded"] = True
-        state["openwebtext2"]["converted"] = True
-        state["openwebtext2"]["samples"] = count
-        save_state(state)
-        
-        file_size_gb = os.path.getsize(output_file) / (1024**3)
-        print(f"\n✓ Downloaded {count:,} samples to {output_file}")
-        print(f"  File size: {file_size_gb:.2f} GB")
-        return True
-        
-    except ImportError:
-        print("ERROR: 'datasets' package not installed. Install with: pip install datasets")
-        return False
-    except Exception as e:
-        print(f"ERROR downloading OpenWebText2: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def download_c4_subset(state):
-    """Download C4 (Colossal Clean Crawled Corpus) subset - using Common Crawl instead"""
-    print("\n" + "="*60)
-    print("Downloading C4 Subset (using Common Crawl WET files)")
-    print("="*60)
-    
-    if state["c4"]["downloaded"]:
-        print("C4 already downloaded, skipping...")
-        return True
-    
-    print("NOTE: C4 is derived from Common Crawl. We'll download a subset of Common Crawl WET files.")
-    print("This provides similar web text data without HuggingFace dependency.")
-    
-    # Common Crawl WET files are available directly
-    # We'll download a small subset from recent crawls
-    base_url = "https://data.commoncrawl.org"
-    
-    # Recent crawl paths (example - user can update these)
-    crawl_paths = [
-        "/crawl-data/CC-MAIN-2023-23/segments/1685226175579.49/wet/CC-MAIN-20230528154521-20230528184521-00000.warc.wet.gz",
-    ]
-    
-    output_file = "data/text/c4.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    count = 0
-    max_size_gb = 5  # Limit to 5GB
-    total_size = 0
-    
-    print("Downloading Common Crawl WET files (this may take a while)...")
-    print("NOTE: For full C4 dataset, consider using the original C4 download scripts.")
-    print("This is a simplified version using direct Common Crawl access.")
-    
-    # For now, mark as downloaded and provide instructions
-    print("\n⚠ C4 requires large-scale processing. For production use:")
-    print("  1. Download C4 directly from: https://github.com/allenai/allennlp/discussions")
-    print("  2. Or use Common Crawl WET files and process them")
-    print("  3. Or skip C4 and use Wikipedia + Books for general text")
-    
-    state["c4"]["downloaded"] = True
-    state["c4"]["converted"] = True
-    state["c4"]["samples"] = 0
-    save_state(state)
-    
-    # Create empty file or skip
-    print("\n✓ C4 download skipped (use alternative sources or manual download)")
-    return True
 
 def download_json_dataset_from_url(state, dataset_name, url, output_file, max_samples=500000, extract_func=None):
     """Download JSON dataset from direct URL with fine-grained resuming"""
@@ -464,15 +443,11 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
         print(f"Resuming processing from line {checkpoint.get('last_line', 0)}")
         last_line = checkpoint.get('last_line', 0)
         count = checkpoint.get('count', 0)
-        total_size = checkpoint.get('total_size', 0)
         mode = 'a'  # Append mode
     else:
         last_line = 0
         count = 0
-        total_size = 0
         mode = 'w'  # Write mode
-    
-    max_size_gb = 5
     
     # Process JSON file
     print("Processing JSON file...")
@@ -500,19 +475,15 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
                         if text and len(text) > 50:
                             f.write(text + '\n\n')
                             count += 1
-                            total_size += len(text.encode('utf-8'))
                             
                             # Save checkpoint every 100 items
                             if count % 100 == 0:
                                 save_checkpoint(dataset_name, {
                                     'last_line': line_num,
-                                    'count': count,
-                                    'total_size': total_size
+                                    'count': count
                                 })
                                 save_state(state)
                             
-                            if total_size > max_size_gb * 1024**3 * 0.9:
-                                break
                             if count >= max_samples:
                                 break
                     except json.JSONDecodeError:
@@ -540,19 +511,15 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
                                 if text and len(text) > 50:
                                     f.write(text + '\n\n')
                                     count += 1
-                                    total_size += len(text.encode('utf-8'))
                                     
                                     # Save checkpoint every 100 items
                                     if count % 100 == 0:
                                         save_checkpoint(dataset_name, {
                                             'last_line': idx + 1,
-                                            'count': count,
-                                            'total_size': total_size
+                                            'count': count
                                         })
                                         save_state(state)
                                     
-                                    if total_size > max_size_gb * 1024**3 * 0.9:
-                                        break
                                     if count >= max_samples:
                                         break
                             except Exception as e:
@@ -562,8 +529,7 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
             # Save checkpoint on error
             save_checkpoint(dataset_name, {
                 'last_line': last_line,
-                'count': count,
-                'total_size': total_size
+                'count': count
             })
             save_state(state)
             return False
@@ -578,9 +544,7 @@ def download_json_dataset_from_url(state, dataset_name, url, output_file, max_sa
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
     
-    file_size_gb = os.path.getsize(output_file) / (1024**3) if os.path.exists(output_file) else 0
     print(f"\n✓ Downloaded {count:,} samples to {output_file}")
-    print(f"  File size: {file_size_gb:.2f} GB")
     return True
 
 def extract_conversation_text(item):
@@ -642,7 +606,7 @@ def extract_conversation_text(item):
     
     return '\n'.join(text_parts) if text_parts else None
 
-def download_dialogstudio(state):
+def download_dialogstudio(state, max_samples=100000):
     """Download DialogStudio conversations from GitHub"""
     print("\n" + "="*60)
     print("Downloading DialogStudio")
@@ -652,75 +616,138 @@ def download_dialogstudio(state):
         print("DialogStudio already downloaded, skipping...")
         return True
     
-    print("NOTE: DialogStudio requires HuggingFace authentication.")
-    print("For direct download, visit: https://github.com/Salesforce/DialogStudio")
-    print("Or use the existing download_datasets.py script which handles DialogStudio.")
+    output_file = "data/text/dialogstudio.txt"
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    # Mark as downloaded (user can use existing script)
-    state["dialogstudio"]["downloaded"] = True
-    state["dialogstudio"]["converted"] = True
-    state["dialogstudio"]["samples"] = 0
-    save_state(state)
+    # Download from GitHub (direct links)
+    github_urls = [
+        "https://github.com/Salesforce/DialogStudio/raw/main/data/Conversational_Task_Oriented/ConvAI2/train.json",
+        "https://github.com/Salesforce/DialogStudio/raw/main/data/Conversational_Task_Oriented/MultiWOZ_2.1/train.json",
+    ]
     
-    print("✓ DialogStudio marked (use scripts/download_datasets.py for actual download)")
-    return True
+    count = 0
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        for url in github_urls:
+            try:
+                print(f"Downloading from {url}...")
+                response = requests.get(url, timeout=60, stream=True)
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list):
+                        for item in tqdm(data, desc="Processing items"):
+                            text = extract_conversation_text(item)
+                            if text and len(text) > 50:
+                                f.write(text + '\n\n')
+                                count += 1
+                                if count >= max_samples:
+                                    break
+                    if count >= max_samples:
+                        break
+            except Exception as e:
+                print(f"Error downloading from {url}: {e}")
+                continue
+    
+    if count > 0:
+        state["dialogstudio"]["downloaded"] = True
+        state["dialogstudio"]["converted"] = True
+        state["dialogstudio"]["samples"] = count
+        save_state(state)
+        print(f"\n✓ Downloaded {count:,} DialogStudio samples to {output_file}")
+        return True
+    else:
+        print("ERROR: Could not download DialogStudio from any source")
+        return False
 
-def download_alpaca(state):
-    """Download Alpaca instruction following dataset from GitHub"""
-    # Alpaca dataset is available on GitHub
-    url = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
-    return download_json_dataset_from_url(
-        state, "alpaca", url,
-        "data/text/alpaca.txt", max_samples=50000
-    )
-
-def download_sharegpt(state):
-    """Download ShareGPT conversations - provide instructions"""
+def download_alpaca(state, max_samples=500000):
+    """Download Alpaca instruction following dataset from GitHub and extended variants"""
     print("\n" + "="*60)
-    print("Downloading ShareGPT")
+    print("Downloading Alpaca")
     print("="*60)
     
-    if state["sharegpt"]["downloaded"]:
-        print("ShareGPT already downloaded, skipping...")
+    if state["alpaca"]["downloaded"]:
+        print("Alpaca already downloaded, skipping...")
         return True
     
-    print("NOTE: ShareGPT dataset is large and typically requires HuggingFace.")
-    print("Alternative: Download from GitHub or use direct URLs if available.")
-    print("For now, marking as downloaded. You can manually add ShareGPT data.")
+    output_file = "data/text/alpaca.txt"
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    state["sharegpt"]["downloaded"] = True
-    state["sharegpt"]["converted"] = True
-    state["sharegpt"]["samples"] = 0
-    save_state(state)
+    # Download multiple Alpaca variants for more data
+    alpaca_urls = [
+        # Original Alpaca (52k samples)
+        ("https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json", "original"),
+        # Try Alpaca-GPT4 if available
+        ("https://raw.githubusercontent.com/Instruction-Tuning-with-GPT-4/GPT-4-LLM/main/data/alpaca_gpt4_data.json", "gpt4"),
+    ]
     
-    print("✓ ShareGPT marked (add data manually if needed)")
-    return True
-
-def download_openassistant(state):
-    """Download OpenAssistant conversations from GitHub"""
-    # OpenAssistant data is on GitHub
-    # Try to download from their repository
-    print("\n" + "="*60)
-    print("Downloading OpenAssistant")
-    print("="*60)
+    download_dir = "data/text_downloads"
+    os.makedirs(download_dir, exist_ok=True)
     
-    if state["openassistant"]["downloaded"]:
-        print("OpenAssistant already downloaded, skipping...")
+    count = 0
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        for url, variant_name in alpaca_urls:
+            try:
+                print(f"\nDownloading Alpaca variant: {variant_name} from {url}")
+                temp_file = os.path.join(download_dir, f"alpaca_{variant_name}.json")
+                
+                if not download_file(url, temp_file, resume=True):
+                    print(f"Warning: Failed to download {variant_name}, trying next variant...")
+                    continue
+                
+                # Process the JSON file
+                print(f"Processing {variant_name}...")
+                try:
+                    with open(temp_file, 'r', encoding='utf-8') as in_f:
+                        data = json.load(in_f)
+                        if isinstance(data, list):
+                            for item in tqdm(data, desc=f"Processing {variant_name}"):
+                                try:
+                                    text = extract_conversation_text(item)
+                                    if text and len(text) > 50:
+                                        f.write(text + '\n\n')
+                                        count += 1
+                                        
+                                        if count >= max_samples:
+                                            print(f"\nReached sample limit ({max_samples:,}), stopping...")
+                                            break
+                                except Exception as e:
+                                    continue
+                        else:
+                            print(f"Warning: {variant_name} is not a JSON array, skipping...")
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Failed to parse {variant_name} JSON: {e}")
+                    continue
+                except Exception as e:
+                    print(f"Warning: Error processing {variant_name}: {e}")
+                    continue
+                
+                if count >= max_samples:
+                    break
+                    
+            except Exception as e:
+                print(f"Warning: Error downloading {variant_name}: {e}")
+                continue
+    
+    if count > 0:
+        state["alpaca"]["downloaded"] = True
+        state["alpaca"]["converted"] = True
+        state["alpaca"]["samples"] = count
+        save_state(state)
+        
+        print(f"\n✓ Downloaded {count:,} Alpaca samples to {output_file}")
         return True
-    
-    print("NOTE: OpenAssistant dataset is available on GitHub.")
-    print("Visit: https://github.com/LAION-AI/Open-Assistant")
-    print("For now, marking as downloaded. You can manually add OpenAssistant data.")
-    
-    state["openassistant"]["downloaded"] = True
-    state["openassistant"]["converted"] = True
-    state["openassistant"]["samples"] = 0
-    save_state(state)
-    
-    print("✓ OpenAssistant marked (add data manually if needed)")
-    return True
+    else:
+        # Fallback to original method if all variants fail
+        print("Falling back to original Alpaca dataset...")
+        url = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
+        return download_json_dataset_from_url(
+            state, "alpaca", url,
+            "data/text/alpaca.txt", max_samples=max_samples
+        )
 
-def download_toolbench(state):
+
+def download_toolbench(state, max_samples=50000):
     """Download ToolBench tool calling dataset from GitHub"""
     print("\n" + "="*60)
     print("Downloading ToolBench")
@@ -730,17 +757,58 @@ def download_toolbench(state):
         print("ToolBench already downloaded, skipping...")
         return True
     
-    print("NOTE: ToolBench is available on GitHub.")
-    print("Visit: https://github.com/OpenBMB/ToolBench")
-    print("For now, marking as downloaded. You can manually add ToolBench data.")
+    output_file = "data/text/toolbench.txt"
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    state["toolbench"]["downloaded"] = True
-    state["toolbench"]["converted"] = True
-    state["toolbench"]["samples"] = 0
-    save_state(state)
+    # Download from GitHub (direct links)
+    github_urls = [
+        "https://raw.githubusercontent.com/OpenBMB/ToolBench/main/data/train.json",
+    ]
     
-    print("✓ ToolBench marked (add data manually if needed)")
-    return True
+    count = 0
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        for url in github_urls:
+            try:
+                print(f"Downloading from {url}...")
+                response = requests.get(url, timeout=60, stream=True)
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list):
+                        for item in tqdm(data, desc="Processing items"):
+                            text = extract_tool_call_text(item)
+                            if text and len(text) > 50:
+                                f.write(text + '\n\n')
+                                count += 1
+                                if count >= max_samples:
+                                    break
+                    elif isinstance(data, dict):
+                        # Handle dict format
+                        for key, items in data.items():
+                            if isinstance(items, list):
+                                for item in items:
+                                    text = extract_tool_call_text(item)
+                                    if text and len(text) > 50:
+                                        f.write(text + '\n\n')
+                                        count += 1
+                                        if count >= max_samples:
+                                            break
+                    if count >= max_samples:
+                        break
+            except Exception as e:
+                print(f"Error downloading from {url}: {e}")
+                continue
+    
+    if count > 0:
+        state["toolbench"]["downloaded"] = True
+        state["toolbench"]["converted"] = True
+        state["toolbench"]["samples"] = count
+        save_state(state)
+        print(f"\n✓ Downloaded {count:,} ToolBench samples to {output_file}")
+        return True
+    else:
+        print("ERROR: Could not download ToolBench from any source")
+        return False
 
 def extract_tool_call_text(item):
     """Extract tool call information from dataset item"""
@@ -760,7 +828,7 @@ def extract_tool_call_text(item):
     
     return '\n'.join(parts) if parts else None
 
-def download_arxiv_by_category(state, category, category_key):
+def download_arxiv_by_category(state, category, category_key, max_samples=100000):
     """Download ArXiv papers for a specific category using ArXiv API with fine-grained resuming"""
     print(f"\n{'='*60}")
     print(f"Downloading ArXiv {category} Papers")
@@ -781,17 +849,12 @@ def download_arxiv_by_category(state, category, category_key):
     if checkpoint:
         print(f"Resuming from checkpoint: batch {checkpoint.get('last_batch', 0)}, {checkpoint.get('count', 0)} papers")
         count = checkpoint.get('count', 0)
-        total_size = checkpoint.get('total_size', 0)
         start = checkpoint.get('last_start', 0)
         mode = 'a'  # Append mode
     else:
         count = 0
-        total_size = 0
         start = 0
         mode = 'w'  # Write mode
-    
-    max_size_gb = 4  # 4GB per category
-    max_papers = 100000
     
     # Category to ArXiv category code mapping
     category_map = {
@@ -813,7 +876,7 @@ def download_arxiv_by_category(state, category, category_key):
     batch_size = 100  # ArXiv API limit
     
     with open(output_file, mode, encoding='utf-8') as f:
-        while count < max_papers and total_size < max_size_gb * 1024**3 * 0.9:
+        while count < max_samples:
             # Build query
             query_parts = [f"cat:{cat}" for cat in arxiv_categories]
             query = " OR ".join(query_parts)
@@ -852,11 +915,8 @@ def download_arxiv_by_category(state, category, category_key):
                             if len(text) > 200:
                                 f.write(text + '\n\n')
                                 count += 1
-                                total_size += len(text.encode('utf-8'))
                                 
-                                if total_size > max_size_gb * 1024**3 * 0.9:
-                                    break
-                                if count >= max_papers:
+                                if count >= max_samples:
                                     break
                     except Exception as e:
                         continue
@@ -866,7 +926,6 @@ def download_arxiv_by_category(state, category, category_key):
                 # Save checkpoint after each batch
                 save_checkpoint(category_key, {
                     'count': count,
-                    'total_size': total_size,
                     'last_start': start,
                     'last_batch': start // batch_size
                 })
@@ -875,7 +934,7 @@ def download_arxiv_by_category(state, category, category_key):
                 # Rate limiting - be polite to ArXiv API
                 time.sleep(3)  # 3 second delay between requests
                 
-                if total_size > max_size_gb * 1024**3 * 0.9 or count >= max_papers:
+                if count >= max_samples:
                     break
                     
             except Exception as e:
@@ -884,7 +943,6 @@ def download_arxiv_by_category(state, category, category_key):
                 # Save checkpoint on error so we can resume
                 save_checkpoint(category_key, {
                     'count': count,
-                    'total_size': total_size,
                     'last_start': start,
                     'last_batch': start // batch_size
                 })
@@ -901,12 +959,10 @@ def download_arxiv_by_category(state, category, category_key):
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
     
-    file_size_gb = os.path.getsize(output_file) / (1024**3) if os.path.exists(output_file) else 0
     print(f"\n✓ Downloaded {count:,} {category} papers to {output_file}")
-    print(f"  File size: {file_size_gb:.2f} GB")
     return True
 
-def download_pubmed(state):
+def download_pubmed(state, max_samples=500000):
     """Download PubMed abstracts using PubMed API with fine-grained resuming"""
     print("\n" + "="*60)
     print("Downloading PubMed Abstracts")
@@ -927,21 +983,18 @@ def download_pubmed(state):
     if checkpoint:
         print(f"Resuming from checkpoint: batch {checkpoint.get('last_batch', 0)}, {checkpoint.get('count', 0)} abstracts")
         count = checkpoint.get('count', 0)
-        total_size = checkpoint.get('total_size', 0)
         start_index = checkpoint.get('last_id_index', 0)
         id_list = checkpoint.get('id_list', [])
         mode = 'a'  # Append mode
         resume = True
     else:
         count = 0
-        total_size = 0
         start_index = 0
         id_list = []
         mode = 'w'  # Write mode
         resume = False
     
-    max_size_gb = 5
-    max_abstracts = 500000
+    max_abstracts = max_samples
     
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -970,7 +1023,6 @@ def download_pubmed(state):
             save_checkpoint("pubmed", {
                 'id_list': id_list,
                 'count': 0,
-                'total_size': 0,
                 'last_id_index': 0,
                 'last_batch': 0
             })
@@ -1015,10 +1067,7 @@ def download_pubmed(state):
                                 if len(text) > 100:
                                     f.write(text + '\n\n')
                                     count += 1
-                                    total_size += len(text.encode('utf-8'))
                                     
-                                    if total_size > max_size_gb * 1024**3 * 0.9:
-                                        break
                                     if count >= max_abstracts:
                                         break
                         except Exception as e:
@@ -1028,7 +1077,6 @@ def download_pubmed(state):
                     save_checkpoint("pubmed", {
                         'id_list': id_list,
                         'count': count,
-                        'total_size': total_size,
                         'last_id_index': i + batch_size,
                         'last_batch': i // batch_size
                     })
@@ -1037,7 +1085,7 @@ def download_pubmed(state):
                     # Rate limiting
                     time.sleep(0.34)  # PubMed allows 3 requests/second
                     
-                    if total_size > max_size_gb * 1024**3 * 0.9 or count >= max_abstracts:
+                    if count >= max_abstracts:
                         break
                         
                 except Exception as e:
@@ -1046,7 +1094,6 @@ def download_pubmed(state):
                     save_checkpoint("pubmed", {
                         'id_list': id_list,
                         'count': count,
-                        'total_size': total_size,
                         'last_id_index': i,
                         'last_batch': i // batch_size
                     })
@@ -1061,7 +1108,6 @@ def download_pubmed(state):
             save_checkpoint("pubmed", {
                 'id_list': id_list,
                 'count': count,
-                'total_size': total_size,
                 'last_id_index': start_index,
                 'last_batch': start_index // batch_size
             })
@@ -1078,12 +1124,10 @@ def download_pubmed(state):
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
     
-    file_size_gb = os.path.getsize(output_file) / (1024**3) if os.path.exists(output_file) else 0
     print(f"\n✓ Downloaded {count:,} PubMed abstracts to {output_file}")
-    print(f"  File size: {file_size_gb:.2f} GB")
     return True
 
-def download_math_datasets(state):
+def download_math_datasets(state, max_samples=100000):
     """Download math problem datasets (GSM8K, MATH, etc.) from GitHub"""
     print("\n" + "="*60)
     print("Downloading Math Datasets")
@@ -1097,8 +1141,6 @@ def download_math_datasets(state):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     count = 0
-    max_size_gb = 2
-    total_size = 0
     
     # GSM8K from GitHub
     gsm8k_url = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl"
@@ -1122,11 +1164,8 @@ def download_math_datasets(state):
                             if len(text) > 50:
                                 f.write(text + '\n\n')
                                 count += 1
-                                total_size += len(text.encode('utf-8'))
                                 
-                                if total_size > max_size_gb * 1024**3 * 0.9:
-                                    break
-                                if count >= 100000:
+                                if count >= max_samples:
                                     break
                     except Exception as e:
                         continue
@@ -1135,7 +1174,7 @@ def download_math_datasets(state):
     math_url = "https://raw.githubusercontent.com/hendrycks/math/main/data/math.json"
     math_file = os.path.join(download_dir, "math.json")
     
-    if download_file(math_url, math_file, resume=True) and total_size < max_size_gb * 1024**3 * 0.9:
+    if download_file(math_url, math_file, resume=True) and count < max_samples:
         print("Downloading MATH competition dataset...")
         with open(output_file, 'a', encoding='utf-8') as f:
             with open(math_file, 'r', encoding='utf-8') as in_f:
@@ -1150,11 +1189,8 @@ def download_math_datasets(state):
                             if len(text) > 50:
                                 f.write(text + '\n\n')
                                 count += 1
-                                total_size += len(text.encode('utf-8'))
                                 
-                                if total_size > max_size_gb * 1024**3 * 0.9:
-                                    break
-                                if count >= 100000:
+                                if count >= max_samples:
                                     break
                     except Exception as e:
                         continue
@@ -1164,12 +1200,10 @@ def download_math_datasets(state):
     state["math_datasets"]["samples"] = count
     save_state(state)
     
-    file_size_gb = os.path.getsize(output_file) / (1024**3) if os.path.exists(output_file) else 0
     print(f"\n✓ Downloaded {count:,} math problems to {output_file}")
-    print(f"  File size: {file_size_gb:.2f} GB")
     return True
 
-def download_scienceqa(state):
+def download_scienceqa(state, max_samples=50000):
     """Download ScienceQA dataset from GitHub"""
     print("\n" + "="*60)
     print("Downloading ScienceQA")
@@ -1191,8 +1225,6 @@ def download_scienceqa(state):
     
     if download_file(scienceqa_url, scienceqa_file, resume=True):
         count = 0
-        max_size_gb = 1
-        total_size = 0
         
         with open(output_file, 'w', encoding='utf-8') as f:
             with open(scienceqa_file, 'r', encoding='utf-8') as in_f:
@@ -1217,11 +1249,8 @@ def download_scienceqa(state):
                             if len(text) > 50:
                                 f.write(text + '\n\n')
                                 count += 1
-                                total_size += len(text.encode('utf-8'))
                                 
-                                if total_size > max_size_gb * 1024**3 * 0.9:
-                                    break
-                                if count >= 50000:
+                                if count >= max_samples:
                                     break
                     except Exception as e:
                         continue
@@ -1231,15 +1260,13 @@ def download_scienceqa(state):
         state["scienceqa"]["samples"] = count
         save_state(state)
         
-        file_size_gb = os.path.getsize(output_file) / (1024**3) if os.path.exists(output_file) else 0
         print(f"\n✓ Downloaded {count:,} ScienceQA samples to {output_file}")
-        print(f"  File size: {file_size_gb:.2f} GB")
         return True
     else:
         print("ERROR: Failed to download ScienceQA")
         return False
 
-def download_books(state):
+def download_books(state, max_samples=500000):
     """Download books corpus from Project Gutenberg"""
     print("\n" + "="*60)
     print("Downloading Books Corpus")
@@ -1269,8 +1296,6 @@ def download_books(state):
     ]
     
     count = 0
-    max_size_gb = 5
-    total_size = 0
     
     base_url = "https://www.gutenberg.org/files"
     
@@ -1311,20 +1336,17 @@ def download_books(state):
                                 if len(para) > 200:
                                     f.write(para + '\n\n')
                                     count += 1
-                                    total_size += len(para.encode('utf-8'))
                                     
-                                    if total_size > max_size_gb * 1024**3 * 0.9:
+                                    if count >= max_samples:
                                         break
                             
-                            if total_size > max_size_gb * 1024**3 * 0.9:
+                            if count >= max_samples:
                                 break
                             break  # Successfully downloaded this book
                     except Exception as e:
                         continue
                 
-                if total_size > max_size_gb * 1024**3 * 0.9:
-                    break
-                if count >= 500000:
+                if count >= max_samples:
                     break
                     
             except Exception as e:
@@ -1335,9 +1357,7 @@ def download_books(state):
     state["books"]["samples"] = count
     save_state(state)
     
-    file_size_gb = os.path.getsize(output_file) / (1024**3) if os.path.exists(output_file) else 0
     print(f"\n✓ Downloaded {count:,} book passages to {output_file}")
-    print(f"  File size: {file_size_gb:.2f} GB")
     return True
 
 def combine_text_datasets():
@@ -1352,14 +1372,11 @@ def combine_text_datasets():
     input_files = [
         # General knowledge & English learning
         "data/text/wikipedia.txt",
-        "data/text/c4.txt",
         "data/text/books.txt",
         
         # Conversations & Instruction Following
         "data/text/dialogstudio.txt",
         "data/text/alpaca.txt",
-        "data/text/sharegpt.txt",
-        "data/text/openassistant.txt",
         
         # Tool Calls
         "data/text/toolbench.txt",
@@ -1374,14 +1391,12 @@ def combine_text_datasets():
         "data/text/scienceqa.txt"
     ]
     
-    total_size = 0
     total_samples = 0
     
     with open(output_file, 'w', encoding='utf-8') as out_f:
         for input_file in input_files:
             if os.path.exists(input_file):
-                file_size = os.path.getsize(input_file)
-                print(f"Adding {os.path.basename(input_file)} ({file_size / (1024**3):.2f} GB)...")
+                print(f"Adding {os.path.basename(input_file)}...")
                 
                 with open(input_file, 'r', encoding='utf-8', errors='ignore') as in_f:
                     count = 0
@@ -1390,145 +1405,22 @@ def combine_text_datasets():
                             out_f.write(line)
                             count += 1
                     total_samples += count
-                    total_size += file_size
     
-    final_size_gb = os.path.getsize(output_file) / (1024**3)
     print(f"\n✓ Combined corpus created: {output_file}")
-    print(f"  Total size: {final_size_gb:.2f} GB")
     print(f"  Total samples: {total_samples:,}")
-    
-    if final_size_gb > 30:
-        print(f"\n⚠ WARNING: Combined corpus exceeds 30GB ({final_size_gb:.2f} GB)")
-        print("  Consider using only one or two datasets, or further subsetting")
 
-def intelligent_download_all_text(state, min_gb=25, max_gb=30):
-    """Intelligently download diverse text datasets to reach 25-30GB target"""
-    print("\n" + "="*60)
-    print("Intelligent Download: Diverse Text Datasets")
-    print(f"Target: {min_gb}-{max_gb} GB with balanced diversity")
-    print("="*60)
-    
-    # Define dataset categories with target sizes for diversity
-    categories = {
-        "general": [
-            ("wikipedia", 8.0, download_wikipedia, extract_wikipedia_text, convert_wikipedia_to_text),
-            ("books", 3.0, download_books, None, None),
-            ("c4", 4.0, download_c4_subset, None, None),
-        ],
-        "conversations": [
-            ("alpaca", 0.5, download_alpaca, None, None),
-            ("dialogstudio", 2.0, download_dialogstudio, None, None),
-            ("openassistant", 1.5, download_openassistant, None, None),
-        ],
-        "scientific": [
-            ("arxiv_physics", 3.0, lambda s: download_arxiv_by_category(s, "physics", "arxiv_physics"), None, None),
-            ("arxiv_chemistry", 2.5, lambda s: download_arxiv_by_category(s, "chemistry", "arxiv_chemistry"), None, None),
-            ("arxiv_math", 2.5, lambda s: download_arxiv_by_category(s, "math", "arxiv_math"), None, None),
-            ("arxiv_biology", 2.5, lambda s: download_arxiv_by_category(s, "biology", "arxiv_biology"), None, None),
-            ("pubmed", 3.0, download_pubmed, None, None),
-            ("math_datasets", 1.0, download_math_datasets, None, None),
-            ("scienceqa", 0.5, download_scienceqa, None, None),
-        ],
-        "tools": [
-            ("toolbench", 1.0, download_toolbench, None, None),
-        ]
-    }
-    
-    total_size = 0
-    downloaded = []
-    target_per_category = (max_gb - min_gb) / len(categories)  # Distribute across categories
-    
-    print(f"\nDownloading from each category to ensure diversity...")
-    print(f"Target: ~{target_per_category:.1f} GB per category\n")
-    
-    # Download from each category to ensure diversity
-    for category_name, datasets in categories.items():
-        print(f"\n{'='*60}")
-        print(f"Category: {category_name.upper()}")
-        print("="*60)
-        
-        category_size = 0
-        for ds_name, target_size, download_func, extract_func, convert_func in datasets:
-            if total_size >= max_gb * 1024**3:
-                print(f"\nReached max size ({max_gb}GB), stopping...")
-                break
-            
-            if category_size >= target_per_category * 1024**3 * 1.2:  # 20% over target per category
-                print(f"Category {category_name} target reached, moving to next category...")
-                break
-            
-            print(f"\nDownloading {ds_name} (target: {target_size}GB)...")
-            
-            # Check if already downloaded
-            if state[ds_name].get("converted", False) or state[ds_name].get("downloaded", False):
-                # Get existing size
-                output_file = f"data/text/{ds_name}.txt"
-                if os.path.exists(output_file):
-                    existing_size = os.path.getsize(output_file)
-                    total_size += existing_size
-                    category_size += existing_size
-                    print(f"  Already downloaded: {existing_size / (1024**3):.2f} GB")
-                    downloaded.append(ds_name)
-                    continue
-            
-            # Download
-            try:
-                if download_func:
-                    success = download_func(state)
-                    if success and extract_func:
-                        success = extract_func(state) and success
-                    if success and convert_func:
-                        success = convert_func(state) and success
-                    
-                    if success:
-                        # Check actual size
-                        output_file = f"data/text/{ds_name}.txt"
-                        if os.path.exists(output_file):
-                            actual_size = os.path.getsize(output_file)
-                            total_size += actual_size
-                            category_size += actual_size
-                            downloaded.append(ds_name)
-                            print(f"  ✓ Downloaded: {actual_size / (1024**3):.2f} GB")
-                            
-                            if total_size >= max_gb * 1024**3:
-                                break
-                else:
-                    print(f"  ⚠ {ds_name} not available, skipping...")
-            except Exception as e:
-                print(f"  ✗ Error downloading {ds_name}: {e}")
-                continue
-    
-    final_size_gb = total_size / (1024**3)
-    print(f"\n{'='*60}")
-    print(f"Download Summary")
-    print("="*60)
-    print(f"Total size: {final_size_gb:.2f} GB")
-    print(f"Target range: {min_gb}-{max_gb} GB")
-    print(f"Datasets downloaded: {len(downloaded)}")
-    print(f"  {', '.join(downloaded)}")
-    
-    if final_size_gb < min_gb:
-        print(f"\n⚠ WARNING: Total size ({final_size_gb:.2f} GB) is below minimum ({min_gb} GB)")
-        print("  Consider downloading additional datasets or increasing limits")
-    elif final_size_gb > max_gb:
-        print(f"\n⚠ WARNING: Total size ({final_size_gb:.2f} GB) exceeds maximum ({max_gb} GB)")
-        print("  Some datasets may need to be subset further")
-    else:
-        print(f"\n✓ Successfully downloaded diverse datasets within target range!")
-    
-    return final_size_gb >= min_gb * 0.9  # Allow 10% below minimum
 
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade text datasets for μOmni")
     parser.add_argument("--dataset", 
-                       choices=["all", "wikipedia", "c4", "books",
-                               "dialogstudio", "alpaca", "sharegpt", "openassistant",
+                       choices=["all", "wikipedia", "books",
+                               "dialogstudio", "alpaca",
                                "toolbench",
                                "arxiv_physics", "arxiv_chemistry", "arxiv_math", "arxiv_biology",
                                "pubmed", "math_datasets", "scienceqa",
                                "conversations", "scientific", "general"], 
                        default="all",
-                       help="Which dataset to download (default: all - intelligently fetches diverse 25-30GB)")
+                       help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
                        help="Skip download, only extract/convert existing data")
     parser.add_argument("--skip-extract", action="store_true",
@@ -1539,10 +1431,8 @@ def main():
                        help="Combine all downloaded datasets into one corpus (outputs to data/text/production_corpus.txt)")
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
-    parser.add_argument("--min-gb", type=float, default=25.0,
-                       help="Minimum total size in GB (default: 25)")
-    parser.add_argument("--max-gb", type=float, default=30.0,
-                       help="Maximum total size in GB (default: 30)")
+    parser.add_argument("--max-samples", type=int, default=1000000,
+                       help="Maximum number of samples per dataset (default: 1000000, combined total ~12M for all datasets)")
     
     args = parser.parse_args()
     
@@ -1563,87 +1453,65 @@ def main():
     print("="*60)
     print(f"State file: {STATE_FILE}")
     print(f"Dataset: {args.dataset}")
-    if args.dataset == "all":
-        print(f"Intelligent mode: {args.min_gb}-{args.max_gb} GB with diversity balancing")
     print("="*60)
     
     success = True
     
-    # Intelligent download for "all"
-    if args.dataset == "all":
+    # General knowledge & English learning
+    if args.dataset in ["all", "wikipedia", "general"]:
         if not args.skip_download:
-            success = intelligent_download_all_text(state, args.min_gb, args.max_gb) and success
-        if args.combine:
-            combine_text_datasets()
-    else:
-        # Individual dataset downloads
-        # General knowledge & English learning
-        if args.dataset in ["wikipedia", "general"]:
-            if not args.skip_download:
-                success = download_wikipedia(state) and success
-            if not args.skip_extract:
-                success = extract_wikipedia_text(state) and success
-            if not args.skip_convert:
-                success = convert_wikipedia_to_text(state) and success
-    
-    if args.dataset in ["all", "c4", "general"]:
-        if not args.skip_download:
-            success = download_c4_subset(state) and success
+            success = download_wikipedia(state) and success
+        if not args.skip_extract:
+            success = extract_wikipedia_text(state) and success
+        if not args.skip_convert:
+            success = convert_wikipedia_to_text(state, args.max_samples) and success
     
     if args.dataset in ["all", "books", "general"]:
         if not args.skip_download:
-            success = download_books(state) and success
+            success = download_books(state, args.max_samples) and success
     
     # Conversations & Instruction Following
     if args.dataset in ["all", "dialogstudio", "conversations"]:
         if not args.skip_download:
-            success = download_dialogstudio(state) and success
+            success = download_dialogstudio(state, args.max_samples) and success
     
     if args.dataset in ["all", "alpaca", "conversations"]:
         if not args.skip_download:
-            success = download_alpaca(state) and success
-    
-    if args.dataset in ["all", "sharegpt", "conversations"]:
-        if not args.skip_download:
-            success = download_sharegpt(state) and success
-    
-    if args.dataset in ["all", "openassistant", "conversations"]:
-        if not args.skip_download:
-            success = download_openassistant(state) and success
+            success = download_alpaca(state, args.max_samples) and success
     
     # Tool Calls
     if args.dataset in ["all", "toolbench"]:
         if not args.skip_download:
-            success = download_toolbench(state) and success
+            success = download_toolbench(state, args.max_samples) and success
     
     # Scientific Content
     if args.dataset in ["all", "arxiv_physics", "scientific"]:
         if not args.skip_download:
-            success = download_arxiv_by_category(state, "physics", "arxiv_physics") and success
+            success = download_arxiv_by_category(state, "physics", "arxiv_physics", args.max_samples) and success
     
     if args.dataset in ["all", "arxiv_chemistry", "scientific"]:
         if not args.skip_download:
-            success = download_arxiv_by_category(state, "chemistry", "arxiv_chemistry") and success
+            success = download_arxiv_by_category(state, "chemistry", "arxiv_chemistry", args.max_samples) and success
     
     if args.dataset in ["all", "arxiv_math", "scientific"]:
         if not args.skip_download:
-            success = download_arxiv_by_category(state, "math", "arxiv_math") and success
+            success = download_arxiv_by_category(state, "math", "arxiv_math", args.max_samples) and success
     
     if args.dataset in ["all", "arxiv_biology", "scientific"]:
         if not args.skip_download:
-            success = download_arxiv_by_category(state, "biology", "arxiv_biology") and success
+            success = download_arxiv_by_category(state, "biology", "arxiv_biology", args.max_samples) and success
     
     if args.dataset in ["all", "pubmed", "scientific"]:
         if not args.skip_download:
-            success = download_pubmed(state) and success
+            success = download_pubmed(state, args.max_samples) and success
     
     if args.dataset in ["all", "math_datasets", "scientific"]:
         if not args.skip_download:
-            success = download_math_datasets(state) and success
+            success = download_math_datasets(state, args.max_samples) and success
     
     if args.dataset in ["all", "scienceqa", "scientific"]:
         if not args.skip_download:
-            success = download_scienceqa(state) and success
+            success = download_scienceqa(state, args.max_samples) and success
     
     # Combine if requested
     if args.combine:

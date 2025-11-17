@@ -494,7 +494,7 @@ Memory ≈ 4 × (model_params × 4 bytes) + (batch_size × ctx_len × d_model ×
 
 - **Memory Management:** Use gradient checkpointing, reduce batch size, use gradient accumulation
 - **Training Time:** Larger models need 10-100x more training time
-- **Data Requirements:** Larger models may need 100GB+ per modality (vs current 25-30GB)
+- **Data Requirements:** Larger models may need millions more samples per modality
 - **Learning Rate:** Consider scaling: `lr = base_lr * sqrt(d_model / 256)`
 
 ### Recommended Scaling Path
