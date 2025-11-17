@@ -521,10 +521,6 @@ def convert_wikipedia_to_text(state, max_samples=1000000):
     print("Converting Wikipedia to Text Format")
     print("="*60)
     
-    if state["wikipedia"]["converted"] and state["wikipedia"]["samples"] >= max_samples:
-        print(f"Wikipedia already converted ({state['wikipedia']['samples']:,} samples), skipping...")
-        return True
-    
     extracted_dir = "data/text_downloads/wikipedia_extracted"
     output_file = "data/text/wikipedia.txt"
     
@@ -532,11 +528,24 @@ def convert_wikipedia_to_text(state, max_samples=1000000):
         print(f"ERROR: Extracted Wikipedia not found at {extracted_dir}")
         return False
     
+    # Check if all files are already processed (files should match extraction sample size)
+    all_files_check = []
+    for root, dirs, files in os.walk(extracted_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            rel_path = os.path.relpath(file_path, extracted_dir)
+            all_files_check.append(rel_path)
+    
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     # Load checkpoint if exists
     checkpoint = load_checkpoint("wikipedia")
     if checkpoint:
+        processed_files_check = set(checkpoint.get('processed_files', []))
+        if len(processed_files_check) >= len(all_files_check):
+            print(f"Wikipedia already converted ({len(processed_files_check):,} files, {state['wikipedia']['samples']:,} articles), skipping...")
+            return True
+        
         print(f"Resuming from checkpoint: {checkpoint.get('last_file', 'start')}")
         processed_files = set(checkpoint.get('processed_files', []))
         count = checkpoint.get('count', 0)
@@ -574,7 +583,13 @@ def convert_wikipedia_to_text(state, max_samples=1000000):
             skipping = False
             skip_until = None
         
-        for rel_path, file_path in tqdm(all_files, desc="Processing files"):
+        # Create progress bar that tracks files (since we process all files to match extraction)
+        # The extraction created files_per_dir files for max_samples articles
+        # So we should process all files to get all extracted articles
+        total_files = len(all_files)
+        pbar = tqdm(total=total_files, desc="Processing files", unit="file", initial=len(processed_files))
+        
+        for rel_path, file_path in all_files:
             # Resume logic: skip until we reach last processed file
             if skipping:
                 if rel_path == skip_until:
@@ -588,29 +603,35 @@ def convert_wikipedia_to_text(state, max_samples=1000000):
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as in_f:
                     content = in_f.read().strip()
-                    if len(content) > 100:  # Skip very short articles
+                    if len(content) > 100:  # Skip very short files
+                        # Count articles in file
+                        # Each article is formatted as: title\n\ncontent\n\n
+                        # Split by double newlines to get alternating titles and contents
+                        parts = [p.strip() for p in content.split('\n\n') if p.strip()]
+                        # Each article has 2 parts (title + content), so count = parts / 2
+                        # Handle edge case: if only 1 part, it's still 1 article
+                        article_count_in_file = max(1, len(parts) // 2) if len(parts) > 1 else 1
+                        
                         out_f.write(content + '\n\n')
-                        count += 1
+                        count += article_count_in_file
                         processed_files.add(rel_path)
                         
-                        # Save checkpoint every 1000 files
-                        if count % 1000 == 0:
+                        # Update progress bar (track files, show articles in postfix)
+                        pbar.update(1)
+                        pbar.set_postfix({'articles': count})
+                        
+                        # Save checkpoint every 100 files
+                        if len(processed_files) % 100 == 0:
                             save_checkpoint("wikipedia", {
                                 'processed_files': list(processed_files),
                                 'count': count,
                                 'last_file': rel_path
                             })
                             save_state(state)
-                        
-                        # Stop if we've reached sample limit
-                        if count >= max_samples:
-                            print(f"\nReached sample limit ({max_samples:,}), stopping...")
-                            break
             except Exception as e:
                 continue
-            
-            if count >= max_samples:
-                break
+        
+        pbar.close()
     
     state["wikipedia"]["converted"] = True
     state["wikipedia"]["samples"] = count
@@ -855,6 +876,8 @@ def download_alpaca(state, max_samples=500000):
     if state["alpaca"]["downloaded"] and state["alpaca"]["samples"] >= max_samples:
         print(f"Alpaca already downloaded ({state['alpaca']['samples']:,} samples), skipping...")
         return True
+    elif state["alpaca"]["samples"] > 0 and state["alpaca"]["samples"] < max_samples:
+        print(f"Resuming Alpaca download: {state['alpaca']['samples']:,} / {max_samples:,} samples")
     
     output_file = "data/text/alpaca.txt"
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -917,19 +940,26 @@ def download_alpaca(state, max_samples=500000):
                 continue
     
     if count > 0:
-        state["alpaca"]["downloaded"] = True
-        state["alpaca"]["converted"] = True
+        # Only mark as downloaded if we reached max_samples, otherwise keep trying
+        if count >= max_samples:
+            state["alpaca"]["downloaded"] = True
+            state["alpaca"]["converted"] = True
         state["alpaca"]["samples"] = count
         save_state(state)
         
-        print(f"\n✓ Downloaded {count:,} Alpaca samples to {output_file}")
-        return True
+        if count >= max_samples:
+            print(f"\n✓ Downloaded {count:,} Alpaca samples to {output_file}")
+            return True
+        else:
+            print(f"\n⚠ Downloaded {count:,} Alpaca samples (target: {max_samples:,}), but data source exhausted.")
+            print("   To get more samples, you may need additional data sources.")
+            return True  # Return True so script continues, but mark as incomplete
     else:
         # Fallback to original method if all variants fail
         print("Falling back to original Alpaca dataset...")
-        url = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
+        fallback_url = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
         return download_json_dataset_from_url(
-            state, "alpaca", url,
+            state, "alpaca", fallback_url,
             "data/text/alpaca.txt", max_samples=max_samples
         )
 
@@ -1487,9 +1517,12 @@ def download_books(state, max_samples=500000):
     if state["books"]["downloaded"] and state["books"]["samples"] >= max_samples:
         print(f"Books already downloaded ({state['books']['samples']:,} samples), skipping...")
         return True
+    elif state["books"]["samples"] > 0 and state["books"]["samples"] < max_samples:
+        print(f"Resuming books download: {state['books']['samples']:,} / {max_samples:,} passages")
     
     print("Downloading books from Project Gutenberg...")
     print("NOTE: Project Gutenberg provides free books in plain text format.")
+    print("Downloading random books until sample limit is reached...")
     
     output_file = "data/text/books.txt"
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -1497,48 +1530,47 @@ def download_books(state, max_samples=500000):
     # Load checkpoint for resuming
     checkpoint = load_checkpoint("books")
     if checkpoint:
-        print(f"Resuming from checkpoint: book {checkpoint.get('last_book_id', 0)}, {checkpoint.get('count', 0)} passages")
+        print(f"Resuming from checkpoint: {checkpoint.get('count', 0)} passages")
         count = checkpoint.get('count', 0)
-        last_book_id = checkpoint.get('last_book_id', 0)
         processed_books = set(checkpoint.get('processed_books', []))
+        last_tried_id = checkpoint.get('last_tried_id', 0)
         mode = 'a'  # Append mode
         resume = True
     else:
         count = 0
-        last_book_id = 0
         processed_books = set()
+        last_tried_id = 0
         mode = 'w'  # Write mode
         resume = False
     
-    # Load book IDs from external file (relative to script location)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    book_list_file = os.path.join(script_dir, "gutenberg_book_ids.json")
-    if not os.path.exists(book_list_file):
-        print(f"ERROR: {book_list_file} not found!")
-        print("Please ensure the book list file exists.")
-        return False
-    
-    with open(book_list_file, 'r', encoding='utf-8') as f:
-        book_data = json.load(f)
-        book_ids = [book["id"] for book in book_data.get("books", [])]
-        print(f"Loaded {len(book_ids)} book IDs from {book_list_file}")
-    
     base_url = "https://www.gutenberg.org/files"
     
+    # Generate random book IDs (Project Gutenberg has books from ID 1 to ~70,000+)
+    # We'll try random IDs and skip ones we've already processed
+    import random
+    
+    # Start from a random point if resuming, otherwise start from 1
     if resume:
-        print(f"Resuming: Already have {count:,} passages, starting from book ID {last_book_id}")
-        # Find starting index
-        start_idx = 0
-        for i, bid in enumerate(book_ids):
-            if bid == last_book_id:
-                start_idx = i + 1
-                break
-        book_ids = book_ids[start_idx:]
+        current_id = last_tried_id + 1
     else:
-        start_idx = 0
+        current_id = 1
+    
+    # Create progress bar that tracks passages
+    pbar = tqdm(total=max_samples, desc="Downloading passages", unit="passage", initial=count)
+    
+    consecutive_failures = 0
+    max_consecutive_failures = 100  # Stop trying if 100 consecutive failures
     
     with open(output_file, mode, encoding='utf-8') as f:
-        for book_id in tqdm(book_ids, desc="Downloading books", initial=start_idx, total=len(book_ids) + start_idx):
+        while count < max_samples:
+            # Try random book IDs, but also try sequential to find available books
+            # Mix of sequential and random to find books efficiently
+            if random.random() < 0.3:  # 30% chance to try random ID
+                book_id = random.randint(1, 70000)
+            else:
+                book_id = current_id
+                current_id += 1
+            
             # Skip if already processed
             if book_id in processed_books:
                 continue
@@ -1574,29 +1606,37 @@ def download_books(state, max_samples=500000):
                             
                             # Split into paragraphs
                             paragraphs = book_text.split('\n\n')
+                            passages_added = 0
                             for para in paragraphs:
                                 para = para.strip()
                                 if len(para) > 200:
                                     f.write(para + '\n\n')
                                     f.flush()  # Flush for fine-grained resumption
+                                    prev_count = count
                                     count += 1
+                                    passages_added += 1
                                     
-                                    # Print progress with remaining
-                                    print_progress_with_remaining(count, max_samples, "passages", report_interval=100)
+                                    # Update progress bar
+                                    update_amount = min(1, max_samples - prev_count)
+                                    if update_amount > 0:
+                                        pbar.update(update_amount)
+                                    pbar.set_postfix({'books': len(processed_books), 'passages': min(count, max_samples)})
                                     
                                     # Save checkpoint every 50 passages
                                     if count % 50 == 0:
                                         save_checkpoint("books", {
                                             'count': count,
-                                            'last_book_id': book_id,
+                                            'last_tried_id': book_id,
                                             'processed_books': list(processed_books)
                                         })
                                     
                                     if count >= max_samples:
                                         break
                             
-                            processed_books.add(book_id)
-                            downloaded = True
+                            if passages_added > 0:
+                                processed_books.add(book_id)
+                                downloaded = True
+                                consecutive_failures = 0  # Reset failure counter on success
                             
                             if count >= max_samples:
                                 break
@@ -1604,23 +1644,48 @@ def download_books(state, max_samples=500000):
                     except Exception as e:
                         continue
                 
+                if downloaded:
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                    # Mark as tried to avoid infinite loops
+                    processed_books.add(book_id)
+                
+                # If too many consecutive failures, try more random IDs
+                if consecutive_failures >= max_consecutive_failures:
+                    print(f"\nWarning: {max_consecutive_failures} consecutive failures. Trying more random IDs...")
+                    consecutive_failures = 0
+                    # Jump to a random range
+                    current_id = random.randint(1, 70000)
+                
                 if count >= max_samples:
                     break
                     
             except Exception as e:
+                consecutive_failures += 1
                 continue
     
-    state["books"]["downloaded"] = True
-    state["books"]["converted"] = True
+    pbar.close()
+    
+    # Only mark as downloaded if we reached max_samples
+    if count >= max_samples:
+        state["books"]["downloaded"] = True
+        state["books"]["converted"] = True
     state["books"]["samples"] = count
     save_state(state)
     
-    # Clean up checkpoint file on success
+    # Clean up checkpoint file on success (only if reached max_samples)
     checkpoint_file = "data/.checkpoint_books.json"
     if os.path.exists(checkpoint_file) and count >= max_samples:
         os.remove(checkpoint_file)
     
-    print(f"\n✓ Downloaded {count:,} book passages to {output_file}")
+    if count >= max_samples:
+        print(f"\n✓ Downloaded {count:,} book passages to {output_file}")
+    else:
+        print(f"\n⚠ Downloaded {count:,} book passages (target: {max_samples:,})")
+        print("   Some books may have failed to download or book list may be exhausted.")
+        print("   You can resume by running the script again.")
+    
     return True
 
 def combine_text_datasets():
