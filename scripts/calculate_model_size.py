@@ -186,11 +186,10 @@ def calculate_ocr_params(img_size, patch, vision_d_model, vision_layers, vision_
     params += vocab_size * decoder_d_model
     
     # Decoder layers
-    # Self-attention: Q, K, V projections
-    attn_params = decoder_d_model * decoder_d_model * 4  # Q, K, V, output
-    # Cross-attention: MultiheadAttention (Q, K, V projections)
-    cross_attn_params = decoder_d_model * decoder_d_model * 3  # Q, K, V (output is separate)
-    cross_attn_params += decoder_d_model * decoder_d_model  # output projection
+    # Self-attention: Q, K, V projections (no output projection in code)
+    attn_params = decoder_d_model * decoder_d_model * 3  # Q, K, V only
+    # Cross-attention: MultiheadAttention (Q, K, V + output projection)
+    cross_attn_params = decoder_d_model * decoder_d_model * 4  # Q, K, V, output
     # MLP (SwiGLU)
     mlp_params = decoder_d_model * decoder_d_ff * 3  # gate, up, down
     # Normalization (RMSNorm)
