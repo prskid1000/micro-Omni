@@ -1,14 +1,10 @@
 """
 Download and prepare production-grade audio datasets for μOmni training
 Target: Under 30GB, millions of samples
-Includes diverse knowledge: General speech, Scientific/Educational, Music, Multilingual, Podcasts
+Includes: General speech datasets
 
 Supports:
-- General Speech: LibriSpeech, Common Voice
-- Scientific/Educational: Academic lectures, Science podcasts
-- Music & Sound: Music samples, Sound effects, Environmental sounds
-- Multilingual: Common Voice (multiple languages), FLEURS
-- Domain-specific: News, Interviews, Conversations
+- General Speech: LibriSpeech, LJSpeech
 """
 
 import os
@@ -29,15 +25,21 @@ def load_state():
     """Load download/conversion state"""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+            state = json.load(f)
+            # Remove old entries if they exist (migration from old version)
+            removed = False
+            for old_key in ["musan", "urbansound"]:
+                if old_key in state:
+                    del state[old_key]
+                    removed = True
+            if removed:
+                # Save cleaned state
+                save_state(state)
+            return state
     return {
         # General Speech
         "librispeech": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "ljspeech": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        
-        # Scientific/Educational
-        "musan": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "urbansound": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
+        "ljspeech": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
     }
 
 def print_progress_with_remaining(current, max_count, label="samples", report_interval=100):
@@ -88,9 +90,7 @@ def get_audio_dataset_size(ds_name):
     # Map dataset names to their actual data folders
     folder_map = {
         "librispeech": "data/audio/librispeech",
-        "urbansound": "data/audio/urbansound8k",
-        "musan": "data/audio/musan",
-        "commonvoice": "data/audio/commonvoice",  # If exists
+        "ljspeech": "data/audio/ljspeech",
     }
     
     folder_path = folder_map.get(ds_name)
@@ -537,102 +537,6 @@ def download_ljspeech(state, max_samples=1000000):
     
     return False
 
-def download_urbansound(state):
-    """Download UrbanSound8K - environmental sounds for diverse audio knowledge"""
-    print("\n" + "="*60)
-    print("Downloading UrbanSound8K")
-    print("="*60)
-    
-    if state["urbansound"]["downloaded"]:
-        print("UrbanSound8K already downloaded, skipping...")
-        return True
-    
-    # UrbanSound8K is available from GitHub
-    url = "https://github.com/marcogdepinto/UrbanSound8K-Dataset/archive/refs/heads/master.zip"
-    download_dir = "data/audio_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    zip_file = os.path.join(download_dir, "urbansound8k.zip")
-    
-    print("Downloading UrbanSound8K (~6GB)...")
-    if download_file(url, zip_file, resume=True):
-        # Extract and convert
-        extract_dir = "data/audio/urbansound8k"
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        import zipfile
-        print("Extracting UrbanSound8K...")
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
-        
-        # Convert to CSV
-        output_file = "data/audio/urbansound_asr.csv"
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        
-        # UrbanSound8K has metadata CSV
-        metadata_file = os.path.join(extract_dir, "UrbanSound8K-Dataset-master", "metadata", "UrbanSound8K.csv")
-        if os.path.exists(metadata_file):
-            rows = []
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    fold = row.get('fold', '')
-                    file = row.get('slice_file_name', '')
-                    class_label = row.get('class', '')
-                    # Use path relative to project root (include data/audio prefix)
-                    rel_path = f"data/audio/urbansound8k/UrbanSound8K-Dataset-master/audio/fold{fold}/{file}"
-                    rows.append({"wav": rel_path, "text": f"Environmental sound: {class_label}"})
-            
-            with open(output_file, 'w', encoding='utf-8', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=['wav', 'text'])
-                writer.writeheader()
-                writer.writerows(rows)
-            
-            state["urbansound"]["downloaded"] = True
-            state["urbansound"]["converted"] = True
-            state["urbansound"]["samples"] = len(rows)
-            save_state(state)
-            
-            print(f"✓ Created CSV with {len(rows):,} entries")
-            return True
-    
-    return False
-
-def download_musan(state):
-    """Download MUSAN - music and speech for diverse audio"""
-    print("\n" + "="*60)
-    print("Downloading MUSAN")
-    print("="*60)
-    
-    if state["musan"]["downloaded"]:
-        print("MUSAN already downloaded, skipping...")
-        return True
-    
-    # MUSAN is available from OpenSLR
-    url = "https://www.openslr.org/resources/17/musan.tar.gz"
-    download_dir = "data/audio_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    tar_file = os.path.join(download_dir, "musan.tar.gz")
-    
-    print("Downloading MUSAN (~15GB)...")
-    if download_file(url, tar_file, resume=True):
-        extract_dir = "data/audio/musan"
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        print("Extracting MUSAN...")
-        with tarfile.open(tar_file, 'r:gz') as tar:
-            tar.extractall(extract_dir)
-        
-        state["musan"]["downloaded"] = True
-        state["musan"]["extracted"] = True
-        state["musan"]["converted"] = True
-        state["musan"]["samples"] = 0
-        save_state(state)
-        
-        print("✓ MUSAN downloaded and extracted")
-        return True
-    
-    return False
-
 def combine_audio_csvs():
     """Combine all audio CSVs into one file (ASR format: wav,text)"""
     print("\n" + "="*60)
@@ -644,8 +548,7 @@ def combine_audio_csvs():
     
     input_files = [
         "data/audio/librispeech_asr.csv",
-        "data/audio/ljspeech_asr.csv",
-        "data/audio/urbansound_asr.csv",
+        "data/audio/ljspeech_asr.csv"
     ]
     
     all_rows = []
@@ -686,9 +589,7 @@ def combine_audio_csvs():
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade audio datasets for μOmni")
     parser.add_argument("--dataset", 
-                       choices=["all", "librispeech", "ljspeech",
-                               "urbansound", "musan",
-                               "general", "environmental"], 
+                       choices=["all", "librispeech", "ljspeech", "general"], 
                        default="all",
                        help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
@@ -702,7 +603,7 @@ def main():
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
     parser.add_argument("--max-samples", type=int, default=1000000,
-                       help="Maximum number of samples per dataset (default: 1000000, combined total ~9-10M for all datasets)")
+                       help="Maximum number of samples per dataset (default: 1000000)")
     
     args = parser.parse_args()
     
@@ -740,16 +641,6 @@ def main():
     if args.dataset in ["all", "ljspeech", "general"]:
         if not args.skip_download:
             success = download_ljspeech(state, args.max_samples) and success
-    
-    # Environmental/Sound Effects
-    if args.dataset in ["all", "urbansound", "environmental"]:
-        if not args.skip_download:
-            success = download_urbansound(state) and success
-    
-    # Music & Sound
-    if args.dataset in ["all", "musan", "environmental"]:
-        if not args.skip_download:
-            success = download_musan(state) and success
     
     # Combine if requested
     if args.combine:

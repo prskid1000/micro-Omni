@@ -90,8 +90,8 @@ python scripts/download_production_audio.py --dataset scientific --combine
 **Features:**
 - ✅ **`--combine` creates `production_asr.csv` and `production_tts.csv`** - files that `train_audio_enc.py` and `train_talker.py` use
 - ✅ Fine-grained resumption (checkpoints by split/speaker)
-- ✅ Diverse audio: General speech, Scientific talks, Environmental sounds
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~6M, Audio ~4M, Images ~4M)
+- ✅ Diverse audio: General speech
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~2M, Audio ~2M, Images ~1M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -288,7 +288,7 @@ python scripts/download_production_ocr.py --dataset all --combine --max-samples 
 
 ```bash
 # Download all modalities with sample-based limits (default: 1M per dataset)
-# Combined totals: Text ~2M samples (~200M tokens), Audio ~4M, Images ~1M, OCR ~1M
+# Combined totals: Text ~2M samples (~200M tokens), Audio ~2M, Images ~1M, OCR ~1M
 # Creates: production_corpus.txt, production_asr.csv, production_tts.csv, production_annotations.json, production_ocr.csv
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
@@ -633,7 +633,7 @@ data/
 ### Multiple Categories
 When using `--dataset all`, scripts download from multiple categories:
 - **Text**: General (Wikipedia, Books)
-- **Audio**: General speech, Scientific talks, Environmental sounds
+- **Audio**: General speech (LibriSpeech, LJSpeech)
 - **Images**: General (COCO)
 
 You can also download specific categories using `--dataset <category>`.
@@ -642,7 +642,7 @@ You can also download specific categories using `--dataset <category>`.
 - Default: 1,000,000 samples per dataset (configurable with `--max-samples`)
 - Combined totals when using `--dataset all`:
   - **Text**: ~2M samples (~200M tokens) from 2 datasets
-  - **Audio**: ~4M samples from 4 datasets
+  - **Audio**: ~2M samples from 2 datasets
   - **Images**: ~1M samples from 1 dataset
 - For 25.65M parameter model: Combined total provides sufficient data for single-epoch training
 - Based on Chinchilla scaling laws: 20-200 tokens per parameter (minimum: 513M tokens)
