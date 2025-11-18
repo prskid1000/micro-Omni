@@ -78,27 +78,43 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What gets updated:**
-- `max_steps`: Calculated from dataset size and batch size
-- `max_epochs`: Based on dataset size (1-3 for large, 5-10 for small)
+- `max_steps`: Calculated from token count, batch size, and context length
+- `max_epochs`: Based on token count (1-3 for very large, 5-10 for small)
 - `warmup_steps`: 5-10% of total steps (capped at 10K)
 - `val_freq`: Every 500-1000 steps or 10% of steps per epoch
 - `checkpoint_freq`: Every 5000-10000 steps or 1 per epoch
 - Data paths: Automatically updated to production files if they exist
 
-**Dataset size recommendations:**
-- **Very large (>1M samples):** 1-3 epochs
-- **Large (500K-1M):** 2-4 epochs
-- **Medium (100K-500K):** 3-6 epochs
-- **Small (50K-100K):** 5-10 epochs
-- **Very small (<50K):** 10-20 epochs
+**Token count recommendations:**
+- **Very large (>100M tokens):** 1-3 epochs
+- **Large (50M-100M tokens):** 2-4 epochs
+- **Medium (10M-50M tokens):** 3-6 epochs
+- **Small (<10M tokens):** 5-10 epochs
+
+**Note:** The script counts actual tokens using the BPE tokenizer:
+- **Text:** Tokens from text corpus
+- **Images:** Tokens from captions
+- **Audio:** Tokens from transcriptions (ASR/TTS)
+- **OCR:** Tokens from extracted text
+- If no tokenizer exists, one will be created automatically from the data
 
 **Files checked:**
 - Text: `data/text/production_corpus.txt` or `data/text/tiny_corpus.txt`
 - Images: `data/images/production_annotations.json` or `data/images/annotations.json`
 - Audio: `data/audio/production_asr.csv` or `data/audio/asr.csv`
 - TTS: `data/audio/production_tts.csv` or `data/audio/tts.csv`
-- Vocoder: Uses same audio data as TTS/ASR (no separate check)
 - OCR: `data/ocr/production_ocr.csv` or `data/ocr/ocr_train.csv`
+- Vocoder: Uses same audio data as TTS/ASR (no separate check)
+
+**Token counting:**
+- All training parameters are calculated based on **token counts**, not sample counts
+- The script uses the BPE tokenizer to count actual tokens in:
+  - Text files (line-by-line)
+  - Image captions (from JSON manifest)
+  - Audio transcriptions (from CSV files)
+  - OCR text (from CSV files)
+- If no tokenizer exists, one is automatically created from the text data
+- Token counts are more accurate than sample counts for determining training duration
 
 **Note:** The script only checks production and synthetic files, ignoring intermediate dataset files.
 

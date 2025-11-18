@@ -10,6 +10,11 @@ import argparse
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 
+# Import tokenizer (required)
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from omni.tokenizer import BPETokenizer
+
 # Best practices for training duration based on dataset size
 # (samples, min_epochs, max_epochs, recommended_epochs)
 EPOCH_RECOMMENDATIONS = [
@@ -33,6 +38,181 @@ def count_text_samples(text_path: str) -> int:
     except Exception as e:
         print(f"Warning: Could not count text samples from {text_path}: {e}")
     return count
+
+def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None) -> BPETokenizer:
+    """Get existing tokenizer or create one from text data"""
+    # Try to find existing tokenizer
+    tokenizer_candidates = [
+        tokenizer_path,  # Explicitly provided
+        "checkpoints/thinker_tiny/tokenizer.model",  # Default location
+        "tokenizer.model",  # Current directory
+    ]
+    
+    for candidate in tokenizer_candidates:
+        if candidate and os.path.exists(candidate):
+            return BPETokenizer(candidate)
+    
+    # No tokenizer found - create one from text data
+    if not os.path.exists(text_path):
+        raise FileNotFoundError(f"Cannot create tokenizer: text file not found: {text_path}")
+    
+    print(f"  No tokenizer found. Creating tokenizer from {text_path}...")
+    os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
+    tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
+    BPETokenizer.train_new(text_path, tokenizer_model, vocab_size=32000)
+    print(f"  ✓ Tokenizer created: {tokenizer_model}")
+    return BPETokenizer(tokenizer_model)
+
+def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> int:
+    """Count actual tokens in text file using tokenizer"""
+    if not os.path.exists(text_path):
+        return 0
+    
+    try:
+        tokenizer = get_or_create_tokenizer(text_path, tokenizer_path)
+        total_tokens = 0
+        sample_count = 0
+        
+        with open(text_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    tokens = tokenizer.encode(line)
+                    total_tokens += len(tokens)
+                    sample_count += 1
+                    
+                    # Progress indicator for large files
+                    if sample_count % 10000 == 0:
+                        print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
+        
+        return total_tokens
+    except Exception as e:
+        print(f"Error: Could not count tokens from {text_path}: {e}")
+        raise
+
+def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: Optional[str] = None) -> int:
+    """Count tokens from CSV file (for audio transcriptions or OCR text)"""
+    if not os.path.exists(csv_path):
+        return 0
+    
+    try:
+        # Get tokenizer (use first text file we can find, or create from CSV text)
+        text_files = [
+            "data/text/production_corpus.txt",
+            "data/text/tiny_corpus.txt",
+        ]
+        tokenizer = None
+        for tf in text_files:
+            if os.path.exists(tf):
+                tokenizer = get_or_create_tokenizer(tf, tokenizer_path)
+                break
+        
+        if not tokenizer:
+            # Create tokenizer from CSV text
+            print(f"  Creating tokenizer from CSV text...")
+            # Extract all text to temp file
+            temp_text = f"data/.temp_csv_{text_column}.txt"
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                with open(temp_text, 'w', encoding='utf-8') as out:
+                    for row in reader:
+                        text = row.get(text_column, '').strip()
+                        if text:
+                            out.write(text + '\n')
+            os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
+            tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
+            BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
+            tokenizer = BPETokenizer(tokenizer_model)
+            os.remove(temp_text)  # Clean up
+        
+        total_tokens = 0
+        sample_count = 0
+        
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                text = row.get(text_column, '').strip()
+                if text:
+                    tokens = tokenizer.encode(text)
+                    total_tokens += len(tokens)
+                    sample_count += 1
+                    
+                    if sample_count % 10000 == 0:
+                        print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
+        
+        return total_tokens
+    except Exception as e:
+        print(f"Error: Could not count tokens from {csv_path}: {e}")
+        raise
+
+def count_audio_tokens(csv_path: str, tokenizer_path: Optional[str] = None) -> int:
+    """Count tokens from audio transcriptions (text column in CSV)"""
+    return count_csv_tokens(csv_path, 'text', tokenizer_path)
+
+def count_ocr_tokens(csv_path: str, tokenizer_path: Optional[str] = None) -> int:
+    """Count tokens from OCR text (text column in CSV)"""
+    return count_csv_tokens(csv_path, 'text', tokenizer_path)
+
+def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None) -> int:
+    """Count tokens from image captions"""
+    if not os.path.exists(manifest_path):
+        return 0
+    
+    try:
+        # Get tokenizer (use first text file we can find, or create from captions)
+        text_files = [
+            "data/text/production_corpus.txt",
+            "data/text/tiny_corpus.txt",
+        ]
+        tokenizer = None
+        for tf in text_files:
+            if os.path.exists(tf):
+                tokenizer = get_or_create_tokenizer(tf, tokenizer_path)
+                break
+        
+        if not tokenizer:
+            # Create tokenizer from image captions
+            print(f"  Creating tokenizer from image captions...")
+            temp_text = "data/.temp_image_captions.txt"
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                with open(temp_text, 'w', encoding='utf-8') as out:
+                    if isinstance(data, list):
+                        for item in data:
+                            caption = item.get('caption', '').strip()
+                            if caption:
+                                out.write(caption + '\n')
+                    elif isinstance(data, dict) and 'images' in data:
+                        for item in data['images']:
+                            caption = item.get('caption', '').strip()
+                            if caption:
+                                out.write(caption + '\n')
+            os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
+            tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
+            BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
+            tokenizer = BPETokenizer(tokenizer_model)
+            os.remove(temp_text)  # Clean up
+        
+        total_tokens = 0
+        sample_count = 0
+        
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            items = data if isinstance(data, list) else data.get('images', [])
+            for item in items:
+                caption = item.get('caption', '').strip()
+                if caption:
+                    tokens = tokenizer.encode(caption)
+                    total_tokens += len(tokens)
+                    sample_count += 1
+                    
+                    if sample_count % 10000 == 0:
+                        print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
+        
+        return total_tokens
+    except Exception as e:
+        print(f"Error: Could not count tokens from {manifest_path}: {e}")
+        raise
 
 def count_image_samples(manifest_path: str) -> int:
     """Count entries in image JSON manifest"""
@@ -275,6 +455,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         "data/text/tiny_corpus.txt",        # Synthetic file from make_synthetic_datasets.py
     ]
     text_samples = 0
+    text_tokens = 0
     text_path = None
     for tf in text_files:
         if os.path.exists(tf):
@@ -282,7 +463,17 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
             if count > text_samples:
                 text_samples = count
                 text_path = tf
-    print(f"  Text samples: {text_samples:,} (from {text_path or 'N/A'})")
+    
+    # Count tokens (required)
+    if text_path:
+        print(f"  Counting tokens (this may take a while for large files)...")
+        text_tokens = count_text_tokens(text_path)
+        avg_tokens_per_sample = text_tokens / text_samples if text_samples > 0 else 0
+        print(f"  Text samples: {text_samples:,} (from {text_path})")
+        print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000:.1f}M tokens)")
+        print(f"  Average tokens per sample: {avg_tokens_per_sample:.1f}")
+    else:
+        print(f"  ⚠ No text data found")
     
     # Analyze image dataset - only production and synthetic files
     print("\n[2] Analyzing Image Dataset...")
@@ -291,6 +482,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         "data/images/annotations.json",           # Synthetic file from make_synthetic_datasets.py
     ]
     image_samples = 0
+    image_tokens = 0
     image_manifest = None
     for imf in image_files:
         if os.path.exists(imf):
@@ -298,7 +490,17 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
             if count > image_samples:
                 image_samples = count
                 image_manifest = imf
-    print(f"  Image samples: {image_samples:,} (from {image_manifest or 'N/A'})")
+    
+    # Count tokens from captions (required)
+    if image_manifest:
+        print(f"  Counting tokens from captions (this may take a while for large files)...")
+        image_tokens = count_image_tokens(image_manifest)
+        avg_tokens_per_sample = image_tokens / image_samples if image_samples > 0 else 0
+        print(f"  Image samples: {image_samples:,} (from {image_manifest})")
+        print(f"  Caption tokens: {image_tokens:,} (~{image_tokens/1_000_000:.1f}M tokens)")
+        print(f"  Average tokens per caption: {avg_tokens_per_sample:.1f}")
+    else:
+        print(f"  ⚠ No image data found")
     
     # Analyze audio dataset - only production and synthetic files
     print("\n[3] Analyzing Audio Dataset...")
@@ -307,6 +509,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         "data/audio/asr.csv",             # Synthetic file from make_synthetic_datasets.py
     ]
     audio_samples = 0
+    audio_tokens = 0
     audio_csv = None
     for af in audio_files:
         if os.path.exists(af):
@@ -314,23 +517,75 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
             if count > audio_samples:
                 audio_samples = count
                 audio_csv = af
-    print(f"  Audio samples: {audio_samples:,} (from {audio_csv or 'N/A'})")
+    
+    # Count tokens from transcriptions (required)
+    if audio_csv:
+        print(f"  Counting tokens from transcriptions (this may take a while for large files)...")
+        audio_tokens = count_audio_tokens(audio_csv)
+        avg_tokens_per_sample = audio_tokens / audio_samples if audio_samples > 0 else 0
+        print(f"  Audio samples: {audio_samples:,} (from {audio_csv})")
+        print(f"  Transcription tokens: {audio_tokens:,} (~{audio_tokens/1_000_000:.1f}M tokens)")
+        print(f"  Average tokens per transcription: {avg_tokens_per_sample:.1f}")
+    else:
+        print(f"  ⚠ No audio data found")
     
     # Calculate parameters for each training stage
     print("\n" + "="*60)
     print("Calculating Training Parameters")
     print("="*60)
     
+    # Helper function to calculate params from tokens
+    def calculate_params_from_tokens(num_tokens: int, batch_size: int, ctx_len: int, gradient_accumulation: int = 1, val_split: float = 0.1):
+        """Calculate training parameters from token count"""
+        effective_batch = batch_size * gradient_accumulation
+        train_tokens = int(num_tokens * (1 - val_split))
+        tokens_per_step = effective_batch * ctx_len
+        steps_per_epoch = max(1, train_tokens // tokens_per_step)
+        
+        # Epoch recommendations based on token count
+        if num_tokens >= 100_000_000:
+            min_epochs, max_epochs, recommended_epochs = 1, 3, 2
+        elif num_tokens >= 50_000_000:
+            min_epochs, max_epochs, recommended_epochs = 2, 4, 3
+        elif num_tokens >= 10_000_000:
+            min_epochs, max_epochs, recommended_epochs = 3, 6, 4
+        else:
+            min_epochs, max_epochs, recommended_epochs = 5, 10, 7
+        
+        max_steps = steps_per_epoch * recommended_epochs
+        warmup_steps = max(100, min(int(max_steps * 0.1), int(max_steps * 0.05)))
+        warmup_steps = min(warmup_steps, 10000)
+        val_freq = max(100, min(1000, steps_per_epoch // 10))
+        checkpoint_freq = max(1000, min(10000, steps_per_epoch))
+        
+        return {
+            "num_tokens": num_tokens,
+            "train_tokens": train_tokens,
+            "steps_per_epoch": steps_per_epoch,
+            "min_epochs": min_epochs,
+            "max_epochs": max_epochs,
+            "recommended_epochs": recommended_epochs,
+            "max_steps": max_steps,
+            "warmup_steps": warmup_steps,
+            "val_freq": val_freq,
+            "checkpoint_freq": checkpoint_freq,
+        }
+    
     # Stage A: Text-only (thinker_tiny.json)
     print("\n[Stage A] Text-only Training (thinker_tiny.json)")
-    if text_samples > 0:
-        text_params = calculate_training_params(
-            text_samples,
-            batch_size=8,  # From config
-            gradient_accumulation=1,
-            val_split=0.1
-        )
-        print(f"  Samples: {text_params['num_samples']:,}")
+    if text_tokens > 0:
+        # Load config to get ctx_len if available
+        config_path = "configs/thinker_tiny.json"
+        ctx_len = 512  # Default
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                ctx_len = cfg.get("ctx_len", 512)
+        
+        text_params = calculate_params_from_tokens(text_tokens, batch_size=8, ctx_len=ctx_len, gradient_accumulation=1)
+        text_params["num_samples"] = text_samples  # Keep for reference
+        
+        print(f"  Tokens: {text_params['num_tokens']:,} (~{text_params['num_tokens']/1_000_000:.1f}M tokens)")
         print(f"  Steps/epoch: {text_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {text_params['recommended_epochs']}")
         print(f"  Max steps: {text_params['max_steps']:,}")
@@ -338,7 +593,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         
         if not dry_run:
             update_config_file(
-                "configs/thinker_tiny.json",
+                config_path,
                 text_params,
                 preserve_keys=["train_text"]  # Preserve data path
             )
@@ -347,14 +602,20 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     
     # Stage B: Audio encoder (audio_enc_tiny.json)
     print("\n[Stage B] Audio Encoder Training (audio_enc_tiny.json)")
-    if audio_samples > 0:
-        audio_params = calculate_training_params(
-            audio_samples,
-            batch_size=4,  # From config
-            gradient_accumulation=1,
-            val_split=0.1
-        )
-        print(f"  Samples: {audio_params['num_samples']:,}")
+    if audio_tokens > 0:
+        # Audio encoder processes transcription tokens
+        # Use ctx_len from config or default
+        config_path = "configs/audio_enc_tiny.json"
+        ctx_len = 256  # Default for audio (shorter sequences)
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                ctx_len = cfg.get("ctx_len", 256)
+        
+        audio_params = calculate_params_from_tokens(audio_tokens, batch_size=4, ctx_len=ctx_len, gradient_accumulation=1)
+        audio_params["num_samples"] = audio_samples  # Keep for reference
+        
+        print(f"  Tokens: {audio_params['num_tokens']:,} (~{audio_params['num_tokens']/1_000_000:.1f}M tokens)")
         print(f"  Steps/epoch: {audio_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {audio_params['recommended_epochs']}")
         print(f"  Max steps: {audio_params['max_steps']:,}")
@@ -362,7 +623,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         
         if not dry_run:
             update_config_file(
-                "configs/audio_enc_tiny.json",
+                config_path,
                 audio_params,
                 preserve_keys=["train_csv"]  # Preserve data path
             )
@@ -371,14 +632,19 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     
     # Stage C: Vision encoder (vision_tiny.json)
     print("\n[Stage C] Vision Encoder Training (vision_tiny.json)")
-    if image_samples > 0:
-        vision_params = calculate_training_params(
-            image_samples,
-            batch_size=8,  # From config
-            gradient_accumulation=1,
-            val_split=0.1
-        )
-        print(f"  Samples: {vision_params['num_samples']:,}")
+    if image_tokens > 0:
+        # Vision encoder processes caption tokens
+        config_path = "configs/vision_tiny.json"
+        ctx_len = 128  # Default for captions (shorter sequences)
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                ctx_len = cfg.get("ctx_len", 128)
+        
+        vision_params = calculate_params_from_tokens(image_tokens, batch_size=8, ctx_len=ctx_len, gradient_accumulation=1)
+        vision_params["num_samples"] = image_samples  # Keep for reference
+        
+        print(f"  Tokens: {vision_params['num_tokens']:,} (~{vision_params['num_tokens']/1_000_000:.1f}M tokens)")
         print(f"  Steps/epoch: {vision_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {vision_params['recommended_epochs']}")
         print(f"  Max steps: {vision_params['max_steps']:,}")
@@ -386,7 +652,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         
         if not dry_run:
             update_config_file(
-                "configs/vision_tiny.json",
+                config_path,
                 vision_params,
                 preserve_keys=["train_manifest", "image_root"]  # Preserve data paths
             )
@@ -401,6 +667,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         "data/audio/tts.csv",             # Synthetic file from make_synthetic_datasets.py
     ]
     tts_samples = 0
+    tts_tokens = 0
     tts_csv = None
     for ttf in tts_files:
         if os.path.exists(ttf):
@@ -408,14 +675,24 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
             if count > tts_samples:
                 tts_samples = count
                 tts_csv = ttf
-    if tts_samples > 0:
-        talker_params = calculate_training_params(
-            tts_samples,
-            batch_size=4,  # From config
-            gradient_accumulation=1,
-            val_split=0.1
-        )
-        print(f"  Samples: {talker_params['num_samples']:,}")
+    
+    # Count tokens from TTS transcriptions
+    if tts_csv:
+        print(f"  Counting tokens from TTS transcriptions...")
+        tts_tokens = count_audio_tokens(tts_csv)
+    
+    if tts_tokens > 0:
+        config_path = "configs/talker_tiny.json"
+        ctx_len = 256  # Default for TTS
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                ctx_len = cfg.get("ctx_len", 256)
+        
+        talker_params = calculate_params_from_tokens(tts_tokens, batch_size=4, ctx_len=ctx_len, gradient_accumulation=1)
+        talker_params["num_samples"] = tts_samples  # Keep for reference
+        
+        print(f"  Tokens: {talker_params['num_tokens']:,} (~{talker_params['num_tokens']/1_000_000:.1f}M tokens)")
         print(f"  Steps/epoch: {talker_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {talker_params['recommended_epochs']}")
         print(f"  Max steps: {talker_params['max_steps']:,}")
@@ -423,7 +700,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         
         if not dry_run:
             update_config_file(
-                "configs/talker_tiny.json",
+                config_path,
                 talker_params,
                 preserve_keys=["tts_csv"]  # Preserve data path
             )
@@ -432,16 +709,20 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     
     # Stage E: Multimodal SFT (omni_sft_tiny.json)
     print("\n[Stage E] Multimodal SFT Training (omni_sft_tiny.json)")
-    # Use the maximum of all modalities for multimodal training
-    multimodal_samples = max(text_samples, image_samples, audio_samples)
-    if multimodal_samples > 0:
-        sft_params = calculate_training_params(
-            multimodal_samples,
-            batch_size=2,  # From config
-            gradient_accumulation=4,  # From config
-            val_split=0.1
-        )
-        print(f"  Samples (max across modalities): {sft_params['num_samples']:,}")
+    # Use the maximum of all token counts for multimodal training
+    multimodal_tokens = max(text_tokens, image_tokens, audio_tokens)
+    if multimodal_tokens > 0:
+        config_path = "configs/omni_sft_tiny.json"
+        ctx_len = 512  # Default for multimodal
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                ctx_len = cfg.get("ctx_len", 512)
+        
+        sft_params = calculate_params_from_tokens(multimodal_tokens, batch_size=2, ctx_len=ctx_len, gradient_accumulation=4)
+        sft_params["num_samples"] = max(text_samples, image_samples, audio_samples)  # Keep for reference
+        
+        print(f"  Tokens (max across modalities): {sft_params['num_tokens']:,} (~{sft_params['num_tokens']/1_000_000:.1f}M tokens)")
         print(f"  Steps/epoch: {sft_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {sft_params['recommended_epochs']}")
         print(f"  Max steps: {sft_params['max_steps']:,}")
@@ -449,7 +730,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         
         if not dry_run:
             update_config_file(
-                "configs/omni_sft_tiny.json",
+                config_path,
                 sft_params,
                 preserve_keys=["sft_mix"]  # Preserve data paths
             )
@@ -463,6 +744,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         "data/ocr/ocr_train.csv",        # Synthetic file from make_synthetic_datasets.py
     ]
     ocr_samples = 0
+    ocr_tokens = 0
     ocr_csv = None
     for ocrf in ocr_files:
         if os.path.exists(ocrf):
@@ -470,14 +752,24 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
             if count > ocr_samples:
                 ocr_samples = count
                 ocr_csv = ocrf
-    if ocr_samples > 0:
-        ocr_params = calculate_training_params(
-            ocr_samples,
-            batch_size=4,  # From config
-            gradient_accumulation=2,  # From config
-            val_split=0.1
-        )
-        print(f"  Samples: {ocr_params['num_samples']:,}")
+    
+    # Count tokens from OCR text
+    if ocr_csv:
+        print(f"  Counting tokens from OCR text...")
+        ocr_tokens = count_ocr_tokens(ocr_csv)
+    
+    if ocr_tokens > 0:
+        config_path = "configs/ocr_tiny.json"
+        ctx_len = 128  # Default for OCR (short text sequences)
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                ctx_len = cfg.get("ctx_len", 128)
+        
+        ocr_params = calculate_params_from_tokens(ocr_tokens, batch_size=4, ctx_len=ctx_len, gradient_accumulation=2)
+        ocr_params["num_samples"] = ocr_samples  # Keep for reference
+        
+        print(f"  Tokens: {ocr_params['num_tokens']:,} (~{ocr_params['num_tokens']/1_000_000:.1f}M tokens)")
         print(f"  Steps/epoch: {ocr_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {ocr_params['recommended_epochs']}")
         print(f"  Max steps: {ocr_params['max_steps']:,}")
@@ -485,7 +777,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         
         if not dry_run:
             update_config_file(
-                "configs/ocr_tiny.json",
+                config_path,
                 ocr_params,
                 preserve_keys=["train_csv", "image_root"],  # Preserve data paths
                 update_paths=True
@@ -503,11 +795,14 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     
     # Print summary
     print("\nSummary:")
-    print(f"  Text samples: {text_samples:,}")
-    print(f"  Image samples: {image_samples:,}")
-    print(f"  Audio samples: {audio_samples:,}")
-    print(f"  OCR samples: {ocr_samples:,}")
-    print(f"  Multimodal (max): {multimodal_samples:,}")
+    print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000:.1f}M)")
+    print(f"  Image caption tokens: {image_tokens:,} (~{image_tokens/1_000_000:.1f}M)")
+    print(f"  Audio transcription tokens: {audio_tokens:,} (~{audio_tokens/1_000_000:.1f}M)")
+    if ocr_tokens > 0:
+        print(f"  OCR tokens: {ocr_tokens:,} (~{ocr_tokens/1_000_000:.1f}M)")
+    multimodal_tokens = max(text_tokens, image_tokens, audio_tokens)
+    if multimodal_tokens > 0:
+        print(f"  Multimodal (max tokens): {multimodal_tokens:,} (~{multimodal_tokens/1_000_000:.1f}M)")
 
 def main():
     parser = argparse.ArgumentParser(

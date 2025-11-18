@@ -57,11 +57,14 @@ pip install -r requirements.txt
 # - torch (PyTorch)
 # - torchaudio
 # - torchvision
-# - transformers
 # - librosa (audio processing)
+# - soundfile (audio I/O)
 # - Pillow (image processing)
+# - sentencepiece (tokenization)
 # - numpy, scipy
 # - tqdm (progress bars)
+# - einops (tensor operations)
+# - requests (HTTP downloads)
 
 # Optional: Flash Attention (2-4x speedup)
 pip install flash-attn --no-build-isolation

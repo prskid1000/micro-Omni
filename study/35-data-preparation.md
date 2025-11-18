@@ -32,11 +32,11 @@ Math problem: Solve for x in 2x + 5 = 15.
 **Download:**
 ```bash
 # ⚠️ Always use --combine to create production_corpus.txt (required for training)
-# Download with sample limit (default: 1,000,000 per dataset, ~6M total combined)
+# Download with sample limit (default: 1,000,000 per dataset, ~2M total combined)
 python scripts/download_production_text.py --dataset all --combine
 
 # Or specify custom sample limit per dataset
-python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~3M total
+python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~1M total
 
 # Or download specific categories
 python scripts/download_production_text.py --dataset general --combine
@@ -76,15 +76,14 @@ data/audio/commonvoice/clip1.wav,"hello world"
 **Download:**
 ```bash
 # ⚠️ Always use --combine to create production_asr.csv and production_tts.csv (required for training)
-# Download with sample limit (default: 1,000,000 per dataset, ~6M total combined)
+# Download with sample limit (default: 1,000,000 per dataset, ~2M total combined)
 python scripts/download_production_audio.py --dataset all --combine
 
 # Or specify custom sample limit per dataset
-python scripts/download_production_audio.py --dataset all --combine --max-samples 500000  # ~3M total
+python scripts/download_production_audio.py --dataset all --combine --max-samples 500000  # ~1M total
 
 # Or download specific categories
 python scripts/download_production_audio.py --dataset general --combine
-python scripts/download_production_audio.py --dataset scientific --combine
 ```
 
 **Features:**
@@ -193,7 +192,7 @@ python scripts/download_production_audio.py --dataset all --combine
 **Download:**
 ```bash
 # Download all modalities with sample-based limits (default: 1M per dataset)
-# Combined totals: Text ~10M, Audio ~4M, Images ~4M
+# Combined totals: Text ~2M, Audio ~2M, Images ~1M
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
 python scripts/download_production_audio.py --dataset all --combine
@@ -713,29 +712,33 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What this does:**
-- ✅ Counts samples in your production/synthetic datasets
-- ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps`
+- ✅ Counts tokens in your production/synthetic datasets (using BPE tokenizer)
+- ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps` based on token counts
 - ✅ Adjusts validation and checkpoint frequencies
 - ✅ Updates data paths to production files automatically
-- ✅ Applies best practices based on dataset size
+- ✅ Applies best practices based on token count (more accurate than samples)
 
 **Why it matters:**
-- Large datasets (>1M samples) need fewer epochs (1-3)
-- Small datasets (<50K samples) need more epochs (10-20)
+- Large datasets (>100M tokens) need fewer epochs (1-3)
+- Small datasets (<10M tokens) need more epochs (5-10)
+- The script automatically counts tokens using the BPE tokenizer
 - Proper warmup steps prevent training instability
 - Correct max_steps ensures complete training without waste
 
 **Example output:**
 ```
 [1] Analyzing Text Dataset...
+  Counting tokens (this may take a while for large files)...
   Text samples: 2,500,000 (from data/text/production_corpus.txt)
+  Text tokens: 200,000,000 (~200.0M tokens)
+  Average tokens per sample: 80.0
   
 [Stage A] Text-only Training (thinker_tiny.json)
-  Samples: 2,500,000
-  Steps/epoch: 312,500
+  Tokens: 200,000,000 (~200.0M tokens)
+  Steps/epoch: 48,828
   Recommended epochs: 2
-  Max steps: 625,000
-  Warmup steps: 31,250
+  Max steps: 97,656
+  Warmup steps: 4,882
 ```
 
 See [Chapter 34: Configuration Files](34-configuration-files.md) for more details.
@@ -745,7 +748,7 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for more detail
 ## 💡 Tips
 
 ✅ **Start with sample-based download:** `--dataset all --combine` to download from multiple categories  
-✅ **Production-grade:** Millions of samples (default: 1M per dataset, ~6M combined for text)  
+✅ **Production-grade:** Millions of samples (default: 1M per dataset, ~2M combined for text)  
 ✅ **Fine-grained resumption:** Safe to interrupt and resume  
 ✅ **No formatting needed:** Outputs are in final format ready for training  
 ✅ **Diverse knowledge:** Downloads from multiple categories  
