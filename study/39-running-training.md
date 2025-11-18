@@ -167,6 +167,25 @@ python train_text.py --config configs/thinker_tiny.json \
 
 ---
 
+## 📦 After Training: Export for Deployment
+
+Once all stages are complete, you can export your trained model for deployment:
+
+```bash
+# Export all components to safetensors
+python export/merge_to_safetensors.py \
+    --omni_ckpt checkpoints/omni_sft_tiny \
+    --thinker_ckpt checkpoints/thinker_tiny \
+    --audio_ckpt checkpoints/audio_enc_tiny \
+    --vision_ckpt checkpoints/vision_tiny \
+    --talker_ckpt checkpoints/talker_tiny \
+    --output_dir merged_model
+```
+
+See [Chapter 46: Model Export and Deployment](46-model-export-deployment.md) for detailed instructions, or [Chapter 47: Quick Start Export](47-quick-start-export.md) for a quick reference.
+
+---
+
 [Continue to Chapter 40: Inference Examples →](40-inference-examples.md)
 
 ---

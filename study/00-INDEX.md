@@ -115,6 +115,15 @@
 
 ---
 
+### **Part 9: Deployment and Export (Chapters 46-47)**
+
+| Chapter | Title | Description |
+|---------|-------|-------------|
+| [46](46-model-export-deployment.md) | Model Export and Deployment | Merging components into safetensors for deployment |
+| [47](47-quick-start-export.md) | Quick Start Export Guide | Fast reference for exporting models |
+
+---
+
 ## 🎯 Learning Paths
 
 ### **Beginner Path (Never studied AI)**
@@ -127,7 +136,10 @@ Start with: Chapters 4-5 → 13-18 → 19-25 → 26-31 → 32-37
 Focus on: Chapters 19-25 → 32-37 → 43-45
 
 ### **Quick Start Path (Just want to run it)**
-Essential chapters: 19 → 38 → 39 → 40
+Essential chapters: 19 → 38 → 39 → 40 → 47
+
+### **Deployment Path (Ready to deploy)**
+Essential chapters: 39 → 46 → 47
 
 ---
 

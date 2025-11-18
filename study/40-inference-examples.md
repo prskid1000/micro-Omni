@@ -327,6 +327,17 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny
 
 ---
 
+## 🔗 Related: Model Export
+
+After training and testing, you may want to export your model for deployment:
+
+- **Export to safetensors**: See [Chapter 46: Model Export and Deployment](46-model-export-deployment.md)
+- **Quick export guide**: See [Chapter 47: Quick Start Export](47-quick-start-export.md)
+
+The exported model can be used with `infer_safetensors.py` which has the same interface as `infer_chat.py` but loads from a single safetensors file.
+
+---
+
 [Continue to Chapter 41: Customization Guide →](41-customization-guide.md)
 
 ---

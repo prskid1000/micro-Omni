@@ -14,3 +14,4 @@ tqdm
 einops
 requests
 av
+safetensors

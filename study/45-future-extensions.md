@@ -1,6 +1,6 @@
 # Chapter 45: Future Extensions & Roadmap
 
-[← Previous: Research Papers](44-research-papers.md) | [Back to Index](00-INDEX.md)
+[← Previous: Research Papers](44-research-papers.md) | [Back to Index](00-INDEX.md) | [Next: Model Export →](46-model-export-deployment.md)
 
 ---
 
@@ -287,8 +287,6 @@ torchrun --nproc_per_node=4 train_text.py
 
 ---
 
-[Back to Index](00-INDEX.md)
-
-**Documentation Complete! 🎉**
+[Continue to Chapter 46: Model Export and Deployment →](46-model-export-deployment.md)
 
 ---
