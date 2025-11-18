@@ -5,7 +5,6 @@ Includes diverse knowledge: General images, Scientific/Medical, Art, Architectur
 
 Supports:
 - General Images: COCO
-- Domain-specific: Food, CIFAR datasets
 """
 
 import os
@@ -30,12 +29,7 @@ def load_state():
             return json.load(f)
     return {
         # General Images
-        "coco": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        
-        # Domain-specific
-        "food101": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "cifar100": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "cifar10": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
+        "coco": {"downloaded": False, "extracted": False, "converted": False, "samples": 0}
     }
 
 def print_progress_with_remaining(current, max_count, label="samples", report_interval=100):
@@ -85,9 +79,7 @@ def get_image_dataset_size(ds_name):
     """Get actual disk size of image dataset folder"""
     # Map dataset names to their actual data folders
     folder_map = {
-        "food101": "data/images/food101",
-        "openimages": "data/images/openimages",  # If exists
-        "laion": "data/images/laion",  # If exists
+        "coco": "data/images/coco",
     }
     
     folder_path = folder_map.get(ds_name)
@@ -226,263 +218,6 @@ def download_coco(state, max_samples=1000000):
     
     return False
 
-def download_food101(state, max_samples=1000000):
-    """Download Food-101 - diverse food images"""
-    print("\n" + "="*60)
-    print("Downloading Food-101")
-    print("="*60)
-    
-    if state["food101"]["downloaded"] and state["food101"]["samples"] >= max_samples:
-        print(f"Food-101 already downloaded ({state['food101']['samples']:,} samples), skipping...")
-        return True
-    
-    # Food-101 is available from GitHub
-    url = "http://data.vision.ee.ethz.ch/cvl/food-101.tar.gz"
-    download_dir = "data/image_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    tar_file = os.path.join(download_dir, "food-101.tar.gz")
-    
-    print("Downloading Food-101 (~5GB)...")
-    if download_file(url, tar_file, resume=True):
-        extract_dir = "data/images/food101"
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        print("Extracting Food-101...")
-        with tarfile.open(tar_file, 'r:gz') as tar:
-            tar.extractall(extract_dir)
-        
-        # Convert to annotations
-        output_file = "data/images/food101_annotations.json"
-        annotations = []
-        count = 0
-        
-        images_dir = os.path.join(extract_dir, "food-101", "images")
-        if os.path.exists(images_dir):
-            for class_dir in os.listdir(images_dir):
-                class_path = os.path.join(images_dir, class_dir)
-                if os.path.isdir(class_path):
-                    for img_file in os.listdir(class_path):
-                        if img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                            annotations.append({
-                                "image": f"food101/food-101/images/{class_dir}/{img_file}",
-                                "caption": f"A photo of {class_dir.replace('_', ' ')}",
-                                "category": class_dir
-                            })
-                            count += 1
-                            
-                            if count >= max_samples:
-                                break
-                    
-                    if count >= max_samples:
-                        break
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(annotations, f, indent=2, ensure_ascii=False)
-        
-        # Only mark as downloaded if we reached max_samples
-        if count >= max_samples:
-            state["food101"]["downloaded"] = True
-            state["food101"]["converted"] = True
-        state["food101"]["samples"] = count
-        save_state(state)
-        
-        if count >= max_samples:
-            print(f"✓ Created annotations with {count:,} images")
-        else:
-            print(f"⚠ Created annotations with {count:,} images (target: {max_samples:,})")
-        return True
-    
-    return False
-
-def download_cifar10(state, max_samples=1000000):
-    """Download CIFAR-10 dataset - 10 classes, 60k images"""
-    print("\n" + "="*60)
-    print("Downloading CIFAR-10 Dataset")
-    print("="*60)
-    
-    if state["cifar10"]["downloaded"] and state["cifar10"]["samples"] >= max_samples:
-        print(f"CIFAR-10 already downloaded ({state['cifar10']['samples']:,} samples), skipping...")
-        return True
-    
-    # CIFAR-10 has direct download
-    base_url = "https://www.cs.toronto.edu/~kriz"
-    download_dir = "data/image_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    tar_file = os.path.join(download_dir, "cifar-10-python.tar.gz")
-    
-    url = f"{base_url}/cifar-10-python.tar.gz"
-    
-    print("Downloading CIFAR-10 (~170MB, 60k images)...")
-    if download_file(url, tar_file, resume=True):
-        extract_dir = "data/images/cifar10"
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        print("Extracting CIFAR-10...")
-        with tarfile.open(tar_file, 'r:gz') as tar:
-            tar.extractall(extract_dir)
-        
-        # Convert to annotations
-        output_file = "data/images/cifar10_annotations.json"
-        annotations = []
-        count = 0
-        
-        # CIFAR-10 structure: cifar-10-batches-py/
-        import pickle
-        batches_dir = os.path.join(extract_dir, "cifar-10-batches-py")
-        class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-        
-        # Process train batches
-        for i in range(1, 6):
-            batch_file = os.path.join(batches_dir, f"data_batch_{i}")
-            if os.path.exists(batch_file):
-                with open(batch_file, 'rb') as f:
-                    batch = pickle.load(f, encoding='bytes')
-                
-                images = batch[b'data']
-                labels = batch[b'labels']
-                filenames = [f.decode('utf-8') for f in batch[b'filenames']]
-                
-                for img_data, label, filename in zip(images, labels, filenames):
-                    # Reshape image (32x32x3)
-                    img_array = img_data.reshape(3, 32, 32).transpose(1, 2, 0)
-                    img_path = os.path.join(extract_dir, "cifar-10-batches-py", filename)
-                    
-                    # Save image
-                    os.makedirs(os.path.dirname(img_path), exist_ok=True)
-                    img = Image.fromarray(img_array)
-                    img.save(img_path)
-                    
-                    class_name = class_names[label]
-                    rel_path = f"cifar10/cifar-10-batches-py/{filename}"
-                    annotations.append({
-                        "image": rel_path,
-                        "caption": f"A photo of a {class_name}",
-                        "category": class_name
-                    })
-                    count += 1
-                    
-                    # Print progress with remaining
-                    print_progress_with_remaining(count, max_samples, "images", report_interval=1000)
-                    
-                    if count >= max_samples:
-                        break
-                
-                if count >= max_samples:
-                    break
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(annotations, f, indent=2, ensure_ascii=False)
-        
-        # Only mark as downloaded if we reached max_samples
-        if count >= max_samples:
-            state["cifar10"]["downloaded"] = True
-            state["cifar10"]["extracted"] = True
-            state["cifar10"]["converted"] = True
-        state["cifar10"]["samples"] = count
-        save_state(state)
-        
-        if count >= max_samples:
-            print(f"✓ Created annotations with {count:,} images")
-        else:
-            print(f"⚠ Created annotations with {count:,} images (target: {max_samples:,})")
-        return True
-    
-    return False
-
-def download_cifar100(state, max_samples=1000000):
-    """Download CIFAR-100 dataset - 100 classes, 60k images"""
-    print("\n" + "="*60)
-    print("Downloading CIFAR-100 Dataset")
-    print("="*60)
-    
-    if state["cifar100"]["downloaded"] and state["cifar100"]["samples"] >= max_samples:
-        print(f"CIFAR-100 already downloaded ({state['cifar100']['samples']:,} samples), skipping...")
-        return True
-    
-    # CIFAR-100 has direct download
-    base_url = "https://www.cs.toronto.edu/~kriz"
-    download_dir = "data/image_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    tar_file = os.path.join(download_dir, "cifar-100-python.tar.gz")
-    
-    url = f"{base_url}/cifar-100-python.tar.gz"
-    
-    print("Downloading CIFAR-100 (~170MB, 60k images)...")
-    if download_file(url, tar_file, resume=True):
-        extract_dir = "data/images/cifar100"
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        print("Extracting CIFAR-100...")
-        with tarfile.open(tar_file, 'r:gz') as tar:
-            tar.extractall(extract_dir)
-        
-        # Convert to annotations
-        output_file = "data/images/cifar100_annotations.json"
-        annotations = []
-        count = 0
-        
-        # CIFAR-100 structure: cifar-100-python/
-        import pickle
-        batches_dir = os.path.join(extract_dir, "cifar-100-python")
-        
-        # Load class names
-        meta_file = os.path.join(batches_dir, "meta")
-        if os.path.exists(meta_file):
-            with open(meta_file, 'rb') as f:
-                meta = pickle.load(f, encoding='bytes')
-            fine_class_names = [name.decode('utf-8') for name in meta[b'fine_label_names']]
-        else:
-            fine_class_names = [f"class_{i}" for i in range(100)]
-        
-        # Process train batch
-        train_file = os.path.join(batches_dir, "train")
-        if os.path.exists(train_file):
-            with open(train_file, 'rb') as f:
-                batch = pickle.load(f, encoding='bytes')
-            
-            images = batch[b'data']
-            fine_labels = batch[b'fine_labels']
-            filenames = [f.decode('utf-8') for f in batch[b'filenames']]
-            
-            for img_data, label, filename in zip(images, fine_labels, filenames):
-                # Reshape image (32x32x3)
-                img_array = img_data.reshape(3, 32, 32).transpose(1, 2, 0)
-                img_path = os.path.join(extract_dir, "cifar-100-python", filename)
-                
-                # Save image
-                os.makedirs(os.path.dirname(img_path), exist_ok=True)
-                img = Image.fromarray(img_array)
-                img.save(img_path)
-                
-                class_name = fine_class_names[label]
-                rel_path = f"cifar100/cifar-100-python/{filename}"
-                annotations.append({
-                    "image": rel_path,
-                    "caption": f"A photo of a {class_name}",
-                    "category": class_name
-                })
-                count += 1
-                
-                if count >= max_samples:
-                    break
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(annotations, f, indent=2, ensure_ascii=False)
-        
-        # Only mark as downloaded if we reached max_samples
-        if count >= max_samples:
-            state["cifar100"]["downloaded"] = True
-            state["cifar100"]["extracted"] = True
-            state["cifar100"]["converted"] = True
-        state["cifar100"]["samples"] = count
-        save_state(state)
-        
-        if count >= max_samples:
-            print(f"✓ Created annotations with {count:,} images")
-        else:
-            print(f"⚠ Created annotations with {count:,} images (target: {max_samples:,})")
-        return True
-    
     return False
 
 def combine_image_annotations():
@@ -495,10 +230,7 @@ def combine_image_annotations():
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     input_files = [
-        "data/images/coco_annotations.json",
-        "data/images/food101_annotations.json",
-        "data/images/cifar10_annotations.json",
-        "data/images/cifar100_annotations.json"
+        "data/images/coco_annotations.json"
     ]
     
     all_annotations = []
@@ -525,9 +257,7 @@ def combine_image_annotations():
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade image datasets for μOmni")
     parser.add_argument("--dataset", 
-                       choices=["all", "coco",
-                               "food101", "cifar10", "cifar100",
-                               "general", "domain"], 
+                       choices=["all", "coco", "general"], 
                        default="all",
                        help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
@@ -541,7 +271,7 @@ def main():
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
     parser.add_argument("--max-samples", type=int, default=1000000,
-                       help="Maximum number of samples per dataset (default: 1000000, combined total ~9-10M for all datasets)")
+                       help="Maximum number of samples per dataset (default: 1000000)")
     
     args = parser.parse_args()
     
@@ -570,20 +300,6 @@ def main():
     if args.dataset in ["all", "coco", "general"]:
         if not args.skip_download:
             success = download_coco(state, args.max_samples) and success
-    
-    # Domain-specific
-    if args.dataset in ["all", "food101", "domain"]:
-        if not args.skip_download:
-            success = download_food101(state, args.max_samples) and success
-    
-    # CIFAR datasets
-    if args.dataset in ["all", "cifar10", "domain"]:
-        if not args.skip_download:
-            success = download_cifar10(state, args.max_samples) and success
-    
-    if args.dataset in ["all", "cifar100", "domain"]:
-        if not args.skip_download:
-            success = download_cifar100(state, args.max_samples) and success
     
     # Combine if requested
     if args.combine:

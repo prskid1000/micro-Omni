@@ -1,10 +1,9 @@
 """
 Download and prepare production-grade text datasets for μOmni training
 Target: Under 30GB, millions of samples
-Includes: Scientific Content (Physics, Chemistry, Math, Biology), English Learning
+Includes: English Learning
 
 Supports:
-- Scientific: ArXiv (physics, chemistry, math, biology)
 - English Learning: Books, Wikipedia
 """
 
@@ -30,22 +29,23 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
             state = json.load(f)
-            # Remove pubmed entry if it exists (migration from old version)
+            # Remove old entries if they exist (migration from old version)
+            removed = False
             if "pubmed" in state:
                 del state["pubmed"]
+                removed = True
+            for arxiv_key in ["arxiv_physics", "arxiv_chemistry", "arxiv_math", "arxiv_biology"]:
+                if arxiv_key in state:
+                    del state[arxiv_key]
+                    removed = True
+            if removed:
                 # Save cleaned state
                 save_state(state)
             return state
     return {
         # General knowledge & English learning
         "wikipedia": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
-        "books": {"downloaded": False, "converted": False, "samples": 0},
-        
-        # Scientific Content
-        "arxiv_physics": {"downloaded": False, "converted": False, "samples": 0},
-        "arxiv_chemistry": {"downloaded": False, "converted": False, "samples": 0},
-        "arxiv_math": {"downloaded": False, "converted": False, "samples": 0},
-        "arxiv_biology": {"downloaded": False, "converted": False, "samples": 0}
+        "books": {"downloaded": False, "converted": False, "samples": 0}
     }
 
 def save_state(state):
@@ -879,259 +879,6 @@ def extract_conversation_text(item):
     
     return '\n'.join(text_parts) if text_parts else None
 
-def download_arxiv_by_category(state, category, category_key, max_samples=100000):
-    """Download ArXiv papers with abstracts using ArXiv API"""
-    print(f"\n{'='*60}")
-    print(f"Downloading ArXiv {category} Papers")
-    print("="*60)
-    
-    if state[category_key]["downloaded"] and state[category_key]["samples"] >= max_samples:
-        print(f"ArXiv {category} already downloaded ({state[category_key]['samples']:,} samples), skipping...")
-        return True
-    
-    import time
-    import xml.etree.ElementTree as ET
-    
-    output_file = f"data/text/arxiv_{category.lower()}.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    # Load checkpoint for resuming
-    checkpoint = load_checkpoint(category_key)
-    if checkpoint:
-        print(f"Resuming from checkpoint: batch {checkpoint.get('last_batch', 0)}, {checkpoint.get('count', 0)} papers")
-        count = checkpoint.get('count', 0)
-        start = checkpoint.get('last_start', 0)
-        mode = 'a'  # Append mode
-        catching_up = (count > 0)
-    else:
-        count = 0
-        start = 0
-        mode = 'w'  # Write mode
-        catching_up = False
-    
-    # Define batch_size early (used in print statement below)
-    batch_size = 100  # ArXiv API limit
-    base_url = "http://export.arxiv.org/api/query"
-    
-    if catching_up:
-        print(f"Fast-forwarding: Already have {count:,} papers, starting from batch {start // batch_size + 1}...")
-    
-    # Category to ArXiv category code mapping
-    category_map = {
-        "physics": ["physics", "quant-ph", "astro-ph", "cond-mat", "hep-ph", "hep-th", "hep-ex", "hep-lat"],
-        "chemistry": ["physics.chem-ph", "cond-mat.mtrl-sci"],
-        "math": ["math", "math-ph", "stat"],
-        "biology": ["q-bio", "q-bio.BM", "q-bio.CB", "q-bio.GN", "q-bio.MN", "q-bio.NC", "q-bio.OT", "q-bio.PE", "q-bio.QM", "q-bio.SC", "q-bio.TO"]
-    }
-    
-    arxiv_categories = category_map.get(category.lower(), [category.lower()])
-    
-    print(f"Using ArXiv API to fetch {category} papers...")
-    print(f"Categories: {', '.join(arxiv_categories)}")
-    print("This may take a while due to API rate limits...")
-    if checkpoint:
-        print(f"Resuming from start={start}, already have {count} papers")
-    
-    # Cooldown mechanism for rate limiting (defined before fetch_batch for nonlocal access)
-    cooldown_delay = 1.0  # Initial delay in seconds
-    min_cooldown = 1.0    # Minimum cooldown delay
-    max_cooldown = 60.0   # Maximum cooldown delay (1 minute)
-    cooldown_multiplier = 1.5  # Multiply delay on rate limit error
-    cooldown_decay = 0.9  # Reduce delay when no errors (gradual recovery)
-    consecutive_errors = 0
-    consecutive_successes = 0
-    
-    def fetch_batch(start_idx):
-        """Fetch a single batch from ArXiv API"""
-        nonlocal cooldown_delay, consecutive_errors, consecutive_successes
-        
-        query_parts = [f"cat:{cat}" for cat in arxiv_categories]
-        query = " OR ".join(query_parts)
-        
-        params = {
-            "search_query": query,
-            "start": start_idx,
-            "max_results": batch_size,
-            "sortBy": "submittedDate",
-            "sortOrder": "descending"
-        }
-        
-        try:
-            response = requests.get(base_url, params=params, timeout=30)
-            
-            # Check for rate limiting (429 Too Many Requests) or server errors (5xx)
-            if response.status_code == 429:
-                consecutive_errors += 1
-                consecutive_successes = 0
-                # Exponential backoff
-                cooldown_delay = min(cooldown_delay * cooldown_multiplier, max_cooldown)
-                wait_time = cooldown_delay
-                print(f"⚠ Rate limited (429) at start={start_idx}. Waiting {wait_time:.1f}s, cooldown increased to {cooldown_delay:.1f}s")
-                time.sleep(wait_time)
-                raise requests.exceptions.HTTPError(f"429 Too Many Requests")
-            elif response.status_code >= 500:
-                # Server errors - also increase cooldown but less aggressively
-                consecutive_errors += 1
-                consecutive_successes = 0
-                cooldown_delay = min(cooldown_delay * 1.2, max_cooldown)
-                wait_time = cooldown_delay
-                print(f"⚠ Server error ({response.status_code}) at start={start_idx}. Waiting {wait_time:.1f}s")
-                time.sleep(wait_time)
-                raise requests.exceptions.HTTPError(f"{response.status_code} Server Error")
-            
-            response.raise_for_status()
-            
-            # Success - gradually reduce cooldown
-            consecutive_successes += 1
-            if consecutive_errors > 0:
-                consecutive_errors = 0
-            # Decay cooldown after multiple successes
-            if consecutive_successes >= 5:
-                cooldown_delay = max(cooldown_delay * cooldown_decay, min_cooldown)
-                consecutive_successes = 0
-            
-            # Parse XML response
-            root = ET.fromstring(response.content)
-            ns = {'atom': 'http://www.w3.org/2005/Atom'}
-            
-            entries = root.findall('atom:entry', ns)
-            if not entries:
-                return None, start_idx
-            
-            # Process entries in parallel
-            def process_entry(entry):
-                """Process a single entry and return abstract if valid"""
-                try:
-                    title_elem = entry.find('atom:title', ns)
-                    summary_elem = entry.find('atom:summary', ns)
-                    
-                    title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
-                    abstract = summary_elem.text.strip() if summary_elem.text is not None and summary_elem.text else ""
-                    
-                    if title and abstract:
-                        text = f"Title: {title}\n\nAbstract: {abstract}"
-                        if len(text) > 200:
-                            return text
-                except Exception as e:
-                    pass
-                return None
-            
-            # Process entries in parallel (10 workers)
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                results = list(executor.map(process_entry, entries))
-            
-            # Filter out None results
-            valid_results = [r for r in results if r is not None]
-            return valid_results, start_idx
-            
-        except Exception as e:
-            print(f"Error fetching batch starting at {start_idx}: {e}")
-            return None, start_idx
-    
-    # Use parallel downloads for API requests (5 workers for ArXiv API)
-    max_parallel_requests = 5
-    file_lock = threading.Lock()
-    
-    with open(output_file, mode, encoding='utf-8') as f:
-        while count < max_samples:
-            # Prepare batch requests
-            batch_starts = []
-            for i in range(max_parallel_requests):
-                if count >= max_samples:
-                    break
-                batch_starts.append(start + i * batch_size)
-            
-            if not batch_starts:
-                break
-            
-            # Fetch batches in parallel
-            with ThreadPoolExecutor(max_workers=max_parallel_requests) as executor:
-                futures = {executor.submit(fetch_batch, start_idx): start_idx for start_idx in batch_starts}
-                
-                batch_results = []
-                for future in as_completed(futures):
-                    start_idx = futures[future]
-                    try:
-                        results, _ = future.result()
-                        if results is not None:
-                            batch_results.append((results, start_idx))
-                        elif results is None and len(batch_results) == 0:
-                            # No more results found
-                            print(f"\nNo more papers found (fetched {count} so far)")
-                            break
-                    except Exception as e:
-                        print(f"Error processing batch starting at {start_idx}: {e}")
-            
-            # Sort results by start index to maintain order
-            batch_results.sort(key=lambda x: x[1])
-            
-            # Write results (thread-safe)
-            with file_lock:
-                for results, start_idx in batch_results:
-                    for text in results:
-                        if text and count < max_samples:
-                            f.write(text + '\n\n')
-                            count += 1
-                            
-                            # Print progress with remaining
-                            if count % 50 == 0:
-                                print_progress_with_remaining(count, max_samples, "papers", report_interval=50)
-                            
-                            if count >= max_samples:
-                                break
-                    
-                    if count >= max_samples:
-                        break
-                
-                # Update start position
-                if batch_results:
-                    start = batch_results[-1][1] + batch_size
-                else:
-                    # No more results
-                    break
-                
-                # Print progress with remaining
-                print_progress_with_remaining(count, max_samples, "papers", report_interval=50)
-                
-                # Save checkpoint after batches
-                save_checkpoint(category_key, {
-                    'count': count,
-                    'last_start': start,
-                    'last_batch': start // batch_size
-                })
-                save_state(state)
-                
-                if count >= max_samples:
-                    break
-            
-            # Rate limiting with cooldown mechanism
-            # Adaptive delay based on recent errors/successes
-            time.sleep(cooldown_delay)
-            
-            # Check if we should break (no more results or reached max)
-            if not batch_results or count >= max_samples:
-                break
-    
-    # Only mark as downloaded if we reached max_samples
-    if count >= max_samples:
-        state[category_key]["downloaded"] = True
-        state[category_key]["converted"] = True
-    state[category_key]["samples"] = count
-    save_state(state)
-    
-    # Clean up checkpoint file (only if reached max_samples)
-    checkpoint_file = f"data/.checkpoint_{category_key}.json"
-    if os.path.exists(checkpoint_file) and count >= max_samples:
-        os.remove(checkpoint_file)
-    
-    if count >= max_samples:
-        print(f"\n✓ Downloaded {count:,} {category} papers to {output_file}")
-    else:
-        print(f"\n⚠ Downloaded {count:,} {category} papers (target: {max_samples:,})")
-        print("   ArXiv API may have rate limits or data exhausted. You can resume by running the script again.")
-    
-    return True
-
 def _download_single_book(book_id, base_url, processed_books_set):
     """Download and process a single book. Returns (book_id, book_text, passage_count, success)"""
     # Try different file formats
@@ -1371,13 +1118,7 @@ def combine_text_datasets():
     input_files = [
         # General knowledge & English learning
         "data/text/wikipedia.txt",
-        "data/text/books.txt",
-        
-        # Scientific Content
-        "data/text/arxiv_physics.txt",
-        "data/text/arxiv_chemistry.txt",
-        "data/text/arxiv_math.txt",
-        "data/text/arxiv_biology.txt"
+        "data/text/books.txt"
     ]
     
     total_samples = 0
@@ -1402,9 +1143,7 @@ def combine_text_datasets():
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade text datasets for μOmni")
     parser.add_argument("--dataset", 
-                       choices=["all", "wikipedia", "books",
-                               "arxiv_physics", "arxiv_chemistry", "arxiv_math", "arxiv_biology",
-                               "scientific", "general"], 
+                       choices=["all", "wikipedia", "books", "general"], 
                        default="all",
                        help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
@@ -1457,23 +1196,6 @@ def main():
     if args.dataset in ["all", "books", "general"]:
         if not args.skip_download:
             success = download_books(state, args.max_samples) and success
-    
-    # Scientific Content
-    if args.dataset in ["all", "arxiv_physics", "scientific"]:
-        if not args.skip_download:
-            success = download_arxiv_by_category(state, "physics", "arxiv_physics", args.max_samples) and success
-    
-    if args.dataset in ["all", "arxiv_chemistry", "scientific"]:
-        if not args.skip_download:
-            success = download_arxiv_by_category(state, "chemistry", "arxiv_chemistry", args.max_samples) and success
-    
-    if args.dataset in ["all", "arxiv_math", "scientific"]:
-        if not args.skip_download:
-            success = download_arxiv_by_category(state, "math", "arxiv_math", args.max_samples) and success
-    
-    if args.dataset in ["all", "arxiv_biology", "scientific"]:
-        if not args.skip_download:
-            success = download_arxiv_by_category(state, "biology", "arxiv_biology", args.max_samples) and success
     
     # Combine if requested
     if args.combine:
