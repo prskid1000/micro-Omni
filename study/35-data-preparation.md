@@ -32,23 +32,23 @@ Math problem: Solve for x in 2x + 5 = 15.
 **Download:**
 ```bash
 # ⚠️ Always use --combine to create production_corpus.txt (required for training)
-# Download with sample limit (default: 1,000,000 per dataset, ~10M total combined)
+# Download with sample limit (default: 1,000,000 per dataset, ~6M total combined)
 python scripts/download_production_text.py --dataset all --combine
 
 # Or specify custom sample limit per dataset
-python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~6M total
+python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~3M total
 
 # Or download specific categories
 python scripts/download_production_text.py --dataset scientific --combine
-python scripts/download_production_text.py --dataset conversations --combine
 ```
 
 **Features:**
 - ✅ **`--combine` creates `production_corpus.txt`** - the file that `train_text.py` uses
 - ✅ Fine-grained resumption (checkpoints during processing)
-- ✅ Diverse knowledge: General, Conversations, Scientific, Tools
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~10M, Audio ~4M, Images ~4M)
+- ✅ Diverse knowledge: General, Scientific
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~6M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
+- ✅ **ArXiv uses parallel downloads** (5 concurrent API requests) for faster downloads
 
 ---
 
@@ -92,7 +92,7 @@ python scripts/download_production_audio.py --dataset scientific --combine
 - ✅ **`--combine` creates `production_asr.csv` and `production_tts.csv`** - files that `train_audio_enc.py` and `train_talker.py` use
 - ✅ Fine-grained resumption (checkpoints by split/speaker)
 - ✅ Diverse audio: General speech, Scientific talks, Environmental sounds
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~10M, Audio ~4M, Images ~4M)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~6M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -146,7 +146,7 @@ python scripts/download_production_image.py --dataset nature --combine
 - ✅ **`--combine` creates `production_annotations.json`** - the file that `train_vision.py` uses
 - ✅ Fine-grained resumption (checkpoints by class)
 - ✅ Diverse images: General, Scientific/Medical, Art, Nature, Domain-specific
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~10M, Audio ~4M, Images ~4M)
+- ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~6M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
 
 ---
@@ -295,7 +295,7 @@ python scripts/download_production_ocr.py --dataset all --combine --max-samples 
 
 ```bash
 # Download all modalities with sample-based limits (default: 1M per dataset)
-# Combined totals: Text ~10M samples (~1B tokens), Audio ~4M, Images ~4M, OCR ~1M
+# Combined totals: Text ~6M samples (~600M tokens), Audio ~4M, Images ~4M, OCR ~1M
 # Creates: production_corpus.txt, production_asr.csv, production_tts.csv, production_annotations.json, production_ocr.csv
 python scripts/download_production_text.py --dataset all --combine
 python scripts/download_production_image.py --dataset all --combine
@@ -315,7 +315,7 @@ These are the files that training scripts (`train_text.py`, `train_audio_enc.py`
 
 ```bash
 # Specify custom sample limits per dataset (reduces combined totals)
-python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~6M total
+python scripts/download_production_text.py --dataset all --combine --max-samples 500000  # ~3M total
 python scripts/download_production_image.py --dataset all --combine --max-samples 500000  # ~3.5M total
 python scripts/download_production_audio.py --dataset all --combine --max-samples 500000  # ~3M total
 
@@ -582,6 +582,9 @@ data/
 │   ├── wikipedia.txt
 │   ├── books.txt
 │   ├── arxiv_physics.txt
+│   ├── arxiv_chemistry.txt
+│   ├── arxiv_math.txt
+│   ├── arxiv_biology.txt
 │   └── production_corpus.txt  (if --combine used)
 │
 ├── audio/
@@ -648,22 +651,26 @@ data/
 
 ### Multiple Categories
 When using `--dataset all`, scripts download from multiple categories:
-- **Text**: General, Conversations, Scientific, Tools
+- **Text**: General (Wikipedia, Books), Scientific (ArXiv: physics/chemistry/math/biology)
 - **Audio**: General speech, Scientific talks, Environmental sounds
 - **Images**: General, Scientific/Medical, Art, Nature, Domain-specific
+
+### Parallel Downloads
+- **ArXiv**: Uses parallel API requests (5 concurrent requests) for faster downloads while respecting rate limits
+- **Other datasets**: Sequential downloads with appropriate rate limiting
 
 You can also download specific categories using `--dataset <category>`.
 
 ### Sample-Based Limits
 - Default: 1,000,000 samples per dataset (configurable with `--max-samples`)
 - Combined totals when using `--dataset all`:
-  - **Text**: ~10M samples (~1B tokens) from 10 datasets
+  - **Text**: ~6M samples (~600M tokens) from 6 datasets
   - **Audio**: ~4M samples from 4 datasets
   - **Images**: ~4M samples from 4 datasets
 - For 25.65M parameter model: Combined total provides sufficient data for single-epoch training
 - Based on Chinchilla scaling laws: 20-200 tokens per parameter (minimum: 513M tokens)
 - Automatically stops when reaching sample limit per dataset
-- Example: `--max-samples 500000` for smaller combined totals (~6M text samples)
+- Example: `--max-samples 500000` for smaller combined totals (~3M text samples)
 
 ### Fine-Grained Resumption
 - Checkpoints saved during processing (by file, line, class, etc.)
@@ -761,7 +768,7 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for more detail
 ## 💡 Tips
 
 ✅ **Start with sample-based download:** `--dataset all --combine` to download from multiple categories  
-✅ **Production-grade:** Millions of samples (default: 1M per dataset, ~10M combined for text)  
+✅ **Production-grade:** Millions of samples (default: 1M per dataset, ~6M combined for text)  
 ✅ **Fine-grained resumption:** Safe to interrupt and resume  
 ✅ **No formatting needed:** Outputs are in final format ready for training  
 ✅ **Diverse knowledge:** Downloads from multiple categories  

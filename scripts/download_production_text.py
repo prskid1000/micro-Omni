@@ -1,13 +1,11 @@
 """
 Download and prepare production-grade text datasets for μOmni training
 Target: Under 30GB, millions of samples
-Includes: Conversations, Instruction Following, Tool Calls, Scientific Content (Physics, Chemistry, Math, Biology), English Learning
+Includes: Scientific Content (Physics, Chemistry, Math, Biology), English Learning
 
 Supports:
-- Conversations: Alpaca
-- Scientific: ArXiv (physics, chemistry, math, biology), PubMed, Math datasets
+- Scientific: ArXiv (physics, chemistry, math, biology)
 - English Learning: Books, Wikipedia
-- Science Education: ScienceQA
 """
 
 import os
@@ -31,23 +29,23 @@ def load_state():
     """Load download/conversion state"""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+            state = json.load(f)
+            # Remove pubmed entry if it exists (migration from old version)
+            if "pubmed" in state:
+                del state["pubmed"]
+                # Save cleaned state
+                save_state(state)
+            return state
     return {
         # General knowledge & English learning
-        "wikipedia": {"downloaded": False, "extracted": False, "converted": False, "samples": 0, "last_processed_file": "", "last_offset": 0},
-        "books": {"downloaded": False, "extracted": False, "converted": False, "samples": 0, "last_book_id": 0, "last_paragraph": 0},
-        
-        # Conversations & Instruction Following
-        "alpaca": {"downloaded": False, "converted": False, "samples": 0, "last_line": 0},
+        "wikipedia": {"downloaded": False, "extracted": False, "converted": False, "samples": 0},
+        "books": {"downloaded": False, "converted": False, "samples": 0},
         
         # Scientific Content
-        "arxiv_physics": {"downloaded": False, "converted": False, "samples": 0, "last_start": 0, "last_batch": 0},
-        "arxiv_chemistry": {"downloaded": False, "converted": False, "samples": 0, "last_start": 0, "last_batch": 0},
-        "arxiv_math": {"downloaded": False, "converted": False, "samples": 0, "last_start": 0, "last_batch": 0},
-        "arxiv_biology": {"downloaded": False, "converted": False, "samples": 0, "last_start": 0, "last_batch": 0},
-        "pubmed": {"downloaded": False, "converted": False, "samples": 0, "last_batch": 0, "last_id_index": 0},
-        "math_datasets": {"downloaded": False, "converted": False, "samples": 0, "last_dataset": "", "last_item": 0},
-        "scienceqa": {"downloaded": False, "converted": False, "samples": 0, "last_item": 0}
+        "arxiv_physics": {"downloaded": False, "converted": False, "samples": 0},
+        "arxiv_chemistry": {"downloaded": False, "converted": False, "samples": 0},
+        "arxiv_math": {"downloaded": False, "converted": False, "samples": 0},
+        "arxiv_biology": {"downloaded": False, "converted": False, "samples": 0}
     }
 
 def save_state(state):
@@ -92,10 +90,15 @@ def download_file(url, output_path, resume=True):
     
     try:
         response = requests.get(url, headers=resume_header, stream=True, timeout=30)
+        
+        # Handle 416 Range Not Satisfiable (file already complete)
+        if response.status_code == 416:
+            return True
+        
         response.raise_for_status()
         
         total_size = int(response.headers.get('content-length', 0))
-        if resume and os.path.exists(output_path):
+        if resume and os.path.exists(output_path) and resume_header:
             mode = 'ab'
             initial_pos = os.path.getsize(output_path)
         else:
@@ -842,7 +845,7 @@ def extract_conversation_text(item):
         return '\n'.join(parts) if parts else None
     
     if 'instruction' in item or 'input' in item or 'output' in item:
-        # Alpaca format
+        # Instruction-following format (instruction/input/output)
         instruction = item.get('instruction', '')
         input_text = item.get('input', '')
         output = item.get('output', '')
@@ -876,106 +879,8 @@ def extract_conversation_text(item):
     
     return '\n'.join(text_parts) if text_parts else None
 
-def download_alpaca(state, max_samples=500000):
-    """Download Alpaca instruction following dataset from GitHub and extended variants"""
-    print("\n" + "="*60)
-    print("Downloading Alpaca")
-    print("="*60)
-    
-    if state["alpaca"]["downloaded"] and state["alpaca"]["samples"] >= max_samples:
-        print(f"Alpaca already downloaded ({state['alpaca']['samples']:,} samples), skipping...")
-        return True
-    elif state["alpaca"]["samples"] > 0 and state["alpaca"]["samples"] < max_samples:
-        print(f"Resuming Alpaca download: {state['alpaca']['samples']:,} / {max_samples:,} samples")
-    
-    output_file = "data/text/alpaca.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    # Download multiple Alpaca variants for more data
-    alpaca_urls = [
-        # Original Alpaca (52k samples)
-        ("https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json", "original"),
-        # Try Alpaca-GPT4 if available
-        ("https://raw.githubusercontent.com/Instruction-Tuning-with-GPT-4/GPT-4-LLM/main/data/alpaca_gpt4_data.json", "gpt4"),
-    ]
-    
-    download_dir = "data/text_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    
-    count = 0
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for url, variant_name in alpaca_urls:
-            try:
-                print(f"\nDownloading Alpaca variant: {variant_name} from {url}")
-                temp_file = os.path.join(download_dir, f"alpaca_{variant_name}.json")
-                
-                if not download_file(url, temp_file, resume=True):
-                    print(f"Warning: Failed to download {variant_name}, trying next variant...")
-                    continue
-                
-                # Process the JSON file
-                print(f"Processing {variant_name}...")
-                try:
-                    with open(temp_file, 'r', encoding='utf-8') as in_f:
-                        data = json.load(in_f)
-                        if isinstance(data, list):
-                            for item in tqdm(data, desc=f"Processing {variant_name}"):
-                                try:
-                                    text = extract_conversation_text(item)
-                                    if text and len(text) > 50:
-                                        f.write(text + '\n\n')
-                                        count += 1
-                                        
-                                        if count >= max_samples:
-                                            print(f"\nReached sample limit ({max_samples:,}), stopping...")
-                                            break
-                                except Exception as e:
-                                    continue
-                        else:
-                            print(f"Warning: {variant_name} is not a JSON array, skipping...")
-                except json.JSONDecodeError as e:
-                    print(f"Warning: Failed to parse {variant_name} JSON: {e}")
-                    continue
-                except Exception as e:
-                    print(f"Warning: Error processing {variant_name}: {e}")
-                    continue
-                
-                if count >= max_samples:
-                    break
-                    
-            except Exception as e:
-                print(f"Warning: Error downloading {variant_name}: {e}")
-                continue
-    
-    if count > 0:
-        # Only mark as downloaded if we reached max_samples, otherwise keep trying
-        if count >= max_samples:
-            state["alpaca"]["downloaded"] = True
-            state["alpaca"]["converted"] = True
-        state["alpaca"]["samples"] = count
-        save_state(state)
-        
-        if count >= max_samples:
-            print(f"\n✓ Downloaded {count:,} Alpaca samples to {output_file}")
-            return True
-        else:
-            print(f"\n⚠ Downloaded {count:,} Alpaca samples (target: {max_samples:,}), but data source exhausted.")
-            print("   To get more samples, you may need additional data sources.")
-            return True  # Return True so script continues, but mark as incomplete
-    else:
-        # Fallback to original method if all variants fail
-        print("Falling back to original Alpaca dataset...")
-        fallback_url = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
-        return download_json_dataset_from_url(
-            state, "alpaca", fallback_url,
-            "data/text/alpaca.txt", max_samples=max_samples
-        )
-
-
-
 def download_arxiv_by_category(state, category, category_key, max_samples=100000):
-    """Download ArXiv papers for a specific category using ArXiv API with fine-grained resuming"""
+    """Download ArXiv papers with abstracts using ArXiv API"""
     print(f"\n{'='*60}")
     print(f"Downloading ArXiv {category} Papers")
     print("="*60)
@@ -1004,6 +909,10 @@ def download_arxiv_by_category(state, category, category_key, max_samples=100000
         mode = 'w'  # Write mode
         catching_up = False
     
+    # Define batch_size early (used in print statement below)
+    batch_size = 100  # ArXiv API limit
+    base_url = "http://export.arxiv.org/api/query"
+    
     if catching_up:
         print(f"Fast-forwarding: Already have {count:,} papers, starting from batch {start // batch_size + 1}...")
     
@@ -1023,87 +932,184 @@ def download_arxiv_by_category(state, category, category_key, max_samples=100000
     if checkpoint:
         print(f"Resuming from start={start}, already have {count} papers")
     
-    base_url = "http://export.arxiv.org/api/query"
-    batch_size = 100  # ArXiv API limit
+    # Cooldown mechanism for rate limiting (defined before fetch_batch for nonlocal access)
+    cooldown_delay = 1.0  # Initial delay in seconds
+    min_cooldown = 1.0    # Minimum cooldown delay
+    max_cooldown = 60.0   # Maximum cooldown delay (1 minute)
+    cooldown_multiplier = 1.5  # Multiply delay on rate limit error
+    cooldown_decay = 0.9  # Reduce delay when no errors (gradual recovery)
+    consecutive_errors = 0
+    consecutive_successes = 0
+    
+    def fetch_batch(start_idx):
+        """Fetch a single batch from ArXiv API"""
+        nonlocal cooldown_delay, consecutive_errors, consecutive_successes
+        
+        query_parts = [f"cat:{cat}" for cat in arxiv_categories]
+        query = " OR ".join(query_parts)
+        
+        params = {
+            "search_query": query,
+            "start": start_idx,
+            "max_results": batch_size,
+            "sortBy": "submittedDate",
+            "sortOrder": "descending"
+        }
+        
+        try:
+            response = requests.get(base_url, params=params, timeout=30)
+            
+            # Check for rate limiting (429 Too Many Requests) or server errors (5xx)
+            if response.status_code == 429:
+                consecutive_errors += 1
+                consecutive_successes = 0
+                # Exponential backoff
+                cooldown_delay = min(cooldown_delay * cooldown_multiplier, max_cooldown)
+                wait_time = cooldown_delay
+                print(f"⚠ Rate limited (429) at start={start_idx}. Waiting {wait_time:.1f}s, cooldown increased to {cooldown_delay:.1f}s")
+                time.sleep(wait_time)
+                raise requests.exceptions.HTTPError(f"429 Too Many Requests")
+            elif response.status_code >= 500:
+                # Server errors - also increase cooldown but less aggressively
+                consecutive_errors += 1
+                consecutive_successes = 0
+                cooldown_delay = min(cooldown_delay * 1.2, max_cooldown)
+                wait_time = cooldown_delay
+                print(f"⚠ Server error ({response.status_code}) at start={start_idx}. Waiting {wait_time:.1f}s")
+                time.sleep(wait_time)
+                raise requests.exceptions.HTTPError(f"{response.status_code} Server Error")
+            
+            response.raise_for_status()
+            
+            # Success - gradually reduce cooldown
+            consecutive_successes += 1
+            if consecutive_errors > 0:
+                consecutive_errors = 0
+            # Decay cooldown after multiple successes
+            if consecutive_successes >= 5:
+                cooldown_delay = max(cooldown_delay * cooldown_decay, min_cooldown)
+                consecutive_successes = 0
+            
+            # Parse XML response
+            root = ET.fromstring(response.content)
+            ns = {'atom': 'http://www.w3.org/2005/Atom'}
+            
+            entries = root.findall('atom:entry', ns)
+            if not entries:
+                return None, start_idx
+            
+            # Process entries in parallel
+            def process_entry(entry):
+                """Process a single entry and return abstract if valid"""
+                try:
+                    title_elem = entry.find('atom:title', ns)
+                    summary_elem = entry.find('atom:summary', ns)
+                    
+                    title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
+                    abstract = summary_elem.text.strip() if summary_elem.text is not None and summary_elem.text else ""
+                    
+                    if title and abstract:
+                        text = f"Title: {title}\n\nAbstract: {abstract}"
+                        if len(text) > 200:
+                            return text
+                except Exception as e:
+                    pass
+                return None
+            
+            # Process entries in parallel (10 workers)
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                results = list(executor.map(process_entry, entries))
+            
+            # Filter out None results
+            valid_results = [r for r in results if r is not None]
+            return valid_results, start_idx
+            
+        except Exception as e:
+            print(f"Error fetching batch starting at {start_idx}: {e}")
+            return None, start_idx
+    
+    # Use parallel downloads for API requests (5 workers for ArXiv API)
+    max_parallel_requests = 5
+    file_lock = threading.Lock()
     
     with open(output_file, mode, encoding='utf-8') as f:
         while count < max_samples:
-            # Build query
-            query_parts = [f"cat:{cat}" for cat in arxiv_categories]
-            query = " OR ".join(query_parts)
-            
-            params = {
-                "search_query": query,
-                "start": start,
-                "max_results": batch_size,
-                "sortBy": "submittedDate",
-                "sortOrder": "descending"
-            }
-            
-            try:
-                response = requests.get(base_url, params=params, timeout=30)
-                response.raise_for_status()
-                
-                # Parse XML response
-                root = ET.fromstring(response.content)
-                ns = {'atom': 'http://www.w3.org/2005/Atom'}
-                
-                entries = root.findall('atom:entry', ns)
-                if not entries:
-                    print(f"\nNo more papers found (fetched {count} so far)")
+            # Prepare batch requests
+            batch_starts = []
+            for i in range(max_parallel_requests):
+                if count >= max_samples:
                     break
+                batch_starts.append(start + i * batch_size)
+            
+            if not batch_starts:
+                break
+            
+            # Fetch batches in parallel
+            with ThreadPoolExecutor(max_workers=max_parallel_requests) as executor:
+                futures = {executor.submit(fetch_batch, start_idx): start_idx for start_idx in batch_starts}
                 
-                for entry in tqdm(entries, desc=f"Processing batch {start//batch_size + 1}", leave=False):
+                batch_results = []
+                for future in as_completed(futures):
+                    start_idx = futures[future]
                     try:
-                        title_elem = entry.find('atom:title', ns)
-                        summary_elem = entry.find('atom:summary', ns)
-                        
-                        title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
-                        abstract = summary_elem.text.strip() if summary_elem is not None and summary_elem.text else ""
-                        
-                        if title and abstract:
-                            text = f"Title: {title}\n\nAbstract: {abstract}"
-                            if len(text) > 200:
-                                f.write(text + '\n\n')
-                                count += 1
-                                
-                                # Print progress with remaining
-                                print_progress_with_remaining(count, max_samples, "papers", report_interval=50)
-                                
-                                if count >= max_samples:
-                                    break
+                        results, _ = future.result()
+                        if results is not None:
+                            batch_results.append((results, start_idx))
+                        elif results is None and len(batch_results) == 0:
+                            # No more results found
+                            print(f"\nNo more papers found (fetched {count} so far)")
+                            break
                     except Exception as e:
-                        continue
+                        print(f"Error processing batch starting at {start_idx}: {e}")
+            
+            # Sort results by start index to maintain order
+            batch_results.sort(key=lambda x: x[1])
+            
+            # Write results (thread-safe)
+            with file_lock:
+                for results, start_idx in batch_results:
+                    for text in results:
+                        if text and count < max_samples:
+                            f.write(text + '\n\n')
+                            count += 1
+                            
+                            # Print progress with remaining
+                            if count % 50 == 0:
+                                print_progress_with_remaining(count, max_samples, "papers", report_interval=50)
+                            
+                            if count >= max_samples:
+                                break
+                    
+                    if count >= max_samples:
+                        break
                 
-                start += batch_size
+                # Update start position
+                if batch_results:
+                    start = batch_results[-1][1] + batch_size
+                else:
+                    # No more results
+                    break
                 
                 # Print progress with remaining
                 print_progress_with_remaining(count, max_samples, "papers", report_interval=50)
                 
-                # Save checkpoint after each batch
+                # Save checkpoint after batches
                 save_checkpoint(category_key, {
                     'count': count,
                     'last_start': start,
                     'last_batch': start // batch_size
                 })
                 save_state(state)
-                
-                # Rate limiting - be polite to ArXiv API
-                time.sleep(3)  # 3 second delay between requests
                 
                 if count >= max_samples:
                     break
-                    
-            except Exception as e:
-                print(f"\nError fetching batch: {e}")
-                print(f"Progress saved: {count} papers, batch {start // batch_size}")
-                # Save checkpoint on error so we can resume
-                save_checkpoint(category_key, {
-                    'count': count,
-                    'last_start': start,
-                    'last_batch': start // batch_size
-                })
-                save_state(state)
+            
+            # Rate limiting with cooldown mechanism
+            # Adaptive delay based on recent errors/successes
+            time.sleep(cooldown_delay)
+            
+            # Check if we should break (no more results or reached max)
+            if not batch_results or count >= max_samples:
                 break
     
     # Only mark as downloaded if we reached max_samples
@@ -1125,418 +1131,6 @@ def download_arxiv_by_category(state, category, category_key, max_samples=100000
         print("   ArXiv API may have rate limits or data exhausted. You can resume by running the script again.")
     
     return True
-
-def download_pubmed(state, max_samples=500000):
-    """Download PubMed abstracts using PubMed API with fine-grained resuming"""
-    print("\n" + "="*60)
-    print("Downloading PubMed Abstracts")
-    print("="*60)
-    
-    if state["pubmed"]["downloaded"] and state["pubmed"]["samples"] >= max_samples:
-        print(f"PubMed already downloaded ({state['pubmed']['samples']:,} samples), skipping...")
-        return True
-    
-    import time
-    import xml.etree.ElementTree as ET
-    
-    output_file = "data/text/pubmed.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    # Load checkpoint
-    checkpoint = load_checkpoint("pubmed")
-    if checkpoint:
-        print(f"Resuming from checkpoint: batch {checkpoint.get('last_batch', 0)}, {checkpoint.get('count', 0)} abstracts")
-        count = checkpoint.get('count', 0)
-        start_index = checkpoint.get('last_id_index', 0)
-        id_list = checkpoint.get('id_list', [])
-        mode = 'a'  # Append mode
-        resume = True
-    else:
-        count = 0
-        start_index = 0
-        id_list = []
-        mode = 'w'  # Write mode
-        resume = False
-    
-    max_abstracts = max_samples
-    
-    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-    fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-    
-    print("Using PubMed API to fetch abstracts...")
-    print("This may take a while due to API rate limits...")
-    
-    # Get paper IDs if not resuming
-    if not resume or not id_list:
-        # Search for recent papers
-        search_params = {
-            "db": "pubmed",
-            "term": "2023:2024[PDAT]",  # Papers from 2023-2024
-            "retmax": 10000,  # Get up to 10k IDs per search
-            "retmode": "json"
-        }
-        
-        try:
-            response = requests.get(base_url, params=search_params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            id_list = data.get('esearchresult', {}).get('idlist', [])
-            print(f"Found {len(id_list)} papers. Fetching abstracts...")
-            
-            # Save ID list to checkpoint
-            save_checkpoint("pubmed", {
-                'id_list': id_list,
-                'count': 0,
-                'last_id_index': 0,
-                'last_batch': 0
-            })
-        except Exception as e:
-            print(f"ERROR getting paper IDs: {e}")
-            return False
-    else:
-        print(f"Resuming with {len(id_list)} paper IDs, starting from index {start_index}")
-    
-    batch_size = 100
-    
-    with open(output_file, mode, encoding='utf-8') as f:
-        try:
-            # Fetch in batches, starting from checkpoint
-            for i in range(start_index, min(len(id_list), max_abstracts), batch_size):
-                batch_ids = id_list[i:i+batch_size]
-                ids_str = ','.join(batch_ids)
-                
-                fetch_params = {
-                    "db": "pubmed",
-                    "id": ids_str,
-                    "retmode": "xml",
-                    "rettype": "abstract"
-                }
-                
-                try:
-                    response = requests.get(fetch_url, params=fetch_params, timeout=30)
-                    response.raise_for_status()
-                    
-                    # Parse XML
-                    root = ET.fromstring(response.content)
-                    for article in root.findall('.//PubmedArticle'):
-                        try:
-                            title_elem = article.find('.//ArticleTitle')
-                            abstract_elem = article.find('.//AbstractText')
-                            
-                            title = title_elem.text if title_elem is not None and title_elem.text else ""
-                            abstract = abstract_elem.text if abstract_elem is not None and abstract_elem.text else ""
-                            
-                            if title and abstract:
-                                text = f"Title: {title}\n\nAbstract: {abstract}"
-                                if len(text) > 100:
-                                    f.write(text + '\n\n')
-                                    count += 1
-                                    
-                                    # Print progress with remaining
-                                    print_progress_with_remaining(count, max_abstracts, "abstracts", report_interval=100)
-                                    
-                                    if count >= max_abstracts:
-                                        break
-                        except Exception as e:
-                            continue
-                    
-                    # Print progress with remaining
-                    print_progress_with_remaining(count, max_abstracts, "abstracts", report_interval=100)
-                    
-                    # Save checkpoint after each batch
-                    save_checkpoint("pubmed", {
-                        'id_list': id_list,
-                        'count': count,
-                        'last_id_index': i + batch_size,
-                        'last_batch': i // batch_size
-                    })
-                    save_state(state)
-                    
-                    # Rate limiting
-                    time.sleep(0.34)  # PubMed allows 3 requests/second
-                    
-                    if count >= max_abstracts:
-                        break
-                        
-                except Exception as e:
-                    print(f"Error fetching batch: {e}")
-                    # Save checkpoint on error
-                    save_checkpoint("pubmed", {
-                        'id_list': id_list,
-                        'count': count,
-                        'last_id_index': i,
-                        'last_batch': i // batch_size
-                    })
-                    save_state(state)
-                    continue
-                    
-        except Exception as e:
-            print(f"ERROR downloading PubMed: {e}")
-            import traceback
-            traceback.print_exc()
-            # Save checkpoint on error
-            save_checkpoint("pubmed", {
-                'id_list': id_list,
-                'count': count,
-                'last_id_index': start_index,
-                'last_batch': start_index // batch_size
-            })
-            save_state(state)
-            return False
-    
-    # Only mark as downloaded if we reached max_samples
-    if count >= max_samples:
-        state["pubmed"]["downloaded"] = True
-        state["pubmed"]["converted"] = True
-    state["pubmed"]["samples"] = count
-    save_state(state)
-    
-    # Clean up checkpoint file (only if reached max_samples)
-    checkpoint_file = "data/.checkpoint_pubmed.json"
-    if os.path.exists(checkpoint_file) and count >= max_samples:
-        os.remove(checkpoint_file)
-    
-    if count >= max_samples:
-        print(f"\n✓ Downloaded {count:,} PubMed abstracts to {output_file}")
-    else:
-        print(f"\n⚠ Downloaded {count:,} PubMed abstracts (target: {max_samples:,})")
-        print("   PubMed API may have rate limits or data exhausted. You can resume by running the script again.")
-    
-    return True
-
-def download_math_datasets(state, max_samples=100000):
-    """Download math problem datasets (GSM8K, MATH, etc.) from GitHub"""
-    print("\n" + "="*60)
-    print("Downloading Math Datasets")
-    print("="*60)
-    
-    if state["math_datasets"]["downloaded"] and state["math_datasets"]["samples"] >= max_samples:
-        print(f"Math datasets already downloaded ({state['math_datasets']['samples']:,} samples), skipping...")
-        return True
-    
-    output_file = "data/text/math_datasets.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    count = 0
-    
-    # GSM8K from GitHub
-    gsm8k_url = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl"
-    
-    print("Downloading GSM8K from GitHub...")
-    download_dir = "data/text_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    gsm8k_file = os.path.join(download_dir, "gsm8k.jsonl")
-    
-    # Load checkpoint for math datasets
-    checkpoint = load_checkpoint("math_datasets")
-    last_line_gsm8k = checkpoint.get('last_line_gsm8k', 0) if checkpoint else 0
-    catching_up_gsm8k = (last_line_gsm8k > 0)
-    
-    if catching_up_gsm8k:
-        print(f"Fast-forwarding through {last_line_gsm8k:,} already-processed GSM8K lines...")
-    
-    if download_file(gsm8k_url, gsm8k_file, resume=True):
-        with open(output_file, 'a' if catching_up_gsm8k else 'w', encoding='utf-8') as f:
-            with open(gsm8k_file, 'r', encoding='utf-8') as in_f:
-                line_num = 0
-                for line in tqdm(in_f, desc="Processing GSM8K"):
-                    line_num += 1
-                    
-                    # Fast-forward: skip already processed lines
-                    if catching_up_gsm8k and line_num <= last_line_gsm8k:
-                        if line_num % 10000 == 0:
-                            print(f"Fast-forward: {line_num:,} / {last_line_gsm8k:,} lines...")
-                        continue
-                    
-                    # We've caught up - start processing normally
-                    if catching_up_gsm8k and line_num > last_line_gsm8k:
-                        catching_up_gsm8k = False
-                        print(f"Caught up! Starting processing from line {line_num:,}...")
-                    
-                    try:
-                        item = json.loads(line.strip())
-                        question = item.get('question', '')
-                        answer = item.get('answer', '')
-                        
-                        if question and answer:
-                            text = f"Math Problem: {question}\n\nSolution: {answer}"
-                            if len(text) > 50:
-                                f.write(text + '\n\n')
-                                count += 1
-                                
-                                # Print progress with remaining
-                                print_progress_with_remaining(count, max_samples, "problems", report_interval=100)
-                                
-                                # Save checkpoint
-                                if count % 100 == 0:
-                                    save_checkpoint("math_datasets", {
-                                        'last_line_gsm8k': line_num,
-                                        'count': count
-                                    })
-                                
-                                if count >= max_samples:
-                                    break
-                    except Exception as e:
-                        continue
-    
-    # MATH competition dataset - download from GitHub
-    math_url = "https://raw.githubusercontent.com/hendrycks/math/main/data/math.json"
-    math_file = os.path.join(download_dir, "math.json")
-    
-    if download_file(math_url, math_file, resume=True) and count < max_samples:
-        print("Downloading MATH competition dataset...")
-        checkpoint_math = load_checkpoint("math_datasets")
-        last_idx_math = checkpoint_math.get('last_idx_math', 0) if checkpoint_math else 0
-        catching_up_math = (last_idx_math > 0)
-        
-        if catching_up_math:
-            print(f"Fast-forwarding through {last_idx_math:,} already-processed MATH items...")
-        
-        with open(output_file, 'a', encoding='utf-8') as f:
-            with open(math_file, 'r', encoding='utf-8') as in_f:
-                data = json.load(in_f)
-                for idx, item in enumerate(tqdm(data, desc="Processing MATH")):
-                    # Fast-forward: skip already processed items
-                    if catching_up_math and idx < last_idx_math:
-                        if idx % 10000 == 0:
-                            print(f"Fast-forward: {idx:,} / {last_idx_math:,} items...")
-                        continue
-                    
-                    # We've caught up - start processing normally
-                    if catching_up_math and idx >= last_idx_math:
-                        catching_up_math = False
-                        print(f"Caught up! Starting processing from item {idx:,}...")
-                    
-                    try:
-                        problem = item.get('problem', '')
-                        solution = item.get('solution', '')
-                        
-                        if problem and solution:
-                            text = f"Math Problem: {problem}\n\nSolution: {solution}"
-                            if len(text) > 50:
-                                f.write(text + '\n\n')
-                                count += 1
-                                
-                                # Print progress with remaining
-                                print_progress_with_remaining(count, max_samples, "problems", report_interval=100)
-                                
-                                # Save checkpoint
-                                if count % 100 == 0:
-                                    save_checkpoint("math_datasets", {
-                                        'last_line_gsm8k': last_line_gsm8k,
-                                        'last_idx_math': idx + 1,
-                                        'count': count
-                                    })
-                                
-                                if count >= max_samples:
-                                    break
-                    except Exception as e:
-                        continue
-    
-    # Only mark as downloaded if we reached max_samples
-    if count >= max_samples:
-        state["math_datasets"]["downloaded"] = True
-        state["math_datasets"]["converted"] = True
-    state["math_datasets"]["samples"] = count
-    save_state(state)
-    
-    if count >= max_samples:
-        print(f"\n✓ Downloaded {count:,} math problems to {output_file}")
-    else:
-        print(f"\n⚠ Downloaded {count:,} math problems (target: {max_samples:,})")
-        print("   Data source may be exhausted. You can resume by running the script again.")
-    
-    return True
-
-def download_scienceqa(state, max_samples=50000):
-    """Download ScienceQA dataset from GitHub"""
-    print("\n" + "="*60)
-    print("Downloading ScienceQA")
-    print("="*60)
-    
-    if state["scienceqa"]["downloaded"] and state["scienceqa"]["samples"] >= max_samples:
-        print(f"ScienceQA already downloaded ({state['scienceqa']['samples']:,} samples), skipping...")
-        return True
-    
-    # ScienceQA is on GitHub
-    scienceqa_url = "https://raw.githubusercontent.com/lil-lab/scienceqa/main/data/scienceqa/train.json"
-    
-    output_file = "data/text/scienceqa.txt"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    download_dir = "data/text_downloads"
-    os.makedirs(download_dir, exist_ok=True)
-    scienceqa_file = os.path.join(download_dir, "scienceqa.json")
-    
-    # Load checkpoint for ScienceQA
-    checkpoint = load_checkpoint("scienceqa")
-    last_idx = checkpoint.get('last_idx', 0) if checkpoint else 0
-    count = checkpoint.get('count', 0) if checkpoint else 0
-    catching_up = (last_idx > 0)
-    
-    if catching_up:
-        print(f"Resuming: Already have {count:,} samples, fast-forwarding through {last_idx:,} items...")
-    
-    if download_file(scienceqa_url, scienceqa_file, resume=True):
-        with open(output_file, 'a' if catching_up else 'w', encoding='utf-8') as f:
-            with open(scienceqa_file, 'r', encoding='utf-8') as in_f:
-                data = json.load(in_f)
-                for idx, item in enumerate(tqdm(data, desc="Processing ScienceQA")):
-                    # Fast-forward: skip already processed items
-                    if catching_up and idx < last_idx:
-                        if idx % 10000 == 0:
-                            print(f"Fast-forward: {idx:,} / {last_idx:,} items...")
-                        continue
-                    
-                    # We've caught up - start processing normally
-                    if catching_up and idx >= last_idx:
-                        catching_up = False
-                        print(f"Caught up! Starting processing from item {idx:,}...")
-                    try:
-                        question = item.get('question', '')
-                        choices = item.get('choices', {})
-                        answer = item.get('answer', '')
-                        explanation = item.get('explanation', '')
-                        
-                        if question:
-                            text_parts = [f"Question: {question}"]
-                            if choices:
-                                text_parts.append(f"Choices: {choices}")
-                            if answer:
-                                text_parts.append(f"Answer: {answer}")
-                            if explanation:
-                                text_parts.append(f"Explanation: {explanation}")
-                            
-                            text = '\n\n'.join(text_parts)
-                            if len(text) > 50:
-                                f.write(text + '\n\n')
-                                count += 1
-                                
-                                # Print progress with remaining
-                                print_progress_with_remaining(count, max_samples, "samples", report_interval=100)
-                                
-                                # Save checkpoint
-                                if count % 100 == 0:
-                                    save_checkpoint("scienceqa", {
-                                        'last_idx': idx + 1,
-                                        'count': count
-                                    })
-                                
-                                if count >= max_samples:
-                                    break
-                    except Exception as e:
-                        continue
-        
-        state["scienceqa"]["downloaded"] = True
-        state["scienceqa"]["converted"] = True
-        state["scienceqa"]["samples"] = count
-        save_state(state)
-        
-        print(f"\n✓ Downloaded {count:,} ScienceQA samples to {output_file}")
-        return True
-    else:
-        print("ERROR: Failed to download ScienceQA")
-        return False
 
 def _download_single_book(book_id, base_url, processed_books_set):
     """Download and process a single book. Returns (book_id, book_text, passage_count, success)"""
@@ -1779,17 +1373,11 @@ def combine_text_datasets():
         "data/text/wikipedia.txt",
         "data/text/books.txt",
         
-        # Conversations & Instruction Following
-        "data/text/alpaca.txt",
-        
         # Scientific Content
         "data/text/arxiv_physics.txt",
         "data/text/arxiv_chemistry.txt",
         "data/text/arxiv_math.txt",
-        "data/text/arxiv_biology.txt",
-        "data/text/pubmed.txt",
-        "data/text/math_datasets.txt",
-        "data/text/scienceqa.txt"
+        "data/text/arxiv_biology.txt"
     ]
     
     total_samples = 0
@@ -1815,10 +1403,8 @@ def main():
     parser = argparse.ArgumentParser(description="Download production-grade text datasets for μOmni")
     parser.add_argument("--dataset", 
                        choices=["all", "wikipedia", "books",
-                               "alpaca",
                                "arxiv_physics", "arxiv_chemistry", "arxiv_math", "arxiv_biology",
-                               "pubmed", "math_datasets", "scienceqa",
-                               "conversations", "scientific", "general"], 
+                               "scientific", "general"], 
                        default="all",
                        help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
@@ -1833,6 +1419,8 @@ def main():
                        help="Reset state and re-download everything")
     parser.add_argument("--max-samples", type=int, default=1000000,
                        help="Maximum number of samples per dataset (default: 1000000, combined total ~12M for all datasets)")
+    parser.add_argument("--parallel-datasets", action="store_true",
+                       help="Download multiple datasets in parallel (when using 'all' or multiple datasets)")
     
     args = parser.parse_args()
     
@@ -1870,11 +1458,6 @@ def main():
         if not args.skip_download:
             success = download_books(state, args.max_samples) and success
     
-    # Conversations & Instruction Following
-    if args.dataset in ["all", "alpaca", "conversations"]:
-        if not args.skip_download:
-            success = download_alpaca(state, args.max_samples) and success
-    
     # Scientific Content
     if args.dataset in ["all", "arxiv_physics", "scientific"]:
         if not args.skip_download:
@@ -1891,18 +1474,6 @@ def main():
     if args.dataset in ["all", "arxiv_biology", "scientific"]:
         if not args.skip_download:
             success = download_arxiv_by_category(state, "biology", "arxiv_biology", args.max_samples) and success
-    
-    if args.dataset in ["all", "pubmed", "scientific"]:
-        if not args.skip_download:
-            success = download_pubmed(state, args.max_samples) and success
-    
-    if args.dataset in ["all", "math_datasets", "scientific"]:
-        if not args.skip_download:
-            success = download_math_datasets(state, args.max_samples) and success
-    
-    if args.dataset in ["all", "scienceqa", "scientific"]:
-        if not args.skip_download:
-            success = download_scienceqa(state, args.max_samples) and success
     
     # Combine if requested
     if args.combine:
