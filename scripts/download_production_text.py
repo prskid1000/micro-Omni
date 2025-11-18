@@ -529,6 +529,15 @@ def convert_wikipedia_to_text(state, max_samples=1000000):
     extracted_dir = "data/text_downloads/wikipedia_extracted"
     output_file = "data/text/wikipedia.txt"
     
+    # Check if final output file already exists
+    if os.path.exists(output_file):
+        file_size = os.path.getsize(output_file)
+        if file_size > 0:
+            print(f"✓ Wikipedia text file already exists at {output_file} ({file_size / (1024*1024):.1f} MB)")
+            state["wikipedia"]["converted"] = True
+            save_state(state)
+            return True
+    
     if not os.path.exists(extracted_dir):
         print(f"ERROR: Extracted Wikipedia not found at {extracted_dir}")
         return False

@@ -38,10 +38,10 @@ pip install safetensors
 
 ### Usage
 
-Use the `merge_to_safetensors.py` script to combine all model components:
+Use the `export.py` script (in root directory) to combine all model components:
 
 ```bash
-python export/merge_to_safetensors.py \
+python export.py \
     --omni_ckpt checkpoints/omni_sft_tiny \
     --thinker_ckpt checkpoints/thinker_tiny \
     --audio_ckpt checkpoints/audio_enc_tiny \
@@ -154,14 +154,23 @@ merged_model/
 
 ## 🚀 Inference with Safetensors
 
-Use the `infer_safetensors.py` script to run inference with the merged model:
+Use the standalone `infer_standalone.py` script (included in export folder) to run inference:
 
 ```bash
-python export/infer_safetensors.py \
-    --model_dir merged_model \
-    --text "Hello, how are you?" \
-    --image path/to/image.jpg \
-    --audio_out output.wav
+cd merged_model
+pip install transformers safetensors sentencepiece torch
+python infer_standalone.py --text "Hello, how are you?"
+```
+
+Or use Hugging Face transformers library directly:
+
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from safetensors.torch import load_file
+
+tokenizer = AutoTokenizer.from_pretrained("merged_model")
+# Load model weights from safetensors
+state_dict = load_file("merged_model/model.safetensors")
 ```
 
 ### Arguments
@@ -179,29 +188,35 @@ python export/infer_safetensors.py \
 
 **Text-only chat:**
 ```bash
-python export/infer_safetensors.py --model_dir merged_model
+cd merged_model
+python infer_standalone.py --text "Your question here"
+```
+
+**Using transformers directly:**
+```bash
+python -c "from transformers import AutoTokenizer; tokenizer = AutoTokenizer.from_pretrained('merged_model'); print(tokenizer.encode('Hello'))"
 ```
 
 **Multimodal (image + text):**
 ```bash
-python export/infer_safetensors.py \
-    --model_dir merged_model \
+cd merged_model
+python infer_standalone.py \
     --image photo.jpg \
     --text "Describe this image"
 ```
 
 **Text-to-speech:**
 ```bash
-python export/infer_safetensors.py \
-    --model_dir merged_model \
+cd merged_model
+python infer_standalone.py \
     --text "Hello world" \
     --audio_out hello.wav
 ```
 
 **Audio input:**
 ```bash
-python export/infer_safetensors.py \
-    --model_dir merged_model \
+cd merged_model
+python infer_standalone.py \
     --audio_in speech.wav \
     --text "What did I say?"
 ```
@@ -318,7 +333,7 @@ else:
 ✅ **Single file deployment** - All weights in one safetensors file  
 ✅ **Automatic support files** - Configs and tokenizer copied automatically  
 ✅ **Hugging Face ready** - Direct upload support  
-✅ **Backward compatible** - Can still use original `infer_chat.py` with checkpoints  
+✅ **Standalone inference** - `infer_standalone.py` uses transformers library (no codebase needed)  
 ✅ **Production ready** - Secure, fast, cross-platform format
 
 ---

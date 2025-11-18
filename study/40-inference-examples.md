@@ -334,7 +334,7 @@ After training and testing, you may want to export your model for deployment:
 - **Export to safetensors**: See [Chapter 46: Model Export and Deployment](46-model-export-deployment.md)
 - **Quick export guide**: See [Chapter 47: Quick Start Export](47-quick-start-export.md)
 
-The exported model can be used with `infer_safetensors.py` which has the same interface as `infer_chat.py` but loads from a single safetensors file.
+The exported model can be used with `infer_standalone.py` (included in export folder) which uses Hugging Face transformers library and loads from a single safetensors file. No codebase required!
 
 ---
 

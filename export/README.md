@@ -1,32 +1,50 @@
-# μOmni Model Export Tools
+# μOmni Model Export Output
 
-This folder contains scripts for exporting trained μOmni models to safetensors format for deployment.
+**This folder is for the OUTPUT of model export - standalone safetensors files ready for upload and inference.**
 
-## Files
+## Purpose
 
-- **`merge_to_safetensors.py`** - Merges all model components into a single safetensors file
-- **`infer_safetensors.py`** - Inference script that loads from safetensors format
+After running the export scripts (located in the root directory), place the exported model here. This folder contains everything needed to:
+- Upload to Hugging Face Hub
+- Run inference without the full codebase
+- Share the model with others
+
+## Export Scripts (in root directory)
+
+- **`export.py`** - Merges all model components into a single safetensors file
+
+## Standalone Inference Script
+
+**`infer_standalone.py`** - Standalone inference using Hugging Face transformers library (included in this folder)
+
+This script can be used with just the exported model folder and transformers library. It uses transformers for tokenization and safetensors for model loading. No codebase required!
 
 ## Quick Start
 
-### 1. Export Model
+### 1. Export Model (run from root)
 
 ```bash
-python export/merge_to_safetensors.py \
+python export.py \
     --omni_ckpt checkpoints/omni_sft_tiny \
     --thinker_ckpt checkpoints/thinker_tiny \
     --audio_ckpt checkpoints/audio_enc_tiny \
     --vision_ckpt checkpoints/vision_tiny \
     --talker_ckpt checkpoints/talker_tiny \
-    --output_dir merged_model
+    --output_dir export
 ```
 
-### 2. Run Inference
+### 2. Run Inference (standalone - no codebase needed!)
 
 ```bash
-python export/infer_safetensors.py \
-    --model_dir merged_model \
-    --text "Hello, how are you?"
+cd export
+pip install transformers safetensors sentencepiece torch
+python infer_standalone.py --text "Hello, how are you?"
+```
+
+Or from anywhere:
+
+```bash
+python export/infer_standalone.py --model_dir export --text "Hello, how are you?"
 ```
 
 ## Documentation
@@ -47,6 +65,7 @@ The export script creates a complete model package with:
 - `tokenizer.model` - SentencePiece tokenizer
 - `configs/` - Component-specific configs
 - Optional: `hifigan.pt`, `ocr.pt`
+- `infer_standalone.py` - Standalone inference script (uses transformers library)
 
 ## Hugging Face Upload
 

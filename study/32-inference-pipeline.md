@@ -88,7 +88,7 @@ For deployment, you can export all components into a single safetensors file:
 - See [Chapter 46: Model Export and Deployment](46-model-export-deployment.md) for detailed export instructions
 - See [Chapter 47: Quick Start Export](47-quick-start-export.md) for a quick reference
 
-The exported model works with `infer_safetensors.py` which provides the same functionality as `infer_chat.py`.
+The exported model works with `infer_standalone.py` (included in export folder) which uses Hugging Face transformers library for standalone inference.
 
 ---
 

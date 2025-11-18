@@ -173,7 +173,7 @@ Once all stages are complete, you can export your trained model for deployment:
 
 ```bash
 # Export all components to safetensors
-python export/merge_to_safetensors.py \
+python export.py \
     --omni_ckpt checkpoints/omni_sft_tiny \
     --thinker_ckpt checkpoints/thinker_tiny \
     --audio_ckpt checkpoints/audio_enc_tiny \

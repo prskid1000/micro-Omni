@@ -297,10 +297,12 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
     if checkpoint:
         print(f"Resuming from checkpoint: {checkpoint.get('last_split', 'start')}")
         processed_splits = set(checkpoint.get('processed_splits', []))
-        rows = checkpoint.get('rows', [])
+        count = checkpoint.get('count', 0)  # Use count from checkpoint, not len(rows)
+        rows = []  # Don't load rows - they're already written to CSV
         mode = 'a'  # Append mode
     else:
         processed_splits = set()
+        count = 0
         rows = []
         mode = 'w'  # Write mode
     
@@ -375,50 +377,48 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
                                     # Use path relative to project root (include data/audio prefix)
                                     rel_path = os.path.relpath(str(flac_path), ".")
                                     writer.writerow({"wav": rel_path, "text": text})
-                                    rows.append({"wav": rel_path, "text": text})
+                                    count += 1  # Increment count (rows already written to CSV)
                                     
                                     # Save checkpoint every 1000 entries
-                                    if len(rows) % 1000 == 0:
+                                    if count % 1000 == 0:
                                         chapter_key = f"{split_name}/{speaker_dir.name}/{chapter_dir.name}"
                                         checkpoint_chapter[chapter_key] = line_num
                                         save_checkpoint("librispeech", {
                                             'processed_splits': list(processed_splits),
-                                            'rows': rows[-1000:],  # Keep last 1000 for reference
                                             'last_split': split_name,
                                             'last_chapter': checkpoint_chapter,
-                                            'count': len(rows)
+                                            'count': count  # Use count, not len(rows)
                                         })
                                         save_state(state)
                                     
                                     # Stop if we've reached sample limit
-                                    if len(rows) >= max_samples:
+                                    if count >= max_samples:
                                         print(f"\nReached sample limit ({max_samples:,}), stopping...")
                                         break
                                     
                                     # Print progress with remaining
-                                    if len(rows) % 1000 == 0:
-                                        print_progress_with_remaining(len(rows), max_samples, "samples", report_interval=1000)
+                                    if count % 1000 == 0:
+                                        print_progress_with_remaining(count, max_samples, "samples", report_interval=1000)
                         
-                        if len(rows) >= max_samples:
+                        if count >= max_samples:
                             break
                     
-                    if len(rows) >= max_samples:
+                    if count >= max_samples:
                         break
                 
-                if len(rows) >= max_samples:
+                if count >= max_samples:
                     break
             
             processed_splits.add(split_name)
             save_checkpoint("librispeech", {
                 'processed_splits': list(processed_splits),
-                'rows': [],
                 'last_split': split_name,
-                'count': len(rows)
+                'count': count  # Use count, not len(rows)
             })
             save_state(state)
     
     state["librispeech"]["converted"] = True
-    state["librispeech"]["samples"] = len(rows)
+    state["librispeech"]["samples"] = count
     save_state(state)
     
     # Clean up checkpoint file (state file only, actual data is never deleted)
@@ -426,7 +426,7 @@ def convert_librispeech_to_csv(state, max_samples=1000000):
     if os.path.exists(checkpoint_file):
         os.remove(checkpoint_file)
     
-    print(f"\n✓ Created ASR CSV with {len(rows):,} entries")
+    print(f"\n✓ Created ASR CSV with {count:,} entries")
     print(f"  Saved to: {output_file} (ready to use)")
     return True
 

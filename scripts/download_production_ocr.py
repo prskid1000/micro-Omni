@@ -118,29 +118,8 @@ def download_mjsynth(state, max_samples=1000000):
         print(f"MJSynth already downloaded and converted ({state['mjsynth']['samples']:,} samples), skipping...")
         return True
     
-    # MJSynth is available from multiple sources
-    # Using a publicly accessible mirror
-    base_url = "https://www.robots.ox.ac.uk/~vgg/data/text/"
-    download_dir = "data/ocr_downloads/mjsynth"
-    os.makedirs(download_dir, exist_ok=True)
-    
-    # MJSynth consists of multiple parts (we'll download a subset)
-    # Full dataset is ~10GB, we'll create a smaller subset for training
-    print("\nNote: MJSynth full dataset is large (~10GB).")
-    print("For production use, consider downloading from:")
-    print("  https://www.robots.ox.ac.uk/~vgg/data/text/")
-    print("\nCreating synthetic OCR dataset from available sources...")
-    
-    # For now, we'll create a placeholder that users can replace
-    # with actual MJSynth data if they download it manually
-    output_dir = "data/ocr/mjsynth"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Create a simple synthetic dataset generator
-    print("Generating synthetic OCR samples...")
-    output_csv = "data/ocr/mjsynth_ocr.csv"
-    
     # Check if we already have converted data
+    output_csv = "data/ocr/mjsynth_ocr.csv"
     if os.path.exists(output_csv) and state["mjsynth"]["converted"]:
         print("MJSynth CSV already exists, skipping conversion...")
         state["mjsynth"]["converted"] = True
@@ -149,26 +128,124 @@ def download_mjsynth(state, max_samples=1000000):
         save_state(state)
         return True
     
-    # Generate synthetic text images (placeholder - users should replace with real MJSynth)
-    print("\n⚠️  Placeholder: Creating sample structure.")
-    print("   For production, download MJSynth from:")
-    print("   https://www.robots.ox.ac.uk/~vgg/data/text/")
-    print("   Then update this script to process the actual data.\n")
+    # MJSynth direct download links (Synth90k dataset)
+    # Using publicly available mirrors
+    download_dir = "data/ocr_downloads/mjsynth"
+    os.makedirs(download_dir, exist_ok=True)
     
-    # Create empty CSV structure
-    with open(output_csv, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(["image", "text"])
-        # Add placeholder row
-        writer.writerow(["mjsynth/placeholder.jpg", "PLACEHOLDER"])
+    # MJSynth dataset parts - downloading annotation file and images
+    # Annotation file (small, contains all text labels)
+    annotation_url = "https://www.robots.ox.ac.uk/~vgg/data/text/mjsynth.tar.gz"
+    annotation_file = os.path.join(download_dir, "mjsynth.tar.gz")
     
-    state["mjsynth"]["downloaded"] = True
-    state["mjsynth"]["extracted"] = True
-    state["mjsynth"]["converted"] = True
-    state["mjsynth"]["samples"] = 0
-    save_state(state)
+    # Alternative: Direct link to annotation file if available
+    # If the main link doesn't work, we'll try alternative sources
+    alt_urls = [
+        "https://www.robots.ox.ac.uk/~vgg/data/text/mjsynth.tar.gz",
+        # Add more mirrors if needed
+    ]
     
-    print("✓ MJSynth placeholder created. Please download actual dataset and update script.")
+    if not state["mjsynth"]["downloaded"]:
+        print("Downloading MJSynth dataset...")
+        print(f"URL: {annotation_url}")
+        print("Note: This is a large dataset (~10GB). Download may take time.")
+        
+        downloaded = False
+        for url in alt_urls:
+            if download_file(url, annotation_file, resume=True):
+                downloaded = True
+                break
+        
+        if not downloaded:
+            print("⚠️  Failed to download MJSynth from direct links.")
+            print("   Please download manually from: https://www.robots.ox.ac.uk/~vgg/data/text/")
+            print("   Extract to: data/ocr_downloads/mjsynth/")
+            return False
+        
+        state["mjsynth"]["downloaded"] = True
+        save_state(state)
+        print("✓ MJSynth downloaded successfully")
+    
+    # Extract if needed
+    if not state["mjsynth"]["extracted"]:
+        print("Extracting MJSynth dataset...")
+        extract_dir = os.path.join(download_dir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        try:
+            if annotation_file.endswith('.tar.gz'):
+                with tarfile.open(annotation_file, 'r:gz') as tar:
+                    tar.extractall(extract_dir)
+            elif annotation_file.endswith('.zip'):
+                with zipfile.ZipFile(annotation_file, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+            
+            state["mjsynth"]["extracted"] = True
+            save_state(state)
+            print("✓ MJSynth extracted successfully")
+        except Exception as e:
+            print(f"ERROR extracting MJSynth: {e}")
+            return False
+    
+    # Convert to CSV format
+    if not state["mjsynth"]["converted"]:
+        print("Converting MJSynth to CSV format...")
+        extract_dir = os.path.join(download_dir, "extracted")
+        output_dir = "data/ocr/mjsynth"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Find annotation files (typically annotation.txt or similar)
+        annotation_files = list(Path(extract_dir).rglob("*.txt"))
+        annotation_files.extend(list(Path(extract_dir).rglob("annotation*")))
+        
+        samples = []
+        for ann_file in annotation_files[:1]:  # Use first annotation file found
+            print(f"Processing annotation file: {ann_file}")
+            with open(ann_file, 'r', encoding='utf-8') as f:
+                for line in tqdm(f, desc="Reading annotations"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # MJSynth format: path/to/image.jpg "text"
+                    # Or: path/to/image.jpg text
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        img_path = parts[0]
+                        # Remove quotes if present
+                        text = ' '.join(parts[1:]).strip('"\'')
+                        
+                        # Find actual image file
+                        img_full_path = Path(extract_dir) / img_path
+                        if img_full_path.exists():
+                            # Copy image to output directory
+                            rel_path = os.path.relpath(img_full_path, extract_dir)
+                            dst_img = os.path.join(output_dir, rel_path)
+                            os.makedirs(os.path.dirname(dst_img), exist_ok=True)
+                            if not os.path.exists(dst_img):
+                                shutil.copy2(img_full_path, dst_img)
+                            
+                            samples.append({
+                                "image": f"mjsynth/{rel_path}",
+                                "text": text
+                            })
+                            
+                            if len(samples) >= max_samples:
+                                break
+        
+        # Write CSV
+        with open(output_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["image", "text"])
+            for sample in samples:
+                writer.writerow([sample["image"], sample["text"]])
+        
+        state["mjsynth"]["converted"] = True
+        state["mjsynth"]["samples"] = len(samples)
+        save_state(state)
+        
+        print(f"✓ Created MJSynth CSV with {len(samples):,} samples")
+    
     return True
 
 def download_textocr(state, max_samples=1000000):
@@ -181,87 +258,163 @@ def download_textocr(state, max_samples=1000000):
         print(f"TextOCR already downloaded and converted ({state['textocr']['samples']:,} samples), skipping...")
         return True
     
-    # TextOCR is available from Google Research
-    # https://textvqa.org/textocr/dataset
-    print("\nTextOCR dataset information:")
-    print("  Source: https://textvqa.org/textocr/dataset")
-    print("  Size: ~5GB (images + annotations)")
-    print("  Format: Images with text annotations")
-    print("\n⚠️  TextOCR requires manual download from:")
-    print("   https://textvqa.org/textocr/dataset")
-    print("   After downloading, extract to: data/ocr_downloads/textocr/")
-    print("   Then run this script again to convert to CSV format.\n")
+    # Check if we already have converted data
+    output_csv = "data/ocr/textocr_ocr.csv"
+    if os.path.exists(output_csv) and state["textocr"]["converted"]:
+        print("TextOCR CSV already exists, skipping conversion...")
+        state["textocr"]["converted"] = True
+        with open(output_csv, 'r') as f:
+            state["textocr"]["samples"] = sum(1 for _ in f) - 1  # Subtract header
+        save_state(state)
+        return True
     
-    # Check if user has manually downloaded TextOCR
-    textocr_dir = "data/ocr_downloads/textocr"
-    if os.path.exists(textocr_dir):
-        # Look for annotation files
-        ann_files = list(Path(textocr_dir).glob("*.json"))
-        if ann_files:
-            print(f"Found TextOCR annotations: {ann_files[0]}")
-            # Process TextOCR annotations
-            output_csv = "data/ocr/textocr_ocr.csv"
-            output_dir = "data/ocr/textocr"
-            os.makedirs(output_dir, exist_ok=True)
-            
-            print("Converting TextOCR to CSV format...")
-            with open(ann_files[0], 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # TextOCR format: {"images": [...], "annotations": [...]}
-            images_dict = {}
-            if "images" in data:
-                for img in data["images"]:
-                    images_dict[img["id"]] = img
-            
-            annotations = []
-            if "annotations" in data:
-                for ann in tqdm(data["annotations"], desc="Processing TextOCR"):
-                    if ann.get("image_id") in images_dict:
-                        img_info = images_dict[ann["image_id"]]
-                        img_path = img_info.get("file_name", f"{ann['image_id']}.jpg")
-                        text = ann.get("utf8_string", "")
-                        
-                        if text and img_path:
-                            # Copy image if needed
-                            src_img = os.path.join(textocr_dir, "images", img_path)
-                            if os.path.exists(src_img):
-                                dst_img = os.path.join(output_dir, img_path)
-                                os.makedirs(os.path.dirname(dst_img), exist_ok=True)
-                                if not os.path.exists(dst_img):
-                                    shutil.copy2(src_img, dst_img)
-                                
-                                annotations.append({
-                                    "image": f"textocr/{img_path}",
-                                    "text": text
-                                })
-                                
-                                if len(annotations) >= max_samples:
-                                    break
-            
-            # Write CSV
-            with open(output_csv, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(["image", "text"])
-                for ann in annotations:
-                    writer.writerow([ann["image"], ann["text"]])
-            
-            state["textocr"]["downloaded"] = True
-            state["textocr"]["extracted"] = True
-            state["textocr"]["converted"] = True
-            state["textocr"]["samples"] = len(annotations)
-            save_state(state)
-            
-            print(f"✓ Created TextOCR CSV with {len(annotations):,} samples")
-            return True
+    download_dir = "data/ocr_downloads/textocr"
+    os.makedirs(download_dir, exist_ok=True)
+    
+    # TextOCR direct download links (Google Cloud Storage)
+    # Annotation file
+    annotation_url = "https://dl.fbaipublicfiles.com/textvqa/data/textocr/TextOCR_0.1_train.json"
+    annotation_file = os.path.join(download_dir, "TextOCR_train.json")
+    
+    # Alternative URLs (try multiple sources)
+    alt_annotation_urls = [
+        "https://dl.fbaipublicfiles.com/textvqa/data/textocr/TextOCR_0.1_train.json",
+        "https://textvqa.org/textocr/dataset",
+    ]
+    
+    # Download annotation file
+    if not state["textocr"]["downloaded"]:
+        print("Downloading TextOCR annotation file...")
+        print(f"URL: {annotation_url}")
+        
+        downloaded = False
+        for url in alt_annotation_urls:
+            try:
+                if download_file(url, annotation_file, resume=True):
+                    downloaded = True
+                    break
+            except:
+                continue
+        
+        if not downloaded:
+            # Try to download images zip if available
+            images_url = "https://dl.fbaipublicfiles.com/textvqa/data/textocr/TextOCR_0.1_train.zip"
+            images_file = os.path.join(download_dir, "TextOCR_images.zip")
+            print("Trying to download images archive...")
+            if download_file(images_url, images_file, resume=True):
+                state["textocr"]["downloaded"] = True
+                state["textocr"]["extracted"] = False  # Will extract next
+                save_state(state)
+            else:
+                print("⚠️  Failed to download TextOCR from direct links.")
+                print("   Please download manually from: https://textvqa.org/textocr/dataset")
+                print("   Extract to: data/ocr_downloads/textocr/")
+                return False
         else:
-            print("⚠️  TextOCR directory exists but no annotation files found.")
-            print("   Expected format: JSON file with 'images' and 'annotations' keys.")
+            state["textocr"]["downloaded"] = True
+            save_state(state)
+            print("✓ TextOCR annotation file downloaded")
+    
+    # Extract images if we have a zip file
+    textocr_dir = download_dir
+    images_zip = os.path.join(download_dir, "TextOCR_0.1_train.zip")
+    if os.path.exists(images_zip) and not state["textocr"]["extracted"]:
+        print("Extracting TextOCR images...")
+        extract_dir = os.path.join(download_dir, "images")
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        try:
+            with zipfile.ZipFile(images_zip, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            state["textocr"]["extracted"] = True
+            save_state(state)
+            print("✓ TextOCR images extracted")
+        except Exception as e:
+            print(f"ERROR extracting TextOCR: {e}")
+            # Continue anyway - might have images already
+    
+    # Convert to CSV format
+    if not state["textocr"]["converted"]:
+        print("Converting TextOCR to CSV format...")
+        output_dir = "data/ocr/textocr"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Look for annotation files
+        ann_files = []
+        if os.path.exists(annotation_file):
+            ann_files.append(annotation_file)
+        ann_files.extend(list(Path(textocr_dir).glob("*.json")))
+        
+        if not ann_files:
+            print("⚠️  TextOCR annotation file not found.")
+            print("   Expected: TextOCR_0.1_train.json or similar JSON file")
             return False
-    else:
-        print("⚠️  TextOCR not found. Please download manually and extract to:")
-        print(f"   {textocr_dir}")
-        return False
+        
+        ann_file = ann_files[0]
+        print(f"Processing annotation file: {ann_file}")
+        
+        with open(ann_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # TextOCR format: {"images": [...], "annotations": [...]}
+        images_dict = {}
+        if "images" in data:
+            for img in data["images"]:
+                images_dict[img["id"]] = img
+        
+        annotations = []
+        images_dir = os.path.join(textocr_dir, "images")
+        if not os.path.exists(images_dir):
+            images_dir = textocr_dir  # Fallback
+        
+        if "annotations" in data:
+            for ann in tqdm(data["annotations"], desc="Processing TextOCR"):
+                if ann.get("image_id") in images_dict:
+                    img_info = images_dict[ann["image_id"]]
+                    img_path = img_info.get("file_name", f"{ann['image_id']}.jpg")
+                    text = ann.get("utf8_string", "")
+                    
+                    if text and img_path:
+                        # Find image file
+                        src_img = os.path.join(images_dir, img_path)
+                        if not os.path.exists(src_img):
+                            # Try alternative paths
+                            for alt_path in [img_path, f"train_{img_path}", os.path.basename(img_path)]:
+                                alt_src = os.path.join(images_dir, alt_path)
+                                if os.path.exists(alt_src):
+                                    src_img = alt_src
+                                    img_path = alt_path
+                                    break
+                        
+                        if os.path.exists(src_img):
+                            # Copy image to output directory
+                            dst_img = os.path.join(output_dir, os.path.basename(img_path))
+                            os.makedirs(os.path.dirname(dst_img), exist_ok=True)
+                            if not os.path.exists(dst_img):
+                                shutil.copy2(src_img, dst_img)
+                            
+                            annotations.append({
+                                "image": f"textocr/{os.path.basename(img_path)}",
+                                "text": text
+                            })
+                            
+                            if len(annotations) >= max_samples:
+                                break
+        
+        # Write CSV
+        with open(output_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["image", "text"])
+            for ann in annotations:
+                writer.writerow([ann["image"], ann["text"]])
+        
+        state["textocr"]["converted"] = True
+        state["textocr"]["samples"] = len(annotations)
+        save_state(state)
+        
+        print(f"✓ Created TextOCR CSV with {len(annotations):,} samples")
+    
+    return True
 
 def combine_ocr_csvs():
     """Combine all OCR CSV files into one production file"""
@@ -353,14 +506,12 @@ def main():
         print("  - Individual datasets: data/ocr/*_ocr.csv")
         if os.path.exists("data/ocr/production_ocr.csv"):
             print("  - Combined OCR: data/ocr/production_ocr.csv")
-        print("\nNote: Some OCR datasets require manual download.")
-        print("See script output above for download instructions.")
     
     if success:
         print("\n✓ OCR dataset download complete!")
     else:
-        print("\n⚠️  Some datasets may require manual download.")
-        print("   See instructions above for details.")
+        print("\n⚠️  Some datasets failed to download.")
+        print("   Check the error messages above for details.")
 
 if __name__ == "__main__":
     main()

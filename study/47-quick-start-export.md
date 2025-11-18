@@ -13,7 +13,7 @@ A concise guide to exporting your trained μOmni model for deployment.
 ## Step 1: Merge All Components
 
 ```bash
-python export/merge_to_safetensors.py \
+python export.py \
     --omni_ckpt checkpoints/omni_sft_tiny \
     --thinker_ckpt checkpoints/thinker_tiny \
     --audio_ckpt checkpoints/audio_enc_tiny \
@@ -34,9 +34,9 @@ This creates:
 ## Step 2: Test Inference
 
 ```bash
-python export/infer_safetensors.py \
-    --model_dir merged_model \
-    --text "Hello, how are you?"
+cd merged_model
+pip install transformers safetensors sentencepiece torch
+python infer_standalone.py --text "Hello, how are you?"
 ```
 
 ---
@@ -81,7 +81,7 @@ All components are merged with prefixed keys:
 
 ✅ **All components optional** - Script handles missing components gracefully  
 ✅ **Automatic copying** - Support files copied automatically  
-✅ **Same interface** - `infer_safetensors.py` works like `infer_chat.py`  
+✅ **Standalone inference** - `infer_standalone.py` uses transformers library (no codebase needed)  
 ✅ **Production ready** - Safetensors format is secure and efficient
 
 ---
