@@ -16,11 +16,12 @@ class BPETokenizer:
             out_model: Output model path
             vocab_size: Vocabulary size
             max_sentence_length: Maximum sentence length in bytes (default: 100000)
-        """
+        """  
         spm.SentencePieceTrainer.train(
             input=text_path, model_prefix=out_model.replace('.model',''),
             vocab_size=vocab_size, model_type='bpe', character_coverage=1.0,
-            max_sentence_length=max_sentence_length)
+            max_sentence_length=max_sentence_length,
+            train_extremely_large_corpus=True)
         return cls(out_model)
 
     def encode(self, text):

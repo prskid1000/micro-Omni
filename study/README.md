@@ -88,8 +88,8 @@ Each chapter includes:
 
 **Memory Efficiency:**
 - ✅ **Lazy dataset loading** - All training scripts use file offset indexing (90%+ RAM reduction)
-- ✅ **Efficient tokenizer training** - SentencePiece handles large files directly (no temp files for plain text)
-- ✅ **Smart temp file usage** - Only used for CSV/JSON text extraction, stored in `data/.temp/` and auto-cleaned
+- ✅ **Efficient tokenizer training** - Plain text passed directly to SentencePiece. CSV/JSON streams text extraction to temp file.
+- ✅ **Smart temp file usage** - Only used for CSV/JSON text extraction (streams extraction), stored in `data/.temp/` and auto-cleaned
 - ✅ **Resumable preprocessing** - Vocabulary building and token counting can resume if interrupted
 - ✅ **Automatic checkpointing** - Progress saved every 10K items for safe resumption
 

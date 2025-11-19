@@ -48,8 +48,8 @@ python scripts/download_production_text.py --dataset general --combine
 - ✅ Diverse knowledge: General
 - ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~2M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
-- ✅ **Memory-efficient:** SentencePiece handles large files directly (no temp files for plain text)
-- ✅ **Temp files:** Only used for CSV/JSON extraction, stored in `data/.temp/` and auto-cleaned
+- ✅ **Plain text:** Passed directly to SentencePiece (no streaming, no temp files)
+- ✅ **CSV/JSON:** Streams text extraction to temp file (streams row-by-row/item-by-item), stored in `data/.temp/` and auto-cleaned
 - ✅ **Resumable:** All preprocessing operations can resume if interrupted
 
 ---

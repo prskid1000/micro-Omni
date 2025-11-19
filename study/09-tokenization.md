@@ -439,23 +439,27 @@ ar_tokens = tokenizer.encode("مرحبا")
 ## 💻 Training Your Own Tokenizer
 
 ```python
-import sentencepiece as spm
+from omni.tokenizer import BPETokenizer
 
-# Train BPE tokenizer
-spm.SentencePieceTrainer.train(
-    input='corpus.txt',           # Training text
-    model_prefix='tokenizer',     # Output prefix
-    vocab_size=5000,              # Desired vocabulary size
-    model_type='bpe',             # BPE algorithm
-    character_coverage=0.9995,    # Character coverage
-    pad_id=0,                     # Padding token ID
-    bos_id=1,                     # BOS token ID
-    eos_id=2,                     # EOS token ID
-    unk_id=3                      # Unknown token ID
+# Train BPE tokenizer (μOmni's implementation)
+tokenizer = BPETokenizer.train_new(
+    text_path='corpus.txt',           # Training text file
+    out_model='tokenizer.model',      # Output model path
+    vocab_size=32000,                 # Vocabulary size
+    max_sentence_length=100000        # Max sentence length in bytes
 )
 
-# Output: tokenizer.model, tokenizer.vocab
+# The train_new method automatically:
+# - Enables train_extremely_large_corpus=True (64-bit indexing for files > 2GB)
+# - Uses BPE algorithm with character_coverage=1.0
+# - Handles files of any size (no file size checking or streaming)
 ```
+
+**Key Implementation Details:**
+- ✅ **Always enables `train_extremely_large_corpus`:** Uses 64-bit indexing instead of 32-bit, allowing training on files > 2GB
+- ✅ **No file size limits:** Removed file size checking - works with files of any size
+- ✅ **No streaming:** Files are passed directly to SentencePiece (which loads entire file into memory)
+- ⚠️ **Memory note:** SentencePiece loads the entire file into RAM during training, regardless of size
 
 ---
 

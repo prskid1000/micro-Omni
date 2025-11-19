@@ -52,7 +52,7 @@ def count_text_samples(text_path: str) -> int:
     return count
 
 def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None) -> BPETokenizer:
-    """Get existing tokenizer or create one from text data (SentencePiece handles large files efficiently)"""
+    """Get existing tokenizer or create one from text data"""
     # Try to find existing tokenizer
     tokenizer_candidates = [
         tokenizer_path,  # Explicitly provided
@@ -72,7 +72,6 @@ def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None
     os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
     tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
     
-    # SentencePiece can handle large files directly - no temp file needed for plain text
     print(f"  Training tokenizer on entire corpus...")
     BPETokenizer.train_new(text_path, tokenizer_model, vocab_size=32000)
     print(f"  ✓ Tokenizer created: {tokenizer_model}")

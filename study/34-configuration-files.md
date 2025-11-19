@@ -133,8 +133,8 @@ python scripts/update_configs_from_data.py --dry-run
 - **Important:** For vision/audio/talker/OCR, token counts are shown for reference only. Step calculation uses sample counts.
 
 **Memory-efficient processing:**
-- Tokenizer training: SentencePiece handles large files directly (no temp files for plain text)
-- Temp files: Only used for CSV/JSON text extraction, stored in `data/.temp/` and auto-cleaned
+- Tokenizer training: Plain text passed directly to SentencePiece (no streaming). CSV/JSON streams text extraction to temp file.
+- Temp files: Only used for CSV/JSON text extraction (streams extraction), stored in `data/.temp/` and auto-cleaned
 - Token counting processes files line-by-line with automatic resume support
 - All operations are resumable - if interrupted, will continue from last checkpoint
 - Checkpoints saved every 10K samples/lines for safe resumption

@@ -56,7 +56,6 @@ def main(cfg):
     spm_model = os.path.join(cfg["save_dir"], "tokenizer.model")
     if not os.path.exists(spm_model):
         print(f"Creating tokenizer from {cfg['train_text']}...")
-        # SentencePiece can handle large files directly - no temp file needed
         print(f"  Training tokenizer on entire corpus...")
         BPETokenizer.train_new(cfg["train_text"], spm_model, vocab_size=cfg["vocab_size"])
         print(f"✓ Tokenizer created: {spm_model}")

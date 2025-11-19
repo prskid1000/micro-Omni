@@ -188,20 +188,22 @@ self.item_lengths = []  # 8 bytes per length
 
 ### 2. Efficient Tokenizer Training
 
-**What:** Train tokenizers on entire dataset without loading into memory  
-**Benefit:** Train on full dataset without memory limits
+**What:** Train tokenizers on entire dataset efficiently  
+**Benefit:** Train on full dataset with optimized settings
 
 **Implementation:**
-- **Plain text files:** SentencePiece reads files directly (no temp files needed)
-- **CSV/JSON files:** Extract text to temp file in `data/.temp/` (only when needed)
+- **Plain text files:** Passed directly to SentencePiece (no streaming, no temp files)
+- **CSV/JSON files:** Stream extraction to temp file in `data/.temp/` (streams row-by-row/item-by-item to extract text)
 - Processes entire dataset (not just samples) efficiently
 - Temporary files auto-cleaned after training
+- **Always enables `train_extremely_large_corpus=True`:** Uses 64-bit indexing for maximum file size compatibility
 
-**Memory Savings:**
-- **Before:** Loaded entire corpus into memory (could be GB for large datasets)
-- **After:** SentencePiece handles large files directly, no unnecessary copying
-- **Result:** Can train tokenizers on datasets of any size without OOM
-- **Temp files:** Only used for CSV/JSON text extraction, stored in `data/.temp/`
+**Memory Behavior:**
+- **Plain text:** SentencePiece loads entire file into memory during training (no streaming)
+- **CSV/JSON extraction:** Streams data extraction (avoids loading structured data into memory), but SentencePiece still loads the extracted temp file into memory
+- **Temp files:** Only used for CSV/JSON text extraction, stored in `data/.temp/` and auto-cleaned
+
+**Note:** SentencePiece loads the entire file into memory during training (whether original or extracted temp file). The `train_extremely_large_corpus` flag enables 64-bit indexing (instead of 32-bit) to handle files > 2GB, but doesn't reduce memory usage. Streaming is only used for extracting text from CSV/JSON structured data.
 
 ### 3. Resumable Preprocessing
 
