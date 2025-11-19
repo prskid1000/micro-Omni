@@ -7,7 +7,7 @@ class BPETokenizer:
         self.sp = spm.SentencePieceProcessor(model_file=model_path)
 
     @classmethod
-    def train_new(cls, text_path, out_model, vocab_size=32000, max_sentence_length=100000, input_sentence_size=10000000):
+    def train_new(cls, text_path, out_model, vocab_size=32000, max_sentence_length=100000, input_sentence_size=100000000):
         """
         Train a new BPE tokenizer.
         
