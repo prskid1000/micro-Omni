@@ -81,18 +81,57 @@ class OCRDataset(Dataset):
                 offset += len(line_bytes)
     
     def _build_vocab(self, csv_path):
-        """Build character vocabulary from all texts in CSV"""
-        print("Building character vocabulary from OCR dataset...")
+        """Build character vocabulary from all texts in CSV (resumable, processes in chunks)"""
+        # Check for existing vocabulary checkpoint (resumable)
+        checkpoint_path = f"{csv_path}.vocab_checkpoint.json"
         chars = set()
+        start_row = 0
         
-        # First pass: collect all characters
+        if os.path.exists(checkpoint_path):
+            print("Found vocabulary checkpoint, resuming from checkpoint...")
+            try:
+                checkpoint_data = json.load(open(checkpoint_path, 'r'))
+                chars = set(checkpoint_data.get("chars", []))
+                start_row = checkpoint_data.get("last_processed_row", 0)
+                print(f"  Resuming from row {start_row:,}")
+            except Exception as e:
+                print(f"  Warning: Could not load checkpoint: {e}, starting from beginning")
+                chars = set()
+                start_row = 0
+        
+        if start_row == 0:
+            print("Building character vocabulary from OCR dataset (processing in chunks, resumable)...")
+        
+        # Build row offset index first (if not already done)
+        row_offsets = []
         with open(csv_path, 'rb') as f:
             header = f.readline()
             fieldnames = header.decode('utf-8').strip().split(',')
+            offset = f.tell()
             while True:
+                line_start = offset
                 line_bytes = f.readline()
                 if not line_bytes:
                     break
+                try:
+                    decoded = line_bytes.decode('utf-8').strip()
+                    if decoded:
+                        row_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    pass
+                offset += len(line_bytes)
+        
+        # Process rows in chunks (resumable)
+        checkpoint_freq = 10000  # Save checkpoint every N rows
+        total_rows = len(row_offsets)
+        
+        with open(csv_path, 'rb') as f:
+            header = f.readline()
+            fieldnames = header.decode('utf-8').strip().split(',')
+            
+            for row_idx, row_start in enumerate(row_offsets[start_row:], start_row):
+                f.seek(row_start)
+                line_bytes = f.readline()
                 try:
                     line = line_bytes.decode('utf-8').strip()
                     import io
@@ -102,6 +141,32 @@ class OCRDataset(Dataset):
                     chars.update(text)
                 except:
                     pass
+                
+                # Save checkpoint periodically (resumable)
+                if (row_idx + 1) % checkpoint_freq == 0:
+                    try:
+                        checkpoint_data = {
+                            "chars": list(chars),
+                            "last_processed_row": row_idx + 1
+                        }
+                        json.dump(checkpoint_data, open(checkpoint_path, 'w'))
+                        print(f"  Checkpoint saved: processed {row_idx+1:,}/{total_rows:,} rows...")
+                    except Exception as e:
+                        print(f"  Warning: Could not save checkpoint: {e}")
+                
+                # Progress indicator
+                if (row_idx + 1) % 10000 == 0:
+                    print(f"  Processed {row_idx+1:,}/{total_rows:,} rows...")
+        
+        # Final checkpoint save
+        try:
+            checkpoint_data = {
+                "chars": list(chars),
+                "last_processed_row": total_rows
+            }
+            json.dump(checkpoint_data, open(checkpoint_path, 'w'))
+        except:
+            pass
         
         # Build vocabulary (0 = PAD/BLANK, 1 = BOS, 2 = EOS)
         self.char_to_idx = {'<PAD>': 0, '<BOS>': 1, '<EOS>': 2, '<UNK>': 3}
@@ -115,6 +180,13 @@ class OCRDataset(Dataset):
                 self.idx_to_char[idx] = char
         
         print(f"Vocabulary size: {len(self.char_to_idx)} characters")
+        
+        # Clean up checkpoint after successful completion
+        if os.path.exists(checkpoint_path):
+            try:
+                os.remove(checkpoint_path)
+            except:
+                pass
     
     def __len__(self):
         return len(self.row_offsets)

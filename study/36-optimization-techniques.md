@@ -186,12 +186,45 @@ self.item_lengths = []  # 8 bytes per length
 - ✅ Robust fallback for malformed JSON files
 - ✅ Maintains same training speed (minimal I/O overhead)
 
+### 2. Chunked Tokenizer Training
+
+**What:** Stream entire corpus in chunks for tokenizer training  
+**Benefit:** Train on full dataset without loading entire file into memory
+
+**Implementation:**
+- Tokenizer training streams corpus line-by-line to temporary file
+- Processes entire dataset (not just samples) in memory-efficient chunks
+- SentencePiece trains on streamed file (handles large files efficiently)
+- Temporary files cleaned up after training
+
+**Memory Savings:**
+- **Before:** Loaded entire corpus into memory (could be GB for large datasets)
+- **After:** Streams in chunks (~100MB at a time), processes entire dataset
+- **Result:** Can train tokenizers on datasets of any size without OOM
+
+### 3. Resumable Preprocessing
+
+**What:** All preprocessing operations can resume if interrupted  
+**Benefit:** No need to restart from beginning if process is stopped
+
+**Resumable Operations:**
+- ✅ **Tokenizer training:** Streaming phase is resumable (training must restart if interrupted)
+- ✅ **Vocabulary building:** Saves progress every 10K items (vision, OCR)
+- ✅ **Token counting:** Saves progress every 10K samples (text, CSV, images)
+- ✅ **Training loops:** Already resumable via checkpoints
+
+**Checkpoint Locations:**
+- Vocabulary building: `{save_dir}/vocab_build_checkpoint.json`
+- Token counting: `{file_path}.token_count_checkpoint.json`
+- OCR vocabulary: `{csv_path}.vocab_checkpoint.json`
+- All checkpoints auto-cleaned after successful completion
+
 **Related Optimizations:**
 - Removed `gc.collect()` calls (Python's GC handles this automatically)
 - Removed `torch.cuda.empty_cache()` calls (PyTorch manages CUDA memory efficiently)
 - These manual calls were unnecessary and could actually hurt performance
 
-### 2. DataLoader Workers
+### 4. DataLoader Workers
 
 **What:** Parallel data loading processes  
 **Trade-off:** More workers = faster loading but more RAM
@@ -208,7 +241,7 @@ self.item_lengths = []  # 8 bytes per length
 - **Medium RAM (16GB)**: `num_workers: 1-2`
 - **Low RAM (8GB)**: `num_workers: 0-1`
 
-### 3. Batch Size Tuning
+### 5. Batch Size Tuning
 
 **What:** Adjust batch size based on available memory  
 **Benefit:** Maximize GPU utilization without OOM
@@ -234,6 +267,8 @@ self.item_lengths = []  # 8 bytes per length
 ✅ **Use Flash Attention** if available  
 ✅ **Gradient accumulation** for large batches  
 ✅ **Lazy loading enabled** by default (no action needed)  
+✅ **Chunked tokenizer training** - automatically streams entire corpus  
+✅ **Resumable preprocessing** - safe to interrupt and resume  
 ✅ **Monitor GPU memory** with `nvidia-smi`  
 ✅ **Monitor RAM usage** - should be much lower than VRAM now  
 ✅ **Reduce num_workers** if RAM is limited

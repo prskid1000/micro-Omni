@@ -84,6 +84,19 @@ Each chapter includes:
 - **💡 Key Takeaways**: Summary of main concepts
 - **⚡ Pro Tips**: Advanced insights and best practices
 
+## 🚀 Recent Optimizations (2024)
+
+**Memory Efficiency:**
+- ✅ **Lazy dataset loading** - All training scripts use file offset indexing (90%+ RAM reduction)
+- ✅ **Chunked tokenizer training** - Streams entire corpus in chunks (no memory limits)
+- ✅ **Resumable preprocessing** - Vocabulary building and token counting can resume if interrupted
+- ✅ **Automatic checkpointing** - Progress saved every 10K items for safe resumption
+
+**Performance:**
+- ✅ **Training loops** - All scripts support resumable training with checkpoints
+- ✅ **Mixed precision** - FP16 enabled by default for 2x speedup
+- ✅ **Gradient accumulation** - Automatic adjustment based on model size
+
 ---
 
 ## 🔗 Related Resources

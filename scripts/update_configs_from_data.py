@@ -6,6 +6,8 @@ Analyzes data folders and adjusts epochs, max_steps, warmup, and other parameter
 import os
 import json
 import csv
+import io
+import tempfile
 import argparse
 from typing import Dict, Tuple, Optional
 
@@ -49,8 +51,48 @@ def count_text_samples(text_path: str) -> int:
         print(f"Warning: Could not count text samples from {text_path}: {e}")
     return count
 
+def stream_text_file(text_path: str, chunk_size_mb: int = 100) -> str:
+    """
+    Stream entire text file in chunks to a temporary file (memory efficient).
+    Processes the entire corpus without loading it all into memory.
+    Returns path to temporary file with all data.
+    """
+    import tempfile
+    temp_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt')
+    temp_path = temp_file.name
+    temp_file.close()
+    
+    lines_read = 0
+    
+    try:
+        with open(text_path, 'rb') as infile, open(temp_path, 'w', encoding='utf-8') as outfile:
+            # Read file in chunks to avoid loading entire file into memory
+            while True:
+                line_bytes = infile.readline()
+                if not line_bytes:
+                    break
+                
+                try:
+                    line = line_bytes.decode('utf-8')
+                    if line.strip():
+                        outfile.write(line)
+                        lines_read += 1
+                        
+                        # Progress indicator for large files
+                        if lines_read % 100000 == 0:
+                            print(f"  Streaming corpus: {lines_read:,} lines processed...")
+                except UnicodeDecodeError:
+                    pass  # Skip invalid UTF-8 lines
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    
+    print(f"  Streamed entire corpus: {lines_read:,} lines")
+    return temp_path
+
 def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None) -> BPETokenizer:
-    """Get existing tokenizer or create one from text data"""
+    """Get existing tokenizer or create one from text data (streams entire corpus in chunks)"""
     # Try to find existing tokenizer
     tokenizer_candidates = [
         tokenizer_path,  # Explicitly provided
@@ -66,22 +108,46 @@ def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None
     if not os.path.exists(text_path):
         raise FileNotFoundError(f"Cannot create tokenizer: text file not found: {text_path}")
     
-    print(f"  No tokenizer found. Creating tokenizer from {text_path}...")
+    print(f"  No tokenizer found. Creating tokenizer from {text_path} (streaming entire corpus in chunks)...")
     os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
     tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
-    BPETokenizer.train_new(text_path, tokenizer_model, vocab_size=32000)
-    print(f"  ✓ Tokenizer created: {tokenizer_model}")
+    
+    # Stream entire corpus in chunks instead of loading entire file
+    temp_streamed = None
+    try:
+        temp_streamed = stream_text_file(text_path, chunk_size_mb=100)
+        print(f"  Training tokenizer on entire corpus...")
+        BPETokenizer.train_new(temp_streamed, tokenizer_model, vocab_size=32000)
+        print(f"  ✓ Tokenizer created: {tokenizer_model}")
+    finally:
+        if temp_streamed and os.path.exists(temp_streamed):
+            os.remove(temp_streamed)
+    
     return BPETokenizer(tokenizer_model)
 
 def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> int:
-    """Count actual tokens in text file using tokenizer (streams line-by-line like train_text.py)"""
+    """Count actual tokens in text file using tokenizer (streams line-by-line, resumable)"""
     if not os.path.exists(text_path):
         return 0
     
     try:
         tokenizer = get_or_create_tokenizer(text_path, tokenizer_path)
+        
+        # Check for existing count checkpoint (resumable)
+        checkpoint_path = f"{text_path}.token_count_checkpoint.json"
         total_tokens = 0
-        sample_count = 0
+        start_line_idx = 0
+        
+        if os.path.exists(checkpoint_path):
+            try:
+                checkpoint_data = json.load(open(checkpoint_path, 'r'))
+                total_tokens = checkpoint_data.get("total_tokens", 0)
+                start_line_idx = checkpoint_data.get("last_processed_line", 0)
+                print(f"  Resuming token count from line {start_line_idx:,} (already counted {total_tokens:,} tokens)...")
+            except Exception as e:
+                print(f"  Warning: Could not load checkpoint: {e}, starting from beginning")
+                total_tokens = 0
+                start_line_idx = 0
         
         # Build line offset index (same approach as train_text.py)
         line_offsets = []
@@ -100,9 +166,12 @@ def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> i
                     pass  # Skip invalid UTF-8 lines
                 offset += len(line_bytes)  # Manually track offset
         
+        sample_count = start_line_idx
+        checkpoint_freq = 10000  # Save checkpoint every N lines
+        
         # Process lines one at a time using offsets (memory efficient)
         with open(text_path, 'rb') as f:
-            for line_start in line_offsets:
+            for line_idx, line_start in enumerate(line_offsets[start_line_idx:], start_line_idx):
                 f.seek(line_start)
                 line_bytes = f.readline()
                 text = line_bytes.decode('utf-8').strip()
@@ -111,9 +180,27 @@ def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> i
                     total_tokens += len(tokens)
                     sample_count += 1
                     
+                    # Save checkpoint periodically (resumable)
+                    if sample_count % checkpoint_freq == 0:
+                        try:
+                            checkpoint_data = {
+                                "total_tokens": total_tokens,
+                                "last_processed_line": line_idx + 1
+                            }
+                            json.dump(checkpoint_data, open(checkpoint_path, 'w'))
+                        except Exception:
+                            pass
+                    
                     # Progress indicator for large files
                     if sample_count % 10000 == 0:
                         print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
+        
+        # Clean up checkpoint after successful completion
+        if os.path.exists(checkpoint_path):
+            try:
+                os.remove(checkpoint_path)
+            except:
+                pass
         
         return total_tokens
     except Exception as e:
@@ -140,48 +227,73 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
         if not tokenizer:
             # Create tokenizer from CSV text (stream through file)
             print(f"  Creating tokenizer from CSV text...")
-            temp_text = f"data/.temp_csv_{text_column}.txt"
-            # Build row offset index first
-            row_offsets = []
-            fieldnames = None
-            with open(csv_path, 'rb') as f:
-                header_line = f.readline()
-                if not header_line:
-                    raise ValueError("CSV file is empty")
-                fieldnames = header_line.decode('utf-8').strip().split(',')
-                offset = f.tell()
-                while True:
-                    line_start = offset
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
-                    try:
-                        decoded = line_bytes.decode('utf-8').strip()
-                        if decoded:
-                            row_offsets.append(line_start)
-                    except UnicodeDecodeError:
-                        pass
-                    offset += len(line_bytes)
+            # Use proper tempfile for security and cleanup
+            temp_text_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt')
+            temp_text = temp_text_file.name
+            temp_text_file.close()
             
-            # Stream through rows to extract text
-            with open(temp_text, 'w', encoding='utf-8') as out:
+            temp_text_created = False
+            try:
+                # Build row offset index first
+                row_offsets = []
+                fieldnames = None
                 with open(csv_path, 'rb') as f:
-                    for row_start in row_offsets:
-                        f.seek(row_start)
+                    header_line = f.readline()
+                    if not header_line:
+                        raise ValueError("CSV file is empty")
+                    fieldnames = header_line.decode('utf-8').strip().split(',')
+                    offset = f.tell()
+                    while True:
+                        line_start = offset
                         line_bytes = f.readline()
-                        line = line_bytes.decode('utf-8').strip()
-                        import io
-                        reader = csv.DictReader(io.StringIO(line), fieldnames=fieldnames)
-                        row = next(reader)
-                        text = row.get(text_column, '').strip()
-                        if text:
-                            out.write(text + '\n')
-            
-            os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
-            tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
-            BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
-            tokenizer = BPETokenizer(tokenizer_model)
-            os.remove(temp_text)  # Clean up
+                        if not line_bytes:
+                            break
+                        try:
+                            decoded = line_bytes.decode('utf-8').strip()
+                            if decoded:
+                                row_offsets.append(line_start)
+                        except UnicodeDecodeError:
+                            pass
+                        offset += len(line_bytes)
+                
+                # Stream through rows to extract text (entire dataset)
+                rows_written = 0
+                with open(temp_text, 'w', encoding='utf-8') as out:
+                    with open(csv_path, 'rb') as f:
+                        for row_start in row_offsets:
+                            f.seek(row_start)
+                            line_bytes = f.readline()
+                            line = line_bytes.decode('utf-8').strip()
+                            reader = csv.DictReader(io.StringIO(line), fieldnames=fieldnames)
+                            row = next(reader)
+                            text = row.get(text_column, '').strip()
+                            if text:
+                                out.write(text + '\n')
+                                rows_written += 1
+                                
+                                # Progress indicator
+                                if rows_written % 100000 == 0:
+                                    print(f"  Extracting text: {rows_written:,} rows...")
+                
+                temp_text_created = True
+                
+                # Stream the temp file in chunks for tokenizer training
+                temp_streamed = None
+                try:
+                    print(f"  Streaming {rows_written:,} rows for tokenizer training...")
+                    temp_streamed = stream_text_file(temp_text, chunk_size_mb=100)
+                    os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
+                    tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
+                    print(f"  Training tokenizer on entire dataset...")
+                    BPETokenizer.train_new(temp_streamed, tokenizer_model, vocab_size=32000)
+                    tokenizer = BPETokenizer(tokenizer_model)
+                finally:
+                    if temp_streamed and os.path.exists(temp_streamed):
+                        os.remove(temp_streamed)
+            finally:
+                # Clean up temp text file
+                if temp_text_created and os.path.exists(temp_text):
+                    os.remove(temp_text)
         
         # Build row offset index (same approach as train_audio_enc.py)
         row_offsets = []
@@ -205,17 +317,32 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
                     pass
                 offset += len(line_bytes)  # Manually track offset
         
+        # Check for existing count checkpoint (resumable)
+        checkpoint_path = f"{csv_path}.token_count_checkpoint.json"
         total_tokens = 0
-        sample_count = 0
+        start_row_idx = 0
+        
+        if os.path.exists(checkpoint_path):
+            try:
+                checkpoint_data = json.load(open(checkpoint_path, 'r'))
+                total_tokens = checkpoint_data.get("total_tokens", 0)
+                start_row_idx = checkpoint_data.get("last_processed_row", 0)
+                print(f"  Resuming token count from row {start_row_idx:,} (already counted {total_tokens:,} tokens)...")
+            except Exception as e:
+                print(f"  Warning: Could not load checkpoint: {e}, starting from beginning")
+                total_tokens = 0
+                start_row_idx = 0
+        
+        sample_count = start_row_idx
+        checkpoint_freq = 10000  # Save checkpoint every N rows
         
         # Process rows one at a time using offsets (memory efficient)
         with open(csv_path, 'rb') as f:
-            for row_start in row_offsets:
+            for row_idx, row_start in enumerate(row_offsets[start_row_idx:], start_row_idx):
                 f.seek(row_start)
                 line_bytes = f.readline()
                 line = line_bytes.decode('utf-8').strip()
                 # Parse CSV row properly (handles quoted fields)
-                import io
                 reader = csv.DictReader(io.StringIO(line), fieldnames=fieldnames)
                 row = next(reader)
                 text = row.get(text_column, '').strip()
@@ -224,8 +351,26 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
                     total_tokens += len(tokens)
                     sample_count += 1
                     
+                    # Save checkpoint periodically (resumable)
+                    if sample_count % checkpoint_freq == 0:
+                        try:
+                            checkpoint_data = {
+                                "total_tokens": total_tokens,
+                                "last_processed_row": row_idx + 1
+                            }
+                            json.dump(checkpoint_data, open(checkpoint_path, 'w'))
+                        except Exception:
+                            pass
+                    
                     if sample_count % 10000 == 0:
                         print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
+        
+        # Clean up checkpoint after successful completion
+        if os.path.exists(checkpoint_path):
+            try:
+                os.remove(checkpoint_path)
+            except:
+                pass
         
         return total_tokens
     except Exception as e:
@@ -392,33 +537,103 @@ def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None)
                 break
         
         if not tokenizer:
-            # Create tokenizer from image captions (stream through file)
-            print(f"  Creating tokenizer from image captions...")
-            temp_text = "data/.temp_image_captions.txt"
-            with open(temp_text, 'w', encoding='utf-8') as out:
-                for item in _stream_json_items(manifest_path):
-                    caption = item.get('caption', '').strip()
-                    if caption:
-                        out.write(caption + '\n')
-            os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
-            tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
-            BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
-            tokenizer = BPETokenizer(tokenizer_model)
-            os.remove(temp_text)  # Clean up
+            # Create tokenizer from image captions (stream through file, entire dataset)
+            print(f"  Creating tokenizer from image captions (streaming entire dataset in chunks)...")
+            # Use proper tempfile for security and cleanup
+            temp_text_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt')
+            temp_text = temp_text_file.name
+            temp_text_file.close()
+            
+            temp_text_created = False
+            try:
+                captions_written = 0
+                with open(temp_text, 'w', encoding='utf-8') as out:
+                    for item in _stream_json_items(manifest_path):
+                        caption = item.get('caption', '').strip()
+                        if caption:
+                            out.write(caption + '\n')
+                            captions_written += 1
+                            
+                            # Progress indicator
+                            if captions_written % 100000 == 0:
+                                print(f"  Extracting captions: {captions_written:,} captions...")
+                
+                temp_text_created = True
+                
+                # Stream the temp file in chunks for tokenizer training
+                temp_streamed = None
+                try:
+                    print(f"  Streaming {captions_written:,} captions for tokenizer training...")
+                    temp_streamed = stream_text_file(temp_text, chunk_size_mb=100)
+                    os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
+                    tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
+                    print(f"  Training tokenizer on entire dataset...")
+                    BPETokenizer.train_new(temp_streamed, tokenizer_model, vocab_size=32000)
+                    tokenizer = BPETokenizer(tokenizer_model)
+                finally:
+                    if temp_streamed and os.path.exists(temp_streamed):
+                        os.remove(temp_streamed)
+            finally:
+                # Clean up temp text file
+                if temp_text_created and os.path.exists(temp_text):
+                    os.remove(temp_text)
         
+        # Check for existing count checkpoint (resumable)
+        checkpoint_path = f"{manifest_path}.token_count_checkpoint.json"
         total_tokens = 0
-        sample_count = 0
+        start_sample_count = 0
+        
+        if os.path.exists(checkpoint_path):
+            try:
+                checkpoint_data = json.load(open(checkpoint_path, 'r'))
+                total_tokens = checkpoint_data.get("total_tokens", 0)
+                start_sample_count = checkpoint_data.get("last_processed_sample", 0)
+                print(f"  Resuming token count from sample {start_sample_count:,} (already counted {total_tokens:,} tokens)...")
+            except Exception as e:
+                print(f"  Warning: Could not load checkpoint: {e}, starting from beginning")
+                total_tokens = 0
+                start_sample_count = 0
+        
+        sample_count = start_sample_count
+        checkpoint_freq = 10000  # Save checkpoint every N samples
+        items_processed = 0
         
         # Stream through JSON items without loading entire file
+        # Note: For streaming JSON, we can't efficiently skip to a specific index,
+        # so we'll process from the beginning but use checkpoint to track progress
         for item in _stream_json_items(manifest_path):
+            # Skip items until we reach where we left off
+            if items_processed < start_sample_count:
+                items_processed += 1
+                continue
+                
             caption = item.get('caption', '').strip()
             if caption:
                 tokens = tokenizer.encode(caption)
                 total_tokens += len(tokens)
                 sample_count += 1
+                items_processed += 1
+                
+                # Save checkpoint periodically (resumable)
+                if sample_count % checkpoint_freq == 0:
+                    try:
+                        checkpoint_data = {
+                            "total_tokens": total_tokens,
+                            "last_processed_sample": sample_count
+                        }
+                        json.dump(checkpoint_data, open(checkpoint_path, 'w'))
+                    except Exception:
+                        pass
                 
                 if sample_count % 10000 == 0:
                     print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
+        
+        # Clean up checkpoint after successful completion
+        if os.path.exists(checkpoint_path):
+            try:
+                os.remove(checkpoint_path)
+            except:
+                pass
         
         return total_tokens
     except Exception as e:

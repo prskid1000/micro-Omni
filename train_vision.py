@@ -166,19 +166,67 @@ def main(cfg):
         print(f"Gradient accumulation: {accumulation_steps} steps")
     
     # Simple vocabulary for caption encoding (create from training data)
-    print("Building vocabulary from captions...")
-    # Iterate through dataset to collect captions (works with lazy loading)
-    all_captions = []
-    for i in range(len(ds)):
-        _, caption = ds[i]
-        all_captions.append(caption)
-    # Create simple word-based vocabulary
-    word_to_idx = {}
+    # Check for existing vocabulary checkpoint (resumable)
+    vocab_checkpoint_path = os.path.join(cfg["save_dir"], "vocab_build_checkpoint.json")
     word_freq = {}
-    for cap in all_captions:
-        words = cap.lower().split()
+    start_idx = 0
+    
+    if os.path.exists(vocab_checkpoint_path):
+        print(f"Found vocabulary checkpoint, resuming from checkpoint...")
+        try:
+            import json
+            checkpoint_data = json.load(open(vocab_checkpoint_path, 'r'))
+            word_freq = checkpoint_data.get("word_freq", {})
+            start_idx = checkpoint_data.get("last_processed_idx", 0)
+            print(f"  Resuming from caption {start_idx:,}")
+        except Exception as e:
+            print(f"  Warning: Could not load checkpoint: {e}, starting from beginning")
+            word_freq = {}
+            start_idx = 0
+    
+    if start_idx == 0:
+        print("Building vocabulary from captions (processing in chunks, resumable)...")
+    
+    # Build vocabulary incrementally without loading all captions into memory
+    total_captions = len(ds)
+    checkpoint_freq = 10000  # Save checkpoint every N captions
+    
+    for i in range(start_idx, total_captions):
+        _, caption = ds[i]
+        words = caption.lower().split()
         for word in words:
             word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # Save checkpoint periodically (resumable)
+        if (i + 1) % checkpoint_freq == 0:
+            try:
+                import json
+                checkpoint_data = {
+                    "word_freq": word_freq,
+                    "last_processed_idx": i + 1
+                }
+                json.dump(checkpoint_data, open(vocab_checkpoint_path, 'w'))
+                print(f"  Checkpoint saved: processed {i+1:,}/{total_captions:,} captions...")
+            except Exception as e:
+                print(f"  Warning: Could not save checkpoint: {e}")
+        
+        # Progress indicator for large datasets
+        if (i + 1) % 10000 == 0:
+            print(f"  Processed {i+1:,}/{total_captions:,} captions...")
+    
+    # Final checkpoint save
+    try:
+        import json
+        checkpoint_data = {
+            "word_freq": word_freq,
+            "last_processed_idx": total_captions
+        }
+        json.dump(checkpoint_data, open(vocab_checkpoint_path, 'w'))
+    except:
+        pass
+    
+    # Create simple word-based vocabulary
+    word_to_idx = {}
     
     # Keep top N most frequent words
     sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
@@ -186,6 +234,13 @@ def main(cfg):
     word_to_idx = {word: idx+1 for idx, (word, _) in enumerate(sorted_words[:vocab_size-1])}  # +1 for padding=0
     word_to_idx["<UNK>"] = vocab_size - 1
     print(f"Vocabulary size: {len(word_to_idx)}")
+    
+    # Clean up checkpoint after successful completion
+    if os.path.exists(vocab_checkpoint_path):
+        try:
+            os.remove(vocab_checkpoint_path)
+        except:
+            pass
     
     def encode_caption(caption):
         """Encode caption to bag-of-words representation"""

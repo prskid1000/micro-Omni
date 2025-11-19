@@ -48,6 +48,8 @@ python scripts/download_production_text.py --dataset general --combine
 - ✅ Diverse knowledge: General
 - ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~2M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
+- ✅ **Memory-efficient:** Tokenizer training streams corpus in chunks (entire dataset, not just samples)
+- ✅ **Resumable:** All preprocessing operations can resume if interrupted
 
 ---
 

@@ -132,6 +132,12 @@ python scripts/update_configs_from_data.py --dry-run
 - If no tokenizer exists, one will be created automatically from the data
 - **Important:** For vision/audio/talker/OCR, token counts are shown for reference only. Step calculation uses sample counts.
 
+**Memory-efficient processing:**
+- Tokenizer training streams entire corpus in chunks (doesn't load entire file into memory)
+- Token counting processes files line-by-line with automatic resume support
+- All operations are resumable - if interrupted, will continue from last checkpoint
+- Checkpoints saved every 10K samples/lines for safe resumption
+
 **Files checked:**
 - Text: `data/text/production_corpus.txt` or `data/text/tiny_corpus.txt`
 - Images: `data/images/production_annotations.json` or `data/images/annotations.json`

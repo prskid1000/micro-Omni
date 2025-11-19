@@ -52,6 +52,22 @@ model.gradient_checkpointing_enable()
 }
 ```
 
+### 4. Memory Issues During Preprocessing
+
+**Symptoms:** Out of memory when building vocabulary or counting tokens  
+**Solutions:**
+- ✅ **Automatic:** All preprocessing now uses chunked processing (no action needed)
+- ✅ **Resumable:** If interrupted, just restart - will resume from checkpoint
+- ✅ **Tokenizer training:** Streams entire corpus in chunks automatically
+- ✅ **Vocabulary building:** Processes incrementally with checkpoints
+- ✅ **Token counting:** Streams line-by-line with resume support
+
+**Checkpoint Files:**
+- Vocabulary: `{save_dir}/vocab_build_checkpoint.json`
+- Token counting: `{file_path}.token_count_checkpoint.json`
+- OCR vocabulary: `{csv_path}.vocab_checkpoint.json`
+- Checkpoints auto-deleted after successful completion
+
 ---
 
 ## 🐛 Inference Issues
