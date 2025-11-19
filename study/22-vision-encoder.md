@@ -470,6 +470,8 @@ CLS token approach:
 
 ## 📊 Detailed Specifications
 
+> **Note**: These are the "tiny" configuration values from `configs/vision_tiny.json`. The code defaults may differ, but config files override them.
+
 ### Architecture Parameters
 
 ```

@@ -106,13 +106,15 @@ Token/Embeddings Input (B, T, 256)
 
 ## 📊 Specifications
 
+> **Note**: These are the "tiny" configuration values from `configs/thinker_tiny.json`. The code defaults may differ, but config files override them.
+
 | Parameter | Value |
 |-----------|-------|
 | **Model Dimension** | 256 |
 | **Layers** | 4 |
 | **Attention Heads** | 4 |
 | **Feedforward Dim** | 1024 |
-| **Vocabulary** | 5000 tokens |
+| **Vocabulary** | 32000 tokens |
 | **Context Length** | 512-2048 |
 | **Parameters** | ~20.32M |
 

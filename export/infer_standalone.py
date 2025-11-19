@@ -141,8 +141,12 @@ def simple_generate(model_data, prompt, max_new_tokens=64, device="cuda"):
     """
     Simple text generation using the loaded model.
     
-    Note: This is a placeholder. For full functionality, you need the model
-    architecture classes. This demonstrates the structure.
+    Note: This is a simplified version. For full multimodal inference (image, audio, video),
+    you need to use the full codebase with infer_chat.py or register custom model classes
+    with transformers.
+    
+    This function demonstrates the structure but requires the model architecture classes
+    from the omni package to actually generate text.
     """
     tokenizer = model_data["tokenizer"]
     state_dict = model_data["state_dict"]
@@ -150,23 +154,29 @@ def simple_generate(model_data, prompt, max_new_tokens=64, device="cuda"):
     
     # Encode prompt
     input_ids = tokenizer.encode(prompt)
-    input_ids = [1] + input_ids  # Add BOS token
+    input_ids = [1] + input_ids  # Add BOS token (token ID 1)
     
     print(f"Input tokens: {len(input_ids)}")
     print(f"Prompt: {prompt}")
+    print(f"Model config: vocab_size={config.get('vocab_size', 'N/A')}, "
+          f"d_model={config.get('d_model', 'N/A')}, "
+          f"n_layers={config.get('n_layers', 'N/A')}")
     
     # For actual generation, you would need to:
-    # 1. Load the model architecture (ThinkerLM, etc.)
-    # 2. Load weights into the model
-    # 3. Run forward passes
+    # 1. Import model architecture classes: from omni.thinker import ThinkerLM
+    # 2. Initialize model with config
+    # 3. Load weights from state_dict (with proper prefix handling)
+    # 4. Run forward passes with KV caching
     
     # This is a placeholder that shows the structure
-    print("\n⚠ Note: Full generation requires model architecture classes.")
-    print("   To use with transformers, register custom model classes or use Hugging Face's")
-    print("   model loading with custom architecture definitions.")
+    print("\n⚠ Note: Full generation requires model architecture classes from the codebase.")
+    print("   For full functionality, use:")
+    print("   1. infer_chat.py (from root directory) - Full multimodal inference")
+    print("   2. Register custom model classes with transformers")
+    print("   3. Use Hugging Face's model loading with custom architecture definitions")
     
     # Return a simple response
-    return f"[Generation would happen here with model architecture. Input: {prompt}]"
+    return f"[Generation requires model architecture. To generate text, use infer_chat.py from the root directory. Input: {prompt}]"
 
 
 def main():

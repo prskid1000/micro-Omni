@@ -327,7 +327,7 @@ def copy_support_files(
         "dropout": thinker_cfg.get("dropout", 0.1),
         "rope_theta": thinker_cfg.get("rope_theta", 10000),
         "ctx_len": thinker_cfg.get("ctx_len", 512),
-        "use_gqa": thinker_cfg.get("use_gqa", False),
+        "use_gqa": thinker_cfg.get("use_gqa", True),
         "use_swiglu": thinker_cfg.get("use_swiglu", True),
         "use_moe": thinker_cfg.get("use_moe", False),
         "num_experts": thinker_cfg.get("num_experts", 8),
@@ -430,7 +430,29 @@ def copy_support_files(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Merge μOmni model components into a single safetensors file"
+        description="Merge μOmni model components into a single safetensors file",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Export all components
+  python export.py \\
+      --omni_ckpt checkpoints/omni_sft_tiny \\
+      --thinker_ckpt checkpoints/thinker_tiny \\
+      --audio_ckpt checkpoints/audio_enc_tiny \\
+      --vision_ckpt checkpoints/vision_tiny \\
+      --talker_ckpt checkpoints/talker_tiny \\
+      --output_dir export
+
+  # Minimal export (only main config.json, skip component configs)
+  python export.py \\
+      --omni_ckpt checkpoints/omni_sft_tiny \\
+      --thinker_ckpt checkpoints/thinker_tiny \\
+      --audio_ckpt checkpoints/audio_enc_tiny \\
+      --vision_ckpt checkpoints/vision_tiny \\
+      --talker_ckpt checkpoints/talker_tiny \\
+      --output_dir export \\
+      --skip_component_configs
+        """
     )
     parser.add_argument(
         "--omni_ckpt",

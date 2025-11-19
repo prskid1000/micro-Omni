@@ -69,14 +69,15 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         generated_ids = ids + [next_id]
         
         # Continue with incremental generation using cache
+        # After first token, use token IDs (not embeddings) so KV cache works properly
         for _ in range(max_new - 1):
-            # Only process new token
-            next_emb = model.tok_emb(torch.tensor([[next_id]], dtype=torch.long, device=device))
+            # Use token IDs for incremental generation (KV cache handles the rest)
+            next_idx = torch.tensor([[next_id]], dtype=torch.long, device=device)
             if use_amp and device == "cuda":
                 with autocast(device_type='cuda'):
-                    logits = model(embeddings=next_emb)
+                    logits = model(idx=next_idx)
             else:
-                logits = model(embeddings=next_emb)
+                logits = model(idx=next_idx)
             next_id = int(torch.argmax(logits[0, -1]))
             generated_ids.append(next_id)
             if next_id == 2: break  # EOS
@@ -94,8 +95,9 @@ def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_c
         generated_ids = ids + [next_id]
         
         # Continue with incremental generation using cache
+        # KV cache is already enabled, so subsequent calls only process new tokens
         for _ in range(max_new - 1):
-            # Only process new token
+            # Only process new token (KV cache handles previous tokens)
             x = torch.tensor([[next_id]], dtype=torch.long, device=device)
             if use_amp and device == "cuda":
                 with autocast(device_type='cuda'):
@@ -253,7 +255,7 @@ def main():
     else:
         # Default config matching thinker_tiny
         thinker_cfg = {
-            "vocab_size": 5000,
+            "vocab_size": 32000,
             "n_layers": 4,
             "d_model": 256,
             "n_heads": 4,
@@ -345,7 +347,7 @@ def main():
     # Load Thinker with correct architecture
     ctx_len = thinker_cfg.get("ctx_len", 512)
     think = ThinkerLM(
-        thinker_cfg.get("vocab_size", 5000),
+        thinker_cfg.get("vocab_size", 32000),
         thinker_cfg.get("n_layers", 4),
         thinker_cfg.get("d_model", 256),
         thinker_cfg.get("n_heads", 4),

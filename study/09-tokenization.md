@@ -248,7 +248,7 @@ Visual: [Y][b][d][Y][b][a][c]
 
 KEEP REPEATING...
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Until vocabulary reaches desired size (e.g., 5000 tokens)
+Until vocabulary reaches desired size (e.g., 32000 tokens for μOmni)
 ```
 
 **Key Insight:**
@@ -495,7 +495,7 @@ import torch
 input_ids = torch.tensor(token_ids).unsqueeze(0)  # (1, seq_len)
 
 # 4. Get embeddings
-model = ThinkerLM(vocab=5000, d_model=256, ...)
+model = ThinkerLM(vocab=32000, d_model=256, ...)
 embeddings = model.tok_emb(input_ids)
 print(f"Embeddings shape: {embeddings.shape}")
 # torch.Size([1, 5, 256])

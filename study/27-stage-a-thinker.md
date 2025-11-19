@@ -252,9 +252,9 @@ Model has learned language! ✓
 ```json
 {
   // MODEL ARCHITECTURE
-  "vocab_size": 5000,        // How many unique words/tokens
+  "vocab_size": 32000,      // How many unique words/tokens
                              // Smaller = faster, but less coverage
-                             // 5000 = good for proof-of-concept
+                             // 32000 = good balance (matches thinker_tiny.json)
   
   "n_layers": 4,             // Transformer depth
                              // More layers = more complex patterns
@@ -310,9 +310,9 @@ Model has learned language! ✓
 TINY MODEL DESIGN:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Vocab 5000 vs 50000:
-- 5000: Fast training, covers common words
-- 50000: Better coverage, 10x slower
+Vocab 32000 vs 50000:
+- 32000: Good balance, covers common words (used in tiny config)
+- 50000: Better coverage, slower training
 
 Layers 4 vs 12:
 - 4: ~15M parameters, 12GB GPU OK
@@ -478,7 +478,7 @@ python train_text.py --config configs/thinker_tiny.json
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Loading data from data/text/corpus.txt...
-Vocab size: 5000
+Vocab size: 32000
 Training samples: 50000
 
 Initializing Thinker (15.2M parameters)...

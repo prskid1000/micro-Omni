@@ -126,21 +126,21 @@ Step 1: Embed the Codes
 Separate embeddings for base and residual!
 
 Base codes: [0, 42, 56]
-→ base_embedding(0): 96-dim vector
-→ base_embedding(42): 96-dim vector
-→ base_embedding(56): 96-dim vector
+→ base_embedding(0): 192-dim vector
+→ base_embedding(42): 192-dim vector
+→ base_embedding(56): 192-dim vector
 
 Residual codes: [0, 87, 91]
-→ res_embedding(0): 96-dim vector
-→ res_embedding(87): 96-dim vector
-→ res_embedding(91): 96-dim vector
+→ res_embedding(0): 192-dim vector
+→ res_embedding(87): 192-dim vector
+→ res_embedding(91): 192-dim vector
 
 Sum embeddings:
-token_0 = base_emb[0] + res_emb[0]      # (96,)
-token_1 = base_emb[42] + res_emb[87]    # (96,)
-token_2 = base_emb[56] + res_emb[91]    # (96,)
+token_0 = base_emb[0] + res_emb[0]      # (192,)
+token_1 = base_emb[42] + res_emb[87]    # (192,)
+token_2 = base_emb[56] + res_emb[91]    # (192,)
 
-Result: (3, 96)
+Result: (3, 192)
 
 WHY separate embeddings?
 - Base and residual codes have different meanings
@@ -167,7 +167,7 @@ Step 3: Transformer Decoder (4 Layers)
 Each layer processes the sequence:
 
 Layer 1:
-  Input: (3, 96)
+  Input: (3, 192)
   → RMSNorm
   → Causal Self-Attention with RoPE
      - token_0 sees only: [token_0]
@@ -176,12 +176,12 @@ Layer 1:
      (Causal = can't see future!)
   → Feedforward network
   → RMSNorm
-  Output: (3, 96)
+  Output: (3, 192)
 
 Layers 2-4: Same structure
 
 After 4 layers:
-  Output: (3, 96)
+  Output: (3, 192)
   - Each position has processed context
   - Position 2 (last) aggregated info from 0,1,2
   - Ready to predict next code!
@@ -189,16 +189,16 @@ After 4 layers:
 Step 4: Two Separate Prediction Heads
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Take last position output: (96,)
+Take last position output: (192,)
 
 Base Head:
-  Linear: 96 → 128 logits
+  Linear: 192 → 128 logits
   → Logits for all 128 base codes
   → Softmax → Probabilities
   → Sample or Argmax → base_code = 67
 
 Residual Head:
-  Linear: 96 → 128 logits
+  Linear: 192 → 128 logits
   → Logits for all 128 residual codes
   → Softmax → Probabilities
   → Sample or Argmax → res_code = 103
@@ -234,15 +234,15 @@ Ready for next step!
 ┌─────────────────────────────────────────┐
 │  EMBED CODES                            │
 │  ┌────────────────────────────────────┐ │
-│  │ Base Embedding: 128 → 96           │ │
-│  │ [0, 42, 56] → (3, 96)              │ │
+│  │ Base Embedding: 128 → 192          │ │
+│  │ [0, 42, 56] → (3, 192)             │ │
 │  └────────────────────────────────────┘ │
 │  ┌────────────────────────────────────┐ │
-│  │ Residual Embedding: 128 → 96       │ │
-│  │ [0, 87, 91] → (3, 96)              │ │
+│  │ Residual Embedding: 128 → 192      │ │
+│  │ [0, 87, 91] → (3, 192)             │ │
 │  └────────────────────────────────────┘ │
 │  Sum: base_emb + res_emb               │
-│  Output: (3, 96)                        │
+│  Output: (3, 192)                       │
 └────────────────┬────────────────────────┘
                  ↓
 ┌─────────────────────────────────────────┐
@@ -261,12 +261,12 @@ Ready for next step!
 │  ┌────────────────────────────────────┐ │
 │  │ Layer 4: Causal Attention + FFN   │ │
 │  └────────────────────────────────────┘ │
-│  Output: (3, 96)                        │
+│  Output: (3, 192)                       │
 └────────────────┬────────────────────────┘
                  ↓
 ┌─────────────────────────────────────────┐
 │  TAKE LAST POSITION                     │
-│  Extract position 2: (96,)              │
+│  Extract position 2: (192,)             │
 │  This predicts the NEXT frame           │
 └────────────────┬────────────────────────┘
                  ↓
@@ -274,7 +274,7 @@ Ready for next step!
          ↓                ↓
 ┌─────────────────┐  ┌─────────────────┐
 │  BASE HEAD      │  │ RESIDUAL HEAD   │
-│  Linear: 96→128 │  │ Linear: 96→128  │
+│  Linear: 192→128│  │ Linear: 192→128 │
 │  Logits: (128,) │  │ Logits: (128,)  │
 │  Softmax        │  │ Softmax         │
 │  Sample/Argmax  │  │ Sample/Argmax   │
@@ -313,8 +313,8 @@ Step 1: Generate frame 1
 Input: [[0, 0]]
 
 Talker forward:
-1. Embed: (1, 96)
-2. Transform: (1, 96)
+1. Embed: (1, 192)
+2. Transform: (1, 192)
 3. Base head: logits (128,) → softmax → sample → 42
 4. Res head: logits (128,) → softmax → sample → 87
 
@@ -326,9 +326,9 @@ Step 2: Generate frame 2
 Input: [[0, 0], [42, 87]]
 
 Talker forward:
-1. Embed: (2, 96)
-2. Transform: (2, 96)
-3. Take last position: (96,)
+1. Embed: (2, 192)
+2. Transform: (2, 192)
+3. Take last position: (192,)
 4. Base head: → 56
 5. Res head: → 91
 
@@ -412,22 +412,24 @@ def generate_speech(talker, rvq, vocoder, max_frames=200):
 
 ## 📊 Detailed Specifications
 
+> **Note**: These are the "tiny" configuration values from `configs/talker_tiny.json`. The code defaults may differ, but config files override them.
+
 ### Architecture Parameters
 
 ```
 TALKER CONFIGURATION:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Model dimension: 96
+Model dimension: 192
 Number of layers: 4
 Attention heads: 3 (GQA: 3 query heads, 1 KV head)
-FFN dimension: 384 (4 × 96)
+FFN dimension: 768 (4 × 192)
 Codebook size: 128 (per codebook)
 Number of codebooks: 2
 
 Embeddings:
-- base_embedding: Embedding(128, 96)
-- res_embedding: Embedding(128, 96)
+- base_embedding: Embedding(128, 192)
+- res_embedding: Embedding(128, 192)
 
 Transformer:
 - 4 decoder layers
@@ -437,17 +439,17 @@ Transformer:
 - SwiGLU activation (optional)
 
 Prediction Heads:
-- base_head: Linear(96 → 128, bias=False)
-- res_head: Linear(96 → 128, bias=False)
+- base_head: Linear(192 → 128, bias=False)
+- res_head: Linear(192 → 128, bias=False)
 
 PARAMETERS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Embeddings: 2 × (128 × 96) = 24,576
+Embeddings: 2 × (128 × 192) = 49,152
 Transformer layers: ~10M
-Prediction heads: 2 × (96 × 128) = 24,576
+Prediction heads: 2 × (192 × 128) = 49,152
 ─────────────────────────────────────
-Total: ~2.24M parameters
+Total: ~10.1M parameters
 
 GENERATION SPECS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -461,10 +463,10 @@ With KV caching: ~50-100ms per frame (real-time capable!)
 
 | Component | Input | Output | Purpose |
 |-----------|-------|--------|---------|
-| **Embeddings** | Codes (T, 2) | Vectors (T, 96) | Vectorize discrete codes |
-| **Transformer** | (T, 96) | (T, 96) | Process temporal context |
-| **Base Head** | (96,) | Logits (128,) | Predict base code |
-| **Res Head** | (96,) | Logits (128,) | Predict residual code |
+| **Embeddings** | Codes (T, 2) | Vectors (T, 192) | Vectorize discrete codes |
+| **Transformer** | (T, 192) | (T, 192) | Process temporal context |
+| **Base Head** | (192,) | Logits (128,) | Predict base code |
+| **Res Head** | (192,) | Logits (128,) | Predict residual code |
 
 ---
 
@@ -658,7 +660,7 @@ Result: Complete text-to-speech system!
 | **Heads** | 3 |
 | **Codebooks** | 2 |
 | **Output** | 2 × 128 logits |
-| **Parameters** | ~2.24M |
+| **Parameters** | ~10.1M |
 
 ## 🔄 Generation Process
 
