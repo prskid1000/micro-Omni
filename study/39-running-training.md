@@ -149,11 +149,37 @@ python train_ocr.py --config configs/ocr_tiny.json
 
 ## 🛠️ Resuming Training
 
+**Automatic Resuming:** All training scripts automatically detect and resume from the latest checkpoint. Simply rerun the training command:
+
 ```bash
-# Training interrupted? Resume from checkpoint
-python train_text.py --config configs/thinker_tiny.json \
-  --resume checkpoints/thinker_tiny/thinker_step_1000.pt
+# Training interrupted? Just rerun - it will auto-resume!
+python train_text.py --config configs/thinker_tiny.json
+
+# The script automatically:
+# ✅ Finds latest checkpoint in save_dir
+# ✅ Loads all states (model, optimizer, scheduler, scaler)
+# ✅ Skips already-processed samples via skip_samples
+# ✅ Continues from correct epoch and batch position
+# ✅ Shows accurate progress bar
 ```
+
+**What happens during resume:**
+1. Script scans `save_dir` for checkpoints (e.g., `thinker_step_*.pt`)
+2. Selects checkpoint with highest step number
+3. Loads model weights, optimizer state, scheduler state, and scaler (if using AMP)
+4. Calculates `skip_samples = step * batch_size` and sets on dataset
+5. Recreates DataLoader so workers pick up the new `skip_samples` value
+6. Calculates starting epoch and batch index: `start_epoch = step // steps_per_epoch`, `start_batch_idx = step % steps_per_epoch`
+7. Initializes progress bar at correct position
+8. Training continues seamlessly from where it stopped
+
+**Validation during resume:**
+- Validation always processes the full validation set
+- `skip_samples` is temporarily reset to 0 during validation
+- Original `skip_samples` is restored after validation
+- This ensures validation metrics are always computed on complete data
+
+**No manual intervention needed** - resuming is fully automatic!
 
 ---
 
@@ -163,7 +189,9 @@ python train_text.py --config configs/thinker_tiny.json \
 ✅ **Start with small data** to verify pipeline  
 ✅ **Monitor GPU memory** with `nvidia-smi`  
 ✅ **Save checkpoints frequently** (every 1000 steps)  
-✅ **Use tmux/screen** for long training sessions
+✅ **Use tmux/screen** for long training sessions  
+✅ **Automatic resuming** - just rerun training command if interrupted  
+✅ **Consistent utilities** - all scripts share common checkpoint/resume logic
 
 ---
 

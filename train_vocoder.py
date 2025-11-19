@@ -14,7 +14,11 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, cleanup_old_checkpoints, VocoderDataset
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, cleanup_old_checkpoints, VocoderDataset,
+    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
+    ValidationSkipSamplesContext
+)
 from tqdm import tqdm
 
 
@@ -233,49 +237,54 @@ def main(cfg):
     
     # Resume from checkpoint
     step = 0
-    start_epoch = 0
-    resume_from = None
-    if os.path.exists(cfg["save_dir"]):
-        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("vocoder_step_") and f.endswith(".pt")]
-        if checkpoint_files:
-            step_numbers = []
-            for f in checkpoint_files:
-                try:
-                    step_num = int(f.replace("vocoder_step_", "").replace(".pt", ""))
-                    step_numbers.append((step_num, f))
-                except:
-                    continue
-            if step_numbers:
-                step_numbers.sort(key=lambda x: x[0], reverse=True)
-                resume_from = os.path.join(cfg["save_dir"], step_numbers[0][1])
-                step = step_numbers[0][0]
-                logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
-                
-                checkpoint = torch.load(resume_from, map_location=device)
-                if "generator" in checkpoint:
-                    generator.load_state_dict(checkpoint["generator"])
-                if "mpd" in checkpoint:
-                    mpd.load_state_dict(checkpoint["mpd"])
-                if "msd" in checkpoint:
-                    msd.load_state_dict(checkpoint["msd"])
-                if "opt_g" in checkpoint:
-                    opt_g.load_state_dict(checkpoint["opt_g"])
-                if "opt_d" in checkpoint:
-                    opt_d.load_state_dict(checkpoint["opt_d"])
-                if "scheduler_g" in checkpoint:
-                    scheduler_g.load_state_dict(checkpoint["scheduler_g"])
-                if "scheduler_d" in checkpoint:
-                    scheduler_d.load_state_dict(checkpoint["scheduler_d"])
-                if "step" in checkpoint:
-                    step = checkpoint["step"]
-                logger.info(f"Resumed from step {step}")
+    step, resume_from = load_checkpoint(
+        cfg["save_dir"], 
+        "vocoder_step_", 
+        device, 
+        logger,
+        state_dict_loaders={
+            "generator": (generator, generator.load_state_dict),
+            "mpd": (mpd, mpd.load_state_dict),
+            "msd": (msd, msd.load_state_dict),
+            "opt_g": (opt_g, opt_g.load_state_dict),
+            "opt_d": (opt_d, opt_d.load_state_dict),
+            "scheduler_g": (scheduler_g, scheduler_g.load_state_dict),
+            "scheduler_d": (scheduler_d, scheduler_d.load_state_dict)
+        }
+    )
+    
+    # Update skip_samples for dataset if resuming
+    batch_size = cfg.get("batch_size", 4)
+    new_train_dl = setup_resume_data_loading(
+        train_ds, step, batch_size, logger,
+        train_dl_kwargs={
+            "shuffle": True,
+            "num_workers": cfg.get("num_workers", 2),
+            "drop_last": True,
+            "collate_fn": collate_mel_audio_fn
+        }
+    )
+    if new_train_dl is not None:
+        train_dl = new_train_dl
     
     logger.training_start(max_steps, train_size, val_size)
     
-    steps_per_epoch = len(train_dl)
+    # Calculate steps per epoch and determine starting epoch/position
+    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    batch_size = cfg.get("batch_size", 4)
+    drop_last = True  # Vocoder uses drop_last=True
+    if train_size is not None:
+        steps_per_epoch = train_size // batch_size
+        if not drop_last and train_size % batch_size != 0:
+            steps_per_epoch += 1
+    else:
+        # Fallback: use a large number if size is unknown (for progress bar)
+        # The actual training will work fine, just progress bar won't be accurate
+        steps_per_epoch = 1000000  # Large placeholder
     initial_step = step
+    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
     if step > 0:
-        start_epoch = step // steps_per_epoch
+        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 50)
@@ -287,12 +296,24 @@ def main(cfg):
     msd.train()
     
     for epoch in range(start_epoch, max_epochs):
-        for batch_idx, (mel, audio_real) in enumerate(tqdm(train_dl, desc=f"epoch{epoch}")):
-            # Skip batches if resuming
+        # Create progress bar with correct starting position when resuming mid-epoch
+        if epoch == start_epoch and start_batch_idx > 0:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", initial=start_batch_idx, total=steps_per_epoch)
+        else:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", total=steps_per_epoch)
+        
+        # Start enumeration from the correct position when resuming mid-epoch
+        enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        for batch_idx, (mel, audio_real) in enumerate(pbar, start=enum_start):
+            # Skip batches if resuming mid-epoch
+            # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
+            
+            # Update progress bar description
+            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
             
             mel = mel.to(device)  # (B, T_mel, n_mels)
             audio_real = audio_real.to(device)  # (B, T_audio)
@@ -534,66 +555,67 @@ def main(cfg):
             
             # Validation
             if step % val_freq == 0:
-                generator.eval()
-                mpd.eval()
-                msd.eval()
-                
-                val_loss_g = 0.0
-                val_loss_d = 0.0
-                val_samples = 0
-                
-                with torch.no_grad():
-                    for val_mel, val_audio in val_dl:
-                        if val_samples >= 100:  # Limit validation samples
-                            break
-                        
-                        val_mel = val_mel.to(device)
-                        val_audio = val_audio.to(device)
-                        val_mel_input = val_mel.transpose(1, 2)
-                        
-                        # Generate fake audio
-                        val_audio_fake = generator(val_mel_input)
-                        min_len = min(val_audio.shape[1], val_audio_fake.shape[1])
-                        val_audio = val_audio[:, :min_len]
-                        val_audio_fake = val_audio_fake[:, :min_len]
-                        
-                        val_audio_real_d = val_audio.unsqueeze(1)
-                        val_audio_fake_d = val_audio_fake.unsqueeze(1)
-                        
-                        # Discriminator loss
-                        mpd_real_out, _ = mpd(val_audio_real_d)
-                        mpd_fake_out, _ = mpd(val_audio_fake_d)
-                        msd_real_out, _ = msd(val_audio_real_d)
-                        msd_fake_out, _ = msd(val_audio_fake_d)
-                        
-                        # Compute MPD loss
-                        loss_mpd = 0.0
-                        for real_out, fake_out in zip(mpd_real_out, mpd_fake_out):
-                            real_loss = torch.mean((real_out - 1.0) ** 2)
-                            fake_loss = torch.mean(fake_out ** 2)
-                            loss_mpd += (real_loss + fake_loss) / 2.0
-                        val_loss_d += (loss_mpd / len(mpd_real_out)).item()
-                        
-                        # Compute MSD loss
-                        loss_msd = 0.0
-                        for real_out, fake_out in zip(msd_real_out, msd_fake_out):
-                            real_loss = torch.mean((real_out - 1.0) ** 2)
-                            fake_loss = torch.mean(fake_out ** 2)
-                            loss_msd += (real_loss + fake_loss) / 2.0
-                        val_loss_d += (loss_msd / len(msd_real_out)).item()
-                        
-                        # Generator loss (simplified)
-                        val_loss_g += torch.mean((val_audio_fake - val_audio) ** 2).item()
-                        
-                        val_samples += 1
-                
-                val_loss_g /= val_samples
-                val_loss_d /= val_samples
-                logger.log(step, {"val_loss_g": val_loss_g, "val_loss_d": val_loss_d})
-                
-                generator.train()
-                mpd.train()
-                msd.train()
+                with ValidationSkipSamplesContext(train_ds):
+                    generator.eval()
+                    mpd.eval()
+                    msd.eval()
+                    
+                    val_loss_g = 0.0
+                    val_loss_d = 0.0
+                    val_samples = 0
+                    
+                    with torch.no_grad():
+                        for val_mel, val_audio in val_dl:
+                            if val_samples >= 100:  # Limit validation samples
+                                break
+                            
+                            val_mel = val_mel.to(device)
+                            val_audio = val_audio.to(device)
+                            val_mel_input = val_mel.transpose(1, 2)
+                            
+                            # Generate fake audio
+                            val_audio_fake = generator(val_mel_input)
+                            min_len = min(val_audio.shape[1], val_audio_fake.shape[1])
+                            val_audio = val_audio[:, :min_len]
+                            val_audio_fake = val_audio_fake[:, :min_len]
+                            
+                            val_audio_real_d = val_audio.unsqueeze(1)
+                            val_audio_fake_d = val_audio_fake.unsqueeze(1)
+                            
+                            # Discriminator loss
+                            mpd_real_out, _ = mpd(val_audio_real_d)
+                            mpd_fake_out, _ = mpd(val_audio_fake_d)
+                            msd_real_out, _ = msd(val_audio_real_d)
+                            msd_fake_out, _ = msd(val_audio_fake_d)
+                            
+                            # Compute MPD loss
+                            loss_mpd = 0.0
+                            for real_out, fake_out in zip(mpd_real_out, mpd_fake_out):
+                                real_loss = torch.mean((real_out - 1.0) ** 2)
+                                fake_loss = torch.mean(fake_out ** 2)
+                                loss_mpd += (real_loss + fake_loss) / 2.0
+                            val_loss_d += (loss_mpd / len(mpd_real_out)).item()
+                            
+                            # Compute MSD loss
+                            loss_msd = 0.0
+                            for real_out, fake_out in zip(msd_real_out, msd_fake_out):
+                                real_loss = torch.mean((real_out - 1.0) ** 2)
+                                fake_loss = torch.mean(fake_out ** 2)
+                                loss_msd += (real_loss + fake_loss) / 2.0
+                            val_loss_d += (loss_msd / len(msd_real_out)).item()
+                            
+                            # Generator loss (simplified)
+                            val_loss_g += torch.mean((val_audio_fake - val_audio) ** 2).item()
+                            
+                            val_samples += 1
+                    
+                    val_loss_g /= val_samples
+                    val_loss_d /= val_samples
+                    logger.log(step, {"val_loss_g": val_loss_g, "val_loss_d": val_loss_d})
+                    
+                    generator.train()
+                    mpd.train()
+                    msd.train()
             
             # Checkpointing
             if step % checkpoint_freq == 0:

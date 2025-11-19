@@ -123,64 +123,78 @@ def main(cfg):
     val_freq = cfg.get("val_freq", 200)  # Validate every N steps
     
     # Resume from checkpoint if available
-    resume_from = None
-    if os.path.exists(cfg["save_dir"]):
-        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("audio_enc_step_") and f.endswith(".pt")]
-        if checkpoint_files:
-            # Extract step numbers and find latest
-            step_numbers = []
-            for f in checkpoint_files:
-                try:
-                    step_num = int(f.replace("audio_enc_step_", "").replace(".pt", ""))
-                    step_numbers.append((step_num, f))
-                except:
-                    continue
-            if step_numbers:
-                step_numbers.sort(key=lambda x: x[0], reverse=True)
-                resume_from = os.path.join(cfg["save_dir"], step_numbers[0][1])
-                step = step_numbers[0][0]
-                logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
-                
-                # Load full checkpoint state
-                checkpoint = torch.load(resume_from, map_location=device)
-                if isinstance(checkpoint, dict) and "enc" in checkpoint:
-                    model.load_state_dict(checkpoint["enc"])
-                    if "head" in checkpoint:
-                        head.load_state_dict(checkpoint["head"])
-                    if "optimizer" in checkpoint:
-                        opt.load_state_dict(checkpoint["optimizer"])
-                    if "scheduler" in checkpoint:
-                        scheduler.load_state_dict(checkpoint["scheduler"])
-                    if "scaler" in checkpoint and scaler is not None:
-                        scaler.load_state_dict(checkpoint["scaler"])
-                    if "step" in checkpoint:
-                        step = checkpoint["step"]
-                    logger.info(f"Resumed from step {step}")
-                else:
-                    # Legacy checkpoint format
-                    if "enc" in checkpoint:
-                        model.load_state_dict(checkpoint["enc"])
-                    if "head" in checkpoint:
-                        head.load_state_dict(checkpoint["head"])
-                    logger.info(f"Loaded model weights from checkpoint (legacy format)")
+    step = 0
+    step, resume_from = load_checkpoint(
+        cfg["save_dir"], 
+        "audio_enc_step_", 
+        device, 
+        logger,
+        state_dict_loaders={
+            "enc": (model, model.load_state_dict),
+            "head": (head, head.load_state_dict),
+            "optimizer": (opt, opt.load_state_dict),
+            "scheduler": (scheduler, scheduler.load_state_dict),
+            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+        }
+    )
+    # Handle scaler separately if needed
+    if step > 0 and resume_from and scaler is not None:
+        checkpoint = torch.load(resume_from, map_location=device)
+        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
+    
+    # Update skip_samples for dataset if resuming
+    batch_size = cfg.get("batch_size", 4)
+    new_train_dl = setup_resume_data_loading(
+        train_ds, step, batch_size, logger,
+        train_dl_kwargs={
+            "shuffle": True,
+            "num_workers": cfg.get("num_workers", 2),
+            "drop_last": cfg.get("drop_last", True),
+            "collate_fn": collate_fn
+        }
+    )
+    if new_train_dl is not None:
+        train_dl = new_train_dl
     
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
-    # Skip to the correct epoch/step if resuming
-    start_epoch = 0
-    steps_per_epoch = len(train_dl)
+    # Calculate steps per epoch and determine starting epoch/position
+    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    batch_size = cfg.get("batch_size", 4)
+    drop_last = cfg.get("drop_last", True)
+    if train_size is not None:
+        steps_per_epoch = train_size // batch_size
+        if not drop_last and train_size % batch_size != 0:
+            steps_per_epoch += 1
+    else:
+        # Fallback: use a large number if size is unknown (for progress bar)
+        # The actual training will work fine, just progress bar won't be accurate
+        steps_per_epoch = 1000000  # Large placeholder
     initial_step = step
+    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
     if step > 0:
-        start_epoch = step // steps_per_epoch
-        logger.info(f"Resuming from epoch {start_epoch}, step {step}")
+        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
     for epoch in range(start_epoch, max_epochs):
-        for batch_idx, (mel, text) in enumerate(tqdm(train_dl, desc=f"epoch{epoch}")):
+        # Create progress bar with correct starting position when resuming mid-epoch
+        if epoch == start_epoch and start_batch_idx > 0:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", initial=start_batch_idx, total=steps_per_epoch)
+        else:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", total=steps_per_epoch)
+        
+        # Start enumeration from the correct position when resuming mid-epoch
+        enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        for batch_idx, (mel, text) in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
+            # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
+            
+            # Update progress bar description
+            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
             mel = mel.to(device)
             
             tgt, tgt_lens = encode_text_batch(text)
@@ -306,48 +320,49 @@ def main(cfg):
             
             # Validation
             if step % val_freq == 0 and step > 0:
-                model.eval()
-                head.eval()
-                val_loss_sum = 0.0
-                val_count = 0
-                with torch.no_grad():
-                    for val_mel, val_text in val_dl:
-                        val_mel = val_mel.to(device)
-                        val_tgt, val_tgt_lens = encode_text_batch(val_text)
-                        val_tgt = val_tgt.to(device)
-                        val_tgt_lens = val_tgt_lens.to(device)
-                        if use_amp:
-                            with autocast(device_type='cuda'):
+                with ValidationSkipSamplesContext(train_ds):
+                    model.eval()
+                    head.eval()
+                    val_loss_sum = 0.0
+                    val_count = 0
+                    with torch.no_grad():
+                        for val_mel, val_text in val_dl:
+                            val_mel = val_mel.to(device)
+                            val_tgt, val_tgt_lens = encode_text_batch(val_text)
+                            val_tgt = val_tgt.to(device)
+                            val_tgt_lens = val_tgt_lens.to(device)
+                            if use_amp:
+                                with autocast(device_type='cuda'):
+                                    val_x = model(val_mel)
+                                    val_logit = head(val_x)
+                                    val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
+                                    val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
+                                    val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                            else:
                                 val_x = model(val_mel)
                                 val_logit = head(val_x)
                                 val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
                                 val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
                                 val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
-                        else:
-                            val_x = model(val_mel)
-                            val_logit = head(val_x)
-                            val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                            val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
-                            val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
-                        
-                        # Validate validation loss
-                        try:
-                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                            val_loss_sum += float(val_loss.detach())
-                            val_count += 1
-                            # Free validation tensors
-                            del val_x, val_logit, val_log_prob, val_loss
-                        except RuntimeError as e:
-                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
-                            # Continue with other validation batches
-                        if val_count >= 10:  # Limit validation batches
-                            break
-                
-                avg_val_loss = val_loss_sum / val_count
-                logger.val_step(step, avg_val_loss, epoch)
-                
-                model.train()
-                head.train()
+                            
+                            # Validate validation loss
+                            try:
+                                validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                                val_loss_sum += float(val_loss.detach())
+                                val_count += 1
+                                # Free validation tensors
+                                del val_x, val_logit, val_log_prob, val_loss
+                            except RuntimeError as e:
+                                logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                                # Continue with other validation batches
+                            if val_count >= 10:  # Limit validation batches
+                                break
+                    
+                    avg_val_loss = val_loss_sum / val_count
+                    logger.val_step(step, avg_val_loss, epoch)
+                    
+                    model.train()
+                    head.train()
             
             if step >= cfg["max_steps"]:
                 final_path = os.path.join(cfg["save_dir"], "audio_enc.pt")
@@ -366,46 +381,48 @@ def main(cfg):
                 return
         
         # Final validation at end of epoch
-        model.eval()
-        head.eval()
-        val_loss_sum = 0.0
-        val_count = 0
-        with torch.no_grad():
-            for val_mel, val_text in val_dl:
-                val_mel = val_mel.to(device)
-                val_tgt, val_tgt_lens = encode_text_batch(val_text)
-                val_tgt = val_tgt.to(device)
-                val_tgt_lens = val_tgt_lens.to(device)
-                if use_amp:
-                    with autocast(device_type='cuda'):
+        with ValidationSkipSamplesContext(train_ds):
+            model.eval()
+            head.eval()
+            val_loss_sum = 0.0
+            val_count = 0
+            with torch.no_grad():
+                for val_mel, val_text in val_dl:
+                    val_mel = val_mel.to(device)
+                    val_tgt, val_tgt_lens = encode_text_batch(val_text)
+                    val_tgt = val_tgt.to(device)
+                    val_tgt_lens = val_tgt_lens.to(device)
+                    if use_amp:
+                        with autocast(device_type='cuda'):
+                            val_x = model(val_mel)
+                            val_logit = head(val_x)
+                            val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
+                            val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
+                            val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                    else:
                         val_x = model(val_mel)
                         val_logit = head(val_x)
                         val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
                         val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
                         val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
-                else:
-                    val_x = model(val_mel)
-                    val_logit = head(val_x)
-                    val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                    val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
-                    val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
-                
-                # Validate validation loss
-                try:
-                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                    val_loss_sum += float(val_loss.detach())
-                    val_count += 1
-                    # Free validation tensors
-                    del val_x, val_logit, val_log_prob, val_loss
-                except RuntimeError as e:
-                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
-                    # Continue with other validation batches
-                    del val_x, val_logit, val_log_prob, val_loss
+                    
+                    # Validate validation loss
+                    try:
+                        validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                        val_loss_sum += float(val_loss.detach())
+                        val_count += 1
+                        # Free validation tensors
+                        del val_x, val_logit, val_log_prob, val_loss
+                    except RuntimeError as e:
+                        logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                        # Continue with other validation batches
+                        del val_x, val_logit, val_log_prob, val_loss
         
-        avg_val_loss = val_loss_sum / max(val_count, 1)
-        logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
-        model.train()
-        head.train()
+            avg_val_loss = val_loss_sum / max(val_count, 1)
+            logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
+            
+            model.train()
+            head.train()
         
         # Save at end of epoch if max_steps not reached
         if step < cfg["max_steps"]:

@@ -6,11 +6,17 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from PIL import Image
 import torchaudio
+from tqdm import tqdm
 
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, MixDataset
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
+    check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, MixDataset,
+    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
+    ValidationSkipSamplesContext
+)
 
 def mix_collate_fn(batch):
     """Custom collate function that handles missing keys"""
@@ -345,55 +351,57 @@ def main(cfg):
     step = 0  # Global step counter (not per-epoch)
     
     # Resume from checkpoint if available
-    resume_from = None
-    if os.path.exists(cfg["save_dir"]):
-        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
-        if checkpoint_files:
-            # Extract step numbers and find latest
-            step_numbers = []
-            for f in checkpoint_files:
-                try:
-                    step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
-                    step_numbers.append((step_num, f))
-                except:
-                    continue
-            if step_numbers:
-                step_numbers.sort(key=lambda x: x[0], reverse=True)
-                resume_from = os.path.join(cfg["save_dir"], step_numbers[0][1])
-                step = step_numbers[0][0]
-                logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
-                
-                # Load full checkpoint state
-                checkpoint = torch.load(resume_from, map_location=device)
-                if isinstance(checkpoint, dict):
-                    if "thinker" in checkpoint:
-                        think.load_state_dict(checkpoint["thinker"])
-                    if "proj_a" in checkpoint:
-                        proj_a.load_state_dict(checkpoint["proj_a"])
-                    if "proj_v" in checkpoint:
-                        proj_v.load_state_dict(checkpoint["proj_v"])
-                    if "optimizer" in checkpoint:
-                        opt.load_state_dict(checkpoint["optimizer"])
-                    if "scheduler" in checkpoint:
-                        scheduler.load_state_dict(checkpoint["scheduler"])
-                    if "scaler" in checkpoint and scaler is not None:
-                        scaler.load_state_dict(checkpoint["scaler"])
-                    if "step" in checkpoint:
-                        step = checkpoint["step"]
-                    logger.info(f"Resumed from step {step}")
-                else:
-                    # Legacy checkpoint format
-                    logger.info(f"Loaded model weights from checkpoint (legacy format)")
+    step, resume_from = load_checkpoint(
+        cfg["save_dir"], 
+        "omni_step_", 
+        device, 
+        logger,
+        state_dict_loaders={
+            "thinker": (think, think.load_state_dict),
+            "proj_a": (proj_a, proj_a.load_state_dict),
+            "proj_v": (proj_v, proj_v.load_state_dict),
+            "optimizer": (opt, opt.load_state_dict),
+            "scheduler": (scheduler, scheduler.load_state_dict),
+            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+        }
+    )
+    # Handle scaler separately if needed
+    if step > 0 and resume_from and scaler is not None:
+        checkpoint = torch.load(resume_from, map_location=device)
+        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
+    
+    # Update skip_samples for dataset if resuming
+    batch_size = cfg.get("batch_size", 2)
+    new_train_dl = setup_resume_data_loading(
+        train_ds, step, batch_size, logger,
+        train_dl_kwargs={
+            "shuffle": True,
+            "num_workers": cfg.get("num_workers", 2),
+            "drop_last": cfg.get("drop_last", True),
+            "collate_fn": mix_collate_fn
+        }
+    )
+    if new_train_dl is not None:
+        train_dl = new_train_dl
     
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
-    # Skip to the correct epoch/step if resuming
-    start_epoch = 0
-    steps_per_epoch = len(train_dl)
+    # Calculate steps per epoch and determine starting epoch/position
+    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    drop_last = cfg.get("drop_last", True)
+    if train_size is not None:
+        steps_per_epoch = train_size // batch_size
+        if not drop_last and train_size % batch_size != 0:
+            steps_per_epoch += 1
+    else:
+        # Fallback: use a large number if size is unknown (for progress bar)
+        # The actual training will work fine, just progress bar won't be accurate
+        steps_per_epoch = 1000000  # Large placeholder
     initial_step = step
+    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
     if step > 0:
-        start_epoch = step // steps_per_epoch
-        logger.info(f"Resuming from epoch {start_epoch}, step {step}")
+        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
     for epoch in range(start_epoch, max_epochs):
         logger.epoch_start(epoch)
@@ -401,12 +409,24 @@ def main(cfg):
         proj_a.train()
         proj_v.train()
         
-        for batch_idx, data in enumerate(train_dl):
+        # Create progress bar with correct starting position when resuming mid-epoch
+        if epoch == start_epoch and start_batch_idx > 0:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", initial=start_batch_idx, total=steps_per_epoch)
+        else:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", total=steps_per_epoch)
+        
+        # Start enumeration from the correct position when resuming mid-epoch
+        enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        for batch_idx, data in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
+            # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
+            
+            # Update progress bar description
+            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
             batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True, use_amp_flag=use_amp)
             
             # Mark step begin for CUDAGraphs optimization
@@ -458,10 +478,11 @@ def main(cfg):
                                         proj_a.load_state_dict(checkpoint["proj_a"])
                                     if "proj_v" in checkpoint:
                                         proj_v.load_state_dict(checkpoint["proj_v"])
-                        # Recalculate start_epoch and initial_step for resuming
+                        # Recalculate start_epoch, start_batch_idx and initial_step for resuming
                         start_epoch = step // steps_per_epoch
+                        start_batch_idx = step % steps_per_epoch
                         initial_step = step
-                        logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
                     opt.zero_grad()
                     # Don't call scaler.update() here - no backward pass occurred, so no inf checks were recorded
                     continue
@@ -555,15 +576,16 @@ def main(cfg):
             
             # Validation
             if step % val_freq == 0 and step > 0:
-                think.eval()
-                proj_a.eval()
-                proj_v.eval()
-                val_loss_sum = 0.0
-                val_count = 0
-                
-                with torch.no_grad():
-                    for val_data in val_dl:
-                        val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
+                with ValidationSkipSamplesContext(train_ds):
+                    think.eval()
+                    proj_a.eval()
+                    proj_v.eval()
+                    val_loss_sum = 0.0
+                    val_count = 0
+                    
+                    with torch.no_grad():
+                        for val_data in val_dl:
+                            val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
                         try:
                             if use_amp:
                                 with autocast(device_type='cuda'):
@@ -579,55 +601,55 @@ def main(cfg):
                             val_count += 1
                             # Free validation tensors
                             del val_logits, val_loss
-                        except RuntimeError as e:
-                            error_msg = str(e)
-                            if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
-                                logger.error(f"Step {step}: {e}")
-                                logger.error("Reloading from last checkpoint...")
-                                # Reload from last checkpoint
-                                reloaded_step = reload_from_last_checkpoint(
-                                    cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
-                                )
-                                if reloaded_step > 0:
-                                    step = reloaded_step
-                                    # Also reload proj_a and proj_v from checkpoint
-                                    checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
-                                    if checkpoint_files:
-                                        step_numbers = []
-                                        for f in checkpoint_files:
-                                            try:
-                                                step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
-                                                step_numbers.append((step_num, f))
-                                            except:
-                                                continue
-                                        if step_numbers:
-                                            step_numbers.sort(key=lambda x: x[0], reverse=True)
-                                            last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
-                                            checkpoint = torch.load(last_checkpoint, map_location=device)
-                                            if isinstance(checkpoint, dict):
-                                                if "proj_a" in checkpoint:
-                                                    proj_a.load_state_dict(checkpoint["proj_a"])
-                                                if "proj_v" in checkpoint:
-                                                    proj_v.load_state_dict(checkpoint["proj_v"])
-                                    start_epoch = step // steps_per_epoch
-                                    initial_step = step
-                                    logger.info(f"Resuming from step {step}, epoch {start_epoch}")
-                                think.train()
-                                proj_a.train()
-                                proj_v.train()
+                            except RuntimeError as e:
+                                error_msg = str(e)
+                                if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
+                                    logger.error(f"Step {step}: {e}")
+                                    logger.error("Reloading from last checkpoint...")
+                                    # Reload from last checkpoint
+                                    reloaded_step = reload_from_last_checkpoint(
+                                        cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                                    )
+                                    if reloaded_step > 0:
+                                        step = reloaded_step
+                                        # Also reload proj_a and proj_v from checkpoint
+                                        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                                        if checkpoint_files:
+                                            step_numbers = []
+                                            for f in checkpoint_files:
+                                                try:
+                                                    step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
+                                                    step_numbers.append((step_num, f))
+                                                except:
+                                                    continue
+                                            if step_numbers:
+                                                step_numbers.sort(key=lambda x: x[0], reverse=True)
+                                                last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                                checkpoint = torch.load(last_checkpoint, map_location=device)
+                                                if isinstance(checkpoint, dict):
+                                                    if "proj_a" in checkpoint:
+                                                        proj_a.load_state_dict(checkpoint["proj_a"])
+                                                    if "proj_v" in checkpoint:
+                                                        proj_v.load_state_dict(checkpoint["proj_v"])
+                                        start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
+                                        initial_step = step
+                                        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
+                                    think.train()
+                                    proj_a.train()
+                                    proj_v.train()
+                                    break
+                                else:
+                                    logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                                    # Continue with other validation batches
+                            if val_count >= 10:  # Limit validation batches
                                 break
-                            else:
-                                logger.warning(f"Step {step}: Invalid validation loss: {e}")
-                                # Continue with other validation batches
-                        if val_count >= 10:  # Limit validation batches
-                            break
-                
-                avg_val_loss = val_loss_sum / val_count
-                logger.val_step(step, avg_val_loss, epoch)
-                
-                think.train()
-                proj_a.train()
-                proj_v.train()
+                    
+                    avg_val_loss = val_loss_sum / val_count
+                    logger.val_step(step, avg_val_loss, epoch)
+                    
+                    think.train()
+                    proj_a.train()
+                    proj_v.train()
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
@@ -667,12 +689,13 @@ def main(cfg):
                 return
         
         # Final validation at end of epoch
-        think.eval()
-        proj_a.eval()
-        proj_v.eval()
-        val_loss_sum = 0.0
-        val_count = 0
-        with torch.no_grad():
+        with ValidationSkipSamplesContext(train_ds):
+            think.eval()
+            proj_a.eval()
+            proj_v.eval()
+            val_loss_sum = 0.0
+            val_count = 0
+            with torch.no_grad():
             for val_data in val_dl:
                 val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
                 try:
@@ -721,8 +744,9 @@ def main(cfg):
                                         if "proj_v" in checkpoint:
                                             proj_v.load_state_dict(checkpoint["proj_v"])
                             start_epoch = step // steps_per_epoch
+                            start_batch_idx = step % steps_per_epoch
                             initial_step = step
-                            logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                            logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
                         think.train()
                         proj_a.train()
                         proj_v.train()
@@ -733,6 +757,10 @@ def main(cfg):
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
+        
+        # Restore skip_samples after validation
+        if hasattr(underlying_ds, 'skip_samples'):
+            underlying_ds.skip_samples = original_skip_samples
         
         # Save at end of epoch if max_steps not reached
         if step < cfg["max_steps"]:

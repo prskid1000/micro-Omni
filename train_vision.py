@@ -4,7 +4,12 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.vision_encoder import ViTTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, cleanup_old_checkpoints, ImgCapDataset
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
+    check_gradient_explosion, cleanup_old_checkpoints, ImgCapDataset,
+    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
+    ValidationSkipSamplesContext
+)
 from tqdm import tqdm
 
 
@@ -169,66 +174,79 @@ def main(cfg):
     val_freq = cfg.get("val_freq", 200)  # Validate every N steps
     
     # Resume from checkpoint if available
-    resume_from = None
-    if os.path.exists(cfg["save_dir"]):
-        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("vision_step_") and f.endswith(".pt")]
-        if checkpoint_files:
-            # Extract step numbers and find latest
-            step_numbers = []
-            for f in checkpoint_files:
-                try:
-                    step_num = int(f.replace("vision_step_", "").replace(".pt", ""))
-                    step_numbers.append((step_num, f))
-                except:
-                    continue
-            if step_numbers:
-                step_numbers.sort(key=lambda x: x[0], reverse=True)
-                resume_from = os.path.join(cfg["save_dir"], step_numbers[0][1])
-                step = step_numbers[0][0]
-                logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
-                
-                # Load full checkpoint state
-                checkpoint = torch.load(resume_from, map_location=device)
-                if isinstance(checkpoint, dict) and "vit" in checkpoint:
-                    vit.load_state_dict(checkpoint["vit"])
-                    if "img_proj" in checkpoint:
-                        img_proj.load_state_dict(checkpoint["img_proj"])
-                    if "text_proj" in checkpoint:
-                        text_proj.load_state_dict(checkpoint["text_proj"])
-                    if "text_embed" in checkpoint:
-                        text_embed.load_state_dict(checkpoint["text_embed"])
-                    if "optimizer" in checkpoint:
-                        opt.load_state_dict(checkpoint["optimizer"])
-                    if "scheduler" in checkpoint:
-                        scheduler.load_state_dict(checkpoint["scheduler"])
-                    if "scaler" in checkpoint and scaler is not None:
-                        scaler.load_state_dict(checkpoint["scaler"])
-                    if "step" in checkpoint:
-                        step = checkpoint["step"]
-                    logger.info(f"Resumed from step {step}")
-                else:
-                    # Legacy checkpoint format
-                    if "vit" in checkpoint:
-                        vit.load_state_dict(checkpoint["vit"])
-                    logger.info(f"Loaded model weights from checkpoint (legacy format)")
+    step = 0
+    step, resume_from = load_checkpoint(
+        cfg["save_dir"], 
+        "vision_step_", 
+        device, 
+        logger,
+        state_dict_loaders={
+            "vit": (vit, vit.load_state_dict),
+            "img_proj": (img_proj, img_proj.load_state_dict),
+            "text_proj": (text_proj, text_proj.load_state_dict),
+            "text_embed": (text_embed, text_embed.load_state_dict),
+            "optimizer": (opt, opt.load_state_dict),
+            "scheduler": (scheduler, scheduler.load_state_dict),
+            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+        }
+    )
+    # Handle scaler separately if needed
+    if step > 0 and resume_from and scaler is not None:
+        checkpoint = torch.load(resume_from, map_location=device)
+        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
+    
+    # Update skip_samples for dataset if resuming
+    batch_size = cfg.get("batch_size", 8)
+    new_train_dl = setup_resume_data_loading(
+        train_ds, step, batch_size, logger,
+        train_dl_kwargs={
+            "shuffle": True,
+            "num_workers": cfg.get("num_workers", 2),
+            "drop_last": cfg.get("drop_last", True)
+        }
+    )
+    if new_train_dl is not None:
+        train_dl = new_train_dl
     
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
-    # Skip to the correct epoch/step if resuming
-    start_epoch = 0
-    steps_per_epoch = len(train_dl)
+    # Calculate steps per epoch and determine starting epoch/position
+    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    batch_size = cfg.get("batch_size", 8)
+    drop_last = cfg.get("drop_last", True)
+    if train_size is not None:
+        steps_per_epoch = train_size // batch_size
+        if not drop_last and train_size % batch_size != 0:
+            steps_per_epoch += 1
+    else:
+        # Fallback: use a large number if size is unknown (for progress bar)
+        # The actual training will work fine, just progress bar won't be accurate
+        steps_per_epoch = 1000000  # Large placeholder
     initial_step = step
+    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
     if step > 0:
-        start_epoch = step // steps_per_epoch
-        logger.info(f"Resuming from epoch {start_epoch}, step {step}")
+        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
     for epoch in range(start_epoch, max_epochs):
-        for batch_idx, (img, cap) in enumerate(tqdm(train_dl, desc=f"epoch{epoch}")):
+        # Create progress bar with correct starting position when resuming mid-epoch
+        if epoch == start_epoch and start_batch_idx > 0:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", initial=start_batch_idx, total=steps_per_epoch)
+        else:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", total=steps_per_epoch)
+        
+        # Start enumeration from the correct position when resuming mid-epoch
+        enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        for batch_idx, (img, cap) in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
+            # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
+            
+            # Update progress bar description
+            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
             img = img.to(device)
             B = img.shape[0]
             
@@ -371,18 +389,31 @@ def main(cfg):
             
             # Validation
             if step % val_freq == 0 and step > 0:
-                vit.eval()
-                img_proj.eval()
-                text_proj.eval()
-                text_embed.eval()
-                val_loss_sum = 0.0
-                val_count = 0
-                with torch.no_grad():
-                    for val_img, val_cap in val_dl:
-                        val_img = val_img.to(device)
-                        val_B = val_img.shape[0]
-                        if use_amp:
-                            with autocast(device_type='cuda'):
+                with ValidationSkipSamplesContext(train_ds):
+                    vit.eval()
+                    img_proj.eval()
+                    text_proj.eval()
+                    text_embed.eval()
+                    val_loss_sum = 0.0
+                    val_count = 0
+                    with torch.no_grad():
+                        for val_img, val_cap in val_dl:
+                            val_img = val_img.to(device)
+                            val_B = val_img.shape[0]
+                            if use_amp:
+                                with autocast(device_type='cuda'):
+                                    val_cls, _ = vit(val_img)
+                                    val_img_emb = img_proj(val_cls.squeeze(1))
+                                    val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
+                                    
+                                    val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                                    val_text_emb = text_proj(val_text_embs)
+                                    val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
+                                    
+                                    val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                                    val_labels = torch.arange(val_B, device=device)
+                                    val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
+                            else:
                                 val_cls, _ = vit(val_img)
                                 val_img_emb = img_proj(val_cls.squeeze(1))
                                 val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
@@ -394,39 +425,27 @@ def main(cfg):
                                 val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
                                 val_labels = torch.arange(val_B, device=device)
                                 val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
-                        else:
-                            val_cls, _ = vit(val_img)
-                            val_img_emb = img_proj(val_cls.squeeze(1))
-                            val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
                             
-                            val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
-                            val_text_emb = text_proj(val_text_embs)
-                            val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
-                            
-                            val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
-                            val_labels = torch.arange(val_B, device=device)
-                            val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
-                        
-                        # Validate validation loss
-                        try:
-                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                            val_loss_sum += float(val_loss.detach())
-                            val_count += 1
-                            # Free validation tensors
-                            del val_cls, val_img_emb, val_text_embs, val_text_emb, val_logits, val_loss
-                        except RuntimeError as e:
-                            logger.warning(f"Step {step}: Invalid validation loss: {e}")
-                            # Continue with other validation batches
-                        if val_count >= 10:  # Limit validation batches
-                            break
-                
-                avg_val_loss = val_loss_sum / val_count
-                logger.val_step(step, avg_val_loss, epoch)
-                
-                vit.train()
-                img_proj.train()
-                text_proj.train()
-                text_embed.train()
+                            # Validate validation loss
+                            try:
+                                validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                                val_loss_sum += float(val_loss.detach())
+                                val_count += 1
+                                # Free validation tensors
+                                del val_cls, val_img_emb, val_text_embs, val_text_emb, val_logits, val_loss
+                            except RuntimeError as e:
+                                logger.warning(f"Step {step}: Invalid validation loss: {e}")
+                                # Continue with other validation batches
+                            if val_count >= 10:  # Limit validation batches
+                                break
+                    
+                    avg_val_loss = val_loss_sum / val_count
+                    logger.val_step(step, avg_val_loss, epoch)
+                    
+                    vit.train()
+                    img_proj.train()
+                    text_proj.train()
+                    text_embed.train()
             
             if step >= cfg["max_steps"]:
                 final_path = os.path.join(cfg["save_dir"], "vision.pt")
@@ -447,18 +466,31 @@ def main(cfg):
                 return
         
         # Final validation at end of epoch
-        vit.eval()
-        img_proj.eval()
-        text_proj.eval()
-        text_embed.eval()
-        val_loss_sum = 0.0
-        val_count = 0
-        with torch.no_grad():
-            for val_img, val_cap in val_dl:
-                val_img = val_img.to(device)
-                val_B = val_img.shape[0]
-                if use_amp:
-                    with autocast(device_type='cuda'):
+        with ValidationSkipSamplesContext(train_ds):
+            vit.eval()
+            img_proj.eval()
+            text_proj.eval()
+            text_embed.eval()
+            val_loss_sum = 0.0
+            val_count = 0
+            with torch.no_grad():
+                for val_img, val_cap in val_dl:
+                    val_img = val_img.to(device)
+                    val_B = val_img.shape[0]
+                    if use_amp:
+                        with autocast(device_type='cuda'):
+                            val_cls, _ = vit(val_img)
+                            val_img_emb = img_proj(val_cls.squeeze(1))
+                            val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
+                            
+                            val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                            val_text_emb = text_proj(val_text_embs)
+                            val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
+                            
+                            val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                            val_labels = torch.arange(val_B, device=device)
+                            val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
+                    else:
                         val_cls, _ = vit(val_img)
                         val_img_emb = img_proj(val_cls.squeeze(1))
                         val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
@@ -470,36 +502,25 @@ def main(cfg):
                         val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
                         val_labels = torch.arange(val_B, device=device)
                         val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
-                else:
-                    val_cls, _ = vit(val_img)
-                    val_img_emb = img_proj(val_cls.squeeze(1))
-                    val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
                     
-                    val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
-                    val_text_emb = text_proj(val_text_embs)
-                    val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
-                    
-                    val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
-                    val_labels = torch.arange(val_B, device=device)
-                    val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
-                
-                # Validate validation loss
-                try:
-                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                    val_loss_sum += float(val_loss.detach())
-                    val_count += 1
-                    # Free validation tensors
-                    del val_cls, val_img_emb, val_text_embs, val_text_emb, val_logits, val_loss
-                except RuntimeError as e:
-                    logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
-                    # Continue with other validation batches
-        
-        avg_val_loss = val_loss_sum / max(val_count, 1)
-        logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
-        vit.train()
-        img_proj.train()
-        text_proj.train()
-        text_embed.train()
+                    # Validate validation loss
+                    try:
+                        validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                        val_loss_sum += float(val_loss.detach())
+                        val_count += 1
+                        # Free validation tensors
+                        del val_cls, val_img_emb, val_text_embs, val_text_emb, val_logits, val_loss
+                    except RuntimeError as e:
+                        logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                        # Continue with other validation batches
+            
+            avg_val_loss = val_loss_sum / max(val_count, 1)
+            logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
+            
+            vit.train()
+            img_proj.train()
+            text_proj.train()
+            text_embed.train()
         
         # Save at end of epoch if max_steps not reached
         if step < cfg["max_steps"]:

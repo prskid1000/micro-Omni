@@ -781,7 +781,9 @@ Total wall-clock time: ~25 hours instead of 50!
 ✅ **Small datasets** (<5GB each) make it accessible  
 ✅ **Modular design** enables easy debugging and experimentation  
 ✅ **Progressive learning** from simple (text) to complex (multimodal)  
-✅ **Efficient** through gradient accumulation, FP16, and checkpointing
+✅ **Efficient** through gradient accumulation, FP16, and checkpointing  
+✅ **Automatic resuming** - all scripts auto-detect and resume from latest checkpoint  
+✅ **Common utilities** - shared checkpoint/resume logic across all training scripts
 
 ---
 

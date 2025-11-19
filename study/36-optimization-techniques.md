@@ -174,9 +174,11 @@ def __iter__(self):
 - ✅ Can train on systems with limited RAM (8GB+)
 - ✅ No cache files needed - simpler and cleaner
 - ✅ True streaming - data processed on-demand
-- ✅ Efficient resuming via `skip_samples` parameter
+- ✅ Efficient resuming via `skip_samples` parameter (automatically handled by `setup_resume_data_loading()`)
 - ✅ Worker sharding for multi-process data loading
 - ✅ Buffer-based shuffling for randomization
+- ✅ Automatic checkpoint detection and resuming (via `load_checkpoint()`)
+- ✅ Proper validation on full dataset (via `ValidationSkipSamplesContext`)
 
 ### 2. Efficient Tokenizer Training
 

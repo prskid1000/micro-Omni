@@ -425,6 +425,138 @@ def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, mod
         logger.error(f"Failed to reload from checkpoint: {e}")
         return 0
 
+def load_checkpoint(save_dir, checkpoint_prefix, device, logger, state_dict_loaders=None):
+    """
+    Load checkpoint from save directory and return step number.
+    
+    Args:
+        save_dir: Directory containing checkpoints
+        checkpoint_prefix: Prefix for checkpoint files (e.g., "thinker_step_", "talker_step_")
+        device: Device to load checkpoint on
+        logger: Logger instance for logging
+        state_dict_loaders: Dict mapping checkpoint keys to (object, load_func) tuples.
+                          Example: {"model": (model, model.load_state_dict), 
+                                   "optimizer": (opt, opt.load_state_dict)}
+    
+    Returns:
+        tuple: (step, checkpoint_path) or (0, None) if no checkpoint found
+    """
+    if not os.path.exists(save_dir):
+        return 0, None
+    
+    checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith(checkpoint_prefix) and f.endswith(".pt")]
+    if not checkpoint_files:
+        return 0, None
+    
+    # Extract step numbers and find latest
+    step_numbers = []
+    for f in checkpoint_files:
+        try:
+            step_num = int(f.replace(checkpoint_prefix, "").replace(".pt", ""))
+            step_numbers.append((step_num, f))
+        except:
+            continue
+    
+    if not step_numbers:
+        return 0, None
+    
+    step_numbers.sort(key=lambda x: x[0], reverse=True)
+    resume_from = os.path.join(save_dir, step_numbers[0][1])
+    step = step_numbers[0][0]
+    logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
+    
+    try:
+        checkpoint = torch.load(resume_from, map_location=device)
+        
+        if isinstance(checkpoint, dict):
+            # Load state dicts using provided loaders
+            if state_dict_loaders:
+                for key, (obj, load_func) in state_dict_loaders.items():
+                    if key in checkpoint:
+                        load_func(checkpoint[key])
+            
+            # Get step from checkpoint if available
+            if "step" in checkpoint:
+                step = checkpoint["step"]
+            
+            logger.info(f"Resumed from step {step}")
+        else:
+            # Legacy checkpoint format - try to load as model if only one loader provided
+            if state_dict_loaders and len(state_dict_loaders) == 1:
+                key = list(state_dict_loaders.keys())[0]
+                obj, load_func = state_dict_loaders[key]
+                load_func(checkpoint)
+            logger.info(f"Loaded model weights from checkpoint (legacy format)")
+        
+        return step, resume_from
+    except Exception as e:
+        logger.error(f"Failed to load checkpoint: {e}")
+        return 0, None
+
+def setup_resume_data_loading(train_ds, step, batch_size, logger, train_dl_kwargs):
+    """
+    Setup skip_samples for dataset when resuming training.
+    
+    Args:
+        train_ds: Training dataset (may be SubsetDataset from random_split)
+        step: Current step number (0 if not resuming)
+        batch_size: Batch size for calculating skip_samples
+        logger: Logger instance
+        train_dl_kwargs: Dict of kwargs to recreate DataLoader (batch_size, shuffle, num_workers, etc.)
+    
+    Returns:
+        DataLoader: Recreated DataLoader with skip_samples applied
+    """
+    if step > 0:
+        # Calculate approximate samples to skip: step * batch_size
+        skip_samples = step * batch_size
+        # Access underlying dataset from SubsetDataset (created by random_split)
+        underlying_ds = train_ds.dataset if hasattr(train_ds, 'dataset') else train_ds
+        underlying_ds.skip_samples = skip_samples
+        logger.info(f"Dataset: will skip approximately {skip_samples} samples when resuming")
+        
+        # Recreate DataLoader so workers pick up the new skip_samples value
+        from torch.utils.data import DataLoader
+        train_dl_kwargs['batch_size'] = batch_size
+        return DataLoader(train_ds, **train_dl_kwargs)
+    
+    return None  # No need to recreate if not resuming
+
+def calculate_resume_position(step, steps_per_epoch):
+    """
+    Calculate starting epoch and batch index from global step.
+    
+    Args:
+        step: Global step number
+        steps_per_epoch: Number of steps per epoch
+    
+    Returns:
+        tuple: (start_epoch, start_batch_idx)
+    """
+    if step > 0:
+        start_epoch = step // steps_per_epoch
+        start_batch_idx = step % steps_per_epoch
+        return start_epoch, start_batch_idx
+    return 0, 0
+
+class ValidationSkipSamplesContext:
+    """Context manager to temporarily reset skip_samples for validation."""
+    def __init__(self, train_ds):
+        self.train_ds = train_ds
+        self.underlying_ds = train_ds.dataset if hasattr(train_ds, 'dataset') else train_ds
+        self.original_skip_samples = None
+    
+    def __enter__(self):
+        if hasattr(self.underlying_ds, 'skip_samples'):
+            self.original_skip_samples = self.underlying_ds.skip_samples
+            self.underlying_ds.skip_samples = 0
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if hasattr(self.underlying_ds, 'skip_samples') and self.original_skip_samples is not None:
+            self.underlying_ds.skip_samples = self.original_skip_samples
+        return False
+
 class TextDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
     def __init__(self, path, tokenizer, ctx, shuffle_buffer_size=10000, seed=None, skip_samples=0):

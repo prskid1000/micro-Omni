@@ -103,6 +103,45 @@ print(model.config)  # Check parameters match training
 
 ---
 
+## 🛠️ Resuming Training
+
+**Automatic Resuming:** All training scripts automatically detect and resume from the latest checkpoint:
+
+```bash
+# Simply rerun the training command - it will auto-resume!
+python train_text.py --config configs/thinker_tiny.json
+
+# The script will:
+# 1. Automatically find the latest checkpoint in save_dir
+# 2. Load model, optimizer, scheduler, and scaler states
+# 3. Set skip_samples on dataset to skip already-processed samples
+# 4. Calculate correct epoch and batch position
+# 5. Continue training from where it left off
+```
+
+**How it works:**
+- ✅ Scans `save_dir` for checkpoints matching pattern (e.g., `thinker_step_*.pt`)
+- ✅ Loads the highest step number checkpoint automatically
+- ✅ Updates dataset `skip_samples` to skip processed samples
+- ✅ Recreates DataLoader to ensure workers pick up new skip_samples
+- ✅ Initializes progress bar at correct position
+- ✅ Validation always uses full validation set (skip_samples temporarily reset)
+
+**Checkpoint Format:**
+```python
+{
+    "model": model.state_dict(),
+    "optimizer": opt.state_dict(),
+    "scheduler": scheduler.state_dict(),
+    "scaler": scaler.state_dict(),  # If using AMP
+    "step": step_number
+}
+```
+
+**Note:** No `--resume` flag needed - resuming is automatic and seamless!
+
+---
+
 ## 🛠️ Debug Commands
 
 ```bash

@@ -16,7 +16,12 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.ocr_model import OCRModel
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, cleanup_old_checkpoints, OCRDataset
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
+    check_gradient_explosion, cleanup_old_checkpoints, OCRDataset,
+    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
+    ValidationSkipSamplesContext
+)
 from tqdm import tqdm
 
 
@@ -143,46 +148,60 @@ def main(cfg):
     
     # Resume from checkpoint
     step = 0
-    start_epoch = 0
-    resume_from = None
-    if os.path.exists(cfg["save_dir"]):
-        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("ocr_step_") and f.endswith(".pt")]
-        if checkpoint_files:
-            step_numbers = []
-            for f in checkpoint_files:
-                try:
-                    step_num = int(f.replace("ocr_step_", "").replace(".pt", ""))
-                    step_numbers.append((step_num, f))
-                except:
-                    continue
-            if step_numbers:
-                step_numbers.sort(key=lambda x: x[0], reverse=True)
-                resume_from = os.path.join(cfg["save_dir"], step_numbers[0][1])
-                step = step_numbers[0][0]
-                logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
-                
-                checkpoint = torch.load(resume_from, map_location=device)
-                if "model" in checkpoint:
-                    model.load_state_dict(checkpoint["model"])
-                if "optimizer" in checkpoint:
-                    opt.load_state_dict(checkpoint["optimizer"])
-                if "scheduler" in checkpoint:
-                    scheduler.load_state_dict(checkpoint["scheduler"])
-                if "scaler" in checkpoint and scaler is not None:
-                    scaler.load_state_dict(checkpoint["scaler"])
-                if "step" in checkpoint:
-                    step = checkpoint["step"]
-                if "char_to_idx" in checkpoint:
-                    ds.char_to_idx = checkpoint["char_to_idx"]
-                    ds.idx_to_char = checkpoint["idx_to_char"]
-                logger.info(f"Resumed from step {step}")
+    step, resume_from = load_checkpoint(
+        cfg["save_dir"], 
+        "ocr_step_", 
+        device, 
+        logger,
+        state_dict_loaders={
+            "model": (model, model.load_state_dict),
+            "optimizer": (opt, opt.load_state_dict),
+            "scheduler": (scheduler, scheduler.load_state_dict),
+            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+        }
+    )
+    # Handle scaler and char_to_idx separately if needed
+    if step > 0 and resume_from:
+        checkpoint = torch.load(resume_from, map_location=device)
+        if isinstance(checkpoint, dict):
+            if "scaler" in checkpoint and scaler is not None:
+                scaler.load_state_dict(checkpoint["scaler"])
+            if "char_to_idx" in checkpoint:
+                ds.char_to_idx = checkpoint["char_to_idx"]
+                ds.idx_to_char = checkpoint["idx_to_char"]
+    
+    # Update skip_samples for dataset if resuming
+    batch_size = cfg.get("batch_size", 4)
+    new_train_dl = setup_resume_data_loading(
+        train_ds, step, batch_size, logger,
+        train_dl_kwargs={
+            "shuffle": True,
+            "num_workers": cfg.get("num_workers", 2),
+            "drop_last": True,
+            "collate_fn": collate_ocr_fn
+        }
+    )
+    if new_train_dl is not None:
+        train_dl = new_train_dl
     
     logger.training_start(max_steps, train_size, val_size)
     
-    steps_per_epoch = len(train_dl)
+    # Calculate steps per epoch and determine starting epoch/position
+    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    batch_size = cfg.get("batch_size", 4)
+    drop_last = True  # OCR uses drop_last=True
+    if train_size is not None:
+        steps_per_epoch = train_size // batch_size
+        if not drop_last and train_size % batch_size != 0:
+            steps_per_epoch += 1
+    else:
+        # Fallback: use a large number if size is unknown (for progress bar)
+        # The actual training will work fine, just progress bar won't be accurate
+        steps_per_epoch = 1000000  # Large placeholder
     initial_step = step
+    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
     if step > 0:
-        start_epoch = step // steps_per_epoch
+        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 50)
@@ -192,12 +211,24 @@ def main(cfg):
     model.train()
     
     for epoch in range(start_epoch, max_epochs):
-        for batch_idx, (images, text_ids) in enumerate(tqdm(train_dl, desc=f"epoch{epoch}")):
-            # Skip batches if resuming
+        # Create progress bar with correct starting position when resuming mid-epoch
+        if epoch == start_epoch and start_batch_idx > 0:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", initial=start_batch_idx, total=steps_per_epoch)
+        else:
+            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", total=steps_per_epoch)
+        
+        # Start enumeration from the correct position when resuming mid-epoch
+        enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        for batch_idx, (images, text_ids) in enumerate(pbar, start=enum_start):
+            # Skip batches if resuming mid-epoch
+            # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
+            
+            # Update progress bar description
+            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
             
             images = images.to(device)  # (B, 3, H, W)
             text_ids = text_ids.to(device)  # (B, T)
@@ -278,40 +309,41 @@ def main(cfg):
             
             # Validation
             if step % val_freq == 0:
-                model.eval()
-                val_loss_sum = 0.0
-                val_count = 0
-                
-                with torch.no_grad():
-                    for val_images, val_text_ids in val_dl:
-                        if val_count >= 10:  # Limit validation batches
-                            break
-                        
-                        val_images = val_images.to(device)
-                        val_text_ids = val_text_ids.to(device)
-                        val_input_ids = val_text_ids[:, :-1]
-                        val_target_ids = val_text_ids[:, 1:]
-                        
-                        if use_amp:
-                            with autocast(device_type='cuda'):
+                with ValidationSkipSamplesContext(train_ds):
+                    model.eval()
+                    val_loss_sum = 0.0
+                    val_count = 0
+                    
+                    with torch.no_grad():
+                        for val_images, val_text_ids in val_dl:
+                            if val_count >= 10:  # Limit validation batches
+                                break
+                            
+                            val_images = val_images.to(device)
+                            val_text_ids = val_text_ids.to(device)
+                            val_input_ids = val_text_ids[:, :-1]
+                            val_target_ids = val_text_ids[:, 1:]
+                            
+                            if use_amp:
+                                with autocast(device_type='cuda'):
+                                    val_logits = model(val_images, val_input_ids)
+                                    val_loss = loss_fn(val_logits.reshape(-1, val_logits.size(-1)), val_target_ids.reshape(-1))
+                            else:
                                 val_logits = model(val_images, val_input_ids)
                                 val_loss = loss_fn(val_logits.reshape(-1, val_logits.size(-1)), val_target_ids.reshape(-1))
-                        else:
-                            val_logits = model(val_images, val_input_ids)
-                            val_loss = loss_fn(val_logits.reshape(-1, val_logits.size(-1)), val_target_ids.reshape(-1))
-                        
-                        try:
-                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                            val_loss_sum += float(val_loss.detach())
-                            val_count += 1
-                        except RuntimeError:
-                            pass
-                
-                if val_count > 0:
-                    avg_val_loss = val_loss_sum / val_count
-                    logger.val_step(step, avg_val_loss, epoch)
-                
-                model.train()
+                            
+                            try:
+                                validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                                val_loss_sum += float(val_loss.detach())
+                                val_count += 1
+                            except RuntimeError:
+                                pass
+                    
+                    if val_count > 0:
+                        avg_val_loss = val_loss_sum / val_count
+                        logger.val_step(step, avg_val_loss, epoch)
+                    
+                    model.train()
             
             # Checkpointing
             if step % checkpoint_freq == 0:

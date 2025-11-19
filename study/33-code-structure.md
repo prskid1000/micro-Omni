@@ -17,7 +17,7 @@
 │   ├── codec.py              # RVQ + Griffin-Lim vocoder
 │   ├── tokenizer.py          # BPE tokenizer wrapper
 │   ├── utils.py              # RMSNorm, RoPE, helpers
-│   └── training_utils.py     # Training helpers
+│   └── training_utils.py     # Training helpers (checkpoint loading, resuming, validation)
 │
 ├── configs/                   # JSON configurations
 │   ├── thinker_tiny.json     # Thinker config
@@ -279,6 +279,38 @@ All training scripts use streaming `IterableDataset` implementations:
 - ✅ Buffer-based shuffling for randomization
 
 See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for details.
+
+## 🔄 Common Training Utilities
+
+All training scripts share common utilities from `omni/training_utils.py`:
+
+### Checkpoint Management
+- **`load_checkpoint()`**: Automatically finds and loads the latest checkpoint
+  - Handles model, optimizer, scheduler, and scaler state dicts
+  - Returns step number and checkpoint path
+  - Supports legacy checkpoint formats
+
+### Resuming Training
+- **`setup_resume_data_loading()`**: Configures dataset `skip_samples` for resuming
+  - Handles `SubsetDataset` wrappers from `random_split`
+  - Recreates DataLoader with updated skip_samples
+  - Works seamlessly with IterableDataset streaming
+
+- **`calculate_resume_position()`**: Calculates epoch and batch position from global step
+  - Returns `(start_epoch, start_batch_idx)` tuple
+  - Used for progress bar initialization and epoch tracking
+
+### Validation
+- **`ValidationSkipSamplesContext`**: Context manager for validation loops
+  - Temporarily resets `skip_samples` to 0 for validation
+  - Ensures validation always processes full validation set
+  - Automatically restores original `skip_samples` after validation
+
+**Benefits:**
+- ✅ Consistent resuming logic across all training scripts
+- ✅ Automatic checkpoint detection (no `--resume` flag needed)
+- ✅ Proper validation on full dataset regardless of training resumption
+- ✅ Reduced code duplication and easier maintenance
 
 ---
 

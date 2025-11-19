@@ -5,7 +5,12 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, TextDataset
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
+    check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, TextDataset,
+    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
+    ValidationSkipSamplesContext
+)
 from tqdm import tqdm
 
 def main(cfg):
@@ -123,70 +128,81 @@ def main(cfg):
     val_freq = cfg.get("val_freq", 200)  # Validate every N steps
     
     # Resume from checkpoint if available
-    resume_from = None
-    checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("thinker_step_") and f.endswith(".pt")]
-    if checkpoint_files:
-        # Extract step numbers and find latest
-        step_numbers = []
-        for f in checkpoint_files:
-            try:
-                step_num = int(f.replace("thinker_step_", "").replace(".pt", ""))
-                step_numbers.append((step_num, f))
-            except:
-                continue
-        if step_numbers:
-            step_numbers.sort(key=lambda x: x[0], reverse=True)
-            resume_from = os.path.join(cfg["save_dir"], step_numbers[0][1])
-            step = step_numbers[0][0]
-            logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
-            
-            # Load full checkpoint state
-            checkpoint = torch.load(resume_from, map_location=device)
-            if isinstance(checkpoint, dict) and "model" in checkpoint:
-                model.load_state_dict(checkpoint["model"])
-                if "optimizer" in checkpoint:
-                    opt.load_state_dict(checkpoint["optimizer"])
-                if "scheduler" in checkpoint:
-                    scheduler.load_state_dict(checkpoint["scheduler"])
-                if "scaler" in checkpoint and scaler is not None:
-                    scaler.load_state_dict(checkpoint["scaler"])
-                if "step" in checkpoint:
-                    step = checkpoint["step"]
-                logger.info(f"Resumed from step {step}")
-            else:
-                # Legacy checkpoint format (just model weights)
-                model.load_state_dict(checkpoint)
-                logger.info(f"Loaded model weights from checkpoint (legacy format)")
+    step = 0
+    step, resume_from = load_checkpoint(
+        cfg["save_dir"], 
+        "thinker_step_", 
+        device, 
+        logger,
+        state_dict_loaders={
+            "model": (model, model.load_state_dict),
+            "optimizer": (opt, opt.load_state_dict),
+            "scheduler": (scheduler, scheduler.load_state_dict),
+            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+        }
+    )
+    # Handle scaler separately if needed
+    if step > 0 and resume_from and scaler is not None:
+        checkpoint = torch.load(resume_from, map_location=device)
+        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
     
     # Update skip_samples for dataset if resuming
-    if step > 0:
-        # Calculate approximate samples to skip: step * batch_size
-        # This is approximate because of gradient accumulation, but close enough
-        batch_size = cfg.get("batch_size", 8)
-        skip_samples = step * batch_size
-        train_ds.skip_samples = skip_samples
-        logger.info(f"Dataset: will skip approximately {skip_samples} samples when resuming")
-        # Recreate DataLoader so workers pick up the new skip_samples value
-        train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    batch_size = cfg.get("batch_size", 8)
+    new_train_dl = setup_resume_data_loading(
+        train_ds, step, batch_size, logger,
+        train_dl_kwargs={
+            "shuffle": False,
+            "num_workers": cfg.get("num_workers", 2),
+            "drop_last": cfg.get("drop_last", True)
+        }
+    )
+    if new_train_dl is not None:
+        train_dl = new_train_dl
     
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
-    # Skip to the correct epoch/step if resuming
-    start_epoch = 0
+    # Calculate steps per epoch and determine starting epoch/position
+    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    drop_last = cfg.get("drop_last", True)
+    if train_size is not None:
+        steps_per_epoch = train_size // batch_size
+        if not drop_last and train_size % batch_size != 0:
+            steps_per_epoch += 1
+        logger.info(f"Dataset: train_size={train_size}, batch_size={batch_size}, steps_per_epoch={steps_per_epoch}")
+    else:
+        # Fallback: use a large number if size is unknown (for progress bar)
+        # The actual training will work fine, just progress bar won't be accurate
+        steps_per_epoch = 1000000  # Large placeholder
+        logger.info(f"Dataset size unknown, using placeholder steps_per_epoch={steps_per_epoch}")
     initial_step = step
+    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
     if step > 0:
-        logger.info(f"Resuming from step {step} (epoch tracking approximate)")
+        logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
     for epoch in range(start_epoch, max_epochs):
         logger.epoch_start(epoch)
         # Create progress bar with step info
         pbar_desc = f"epoch{epoch} step{step}"
-        pbar = tqdm(train_dl, desc=pbar_desc)
+        # Initialize progress bar with correct starting position when resuming mid-epoch
+        if epoch == start_epoch and start_batch_idx > 0:
+            pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch)
+        else:
+            pbar = tqdm(train_dl, desc=pbar_desc, total=steps_per_epoch)
         
-        for batch_idx, (x,y) in enumerate(pbar):
+        # Start enumeration from the correct position when resuming mid-epoch
+        # This makes batch_idx reflect the actual position in the epoch (not starting from 0)
+        enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        for batch_idx, (x,y) in enumerate(pbar, start=enum_start):
+            # Skip batches if resuming mid-epoch
+            # batch_idx already represents the position in the epoch when enum_start > 0
+            if epoch == start_epoch and initial_step > 0:
+                current_batch_step = epoch * steps_per_epoch + batch_idx
+                if current_batch_step < initial_step:
+                    continue
+            
             # Update progress bar description with current step
-            pbar.set_description(f"epoch{epoch} step{step}")
-            # Samples are already skipped at dataset level when resuming
+            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
             x,y = x.to(device), y.to(device)
             
             # Mark step begin for CUDAGraphs optimization
