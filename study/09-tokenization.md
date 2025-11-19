@@ -446,18 +446,30 @@ tokenizer = BPETokenizer.train_new(
     text_path='corpus.txt',           # Training text file
     out_model='tokenizer.model',      # Output model path
     vocab_size=32000,                 # Vocabulary size
-    max_sentence_length=100000        # Max sentence length in bytes
+    max_sentence_length=100000,       # Max sentence length in bytes
+    input_sentence_size=10000000      # Default: 10M sentences (faster training)
+)
+
+# Use all sentences (slower but uses more data):
+tokenizer = BPETokenizer.train_new(
+    text_path='corpus.txt',
+    out_model='tokenizer.model',
+    vocab_size=32000,
+    input_sentence_size=0             # 0 = use all sentences
 )
 
 # The train_new method automatically:
 # - Enables train_extremely_large_corpus=True (64-bit indexing for files > 2GB)
-# - Uses BPE algorithm with character_coverage=1.0
+# - Uses BPE algorithm (faster than Unigram)
 # - Handles files of any size (no file size checking or streaming)
 ```
 
 **Key Implementation Details:**
 - ✅ **Always enables `train_extremely_large_corpus`:** Uses 64-bit indexing instead of 32-bit, allowing training on files > 2GB
-- ✅ **No file size limits:** Removed file size checking - works with files of any size
+- ✅ **BPE model type:** Faster than Unigram, good balance of speed and quality
+- ✅ **Default speed optimization:** `input_sentence_size=10000000` (10M sentences) for faster training by default
+- ✅ **Use all data:** Set `input_sentence_size=0` to use entire corpus (slower but uses more data)
+- ✅ **No file size limits:** Works with files of any size
 - ✅ **No streaming:** Files are passed directly to SentencePiece (which loads entire file into memory)
 - ⚠️ **Memory note:** SentencePiece loads the entire file into RAM during training, regardless of size
 

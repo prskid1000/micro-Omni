@@ -197,6 +197,9 @@ self.item_lengths = []  # 8 bytes per length
 - Processes entire dataset (not just samples) efficiently
 - Temporary files auto-cleaned after training
 - **Always enables `train_extremely_large_corpus=True`:** Uses 64-bit indexing for maximum file size compatibility
+- **BPE model type:** Faster than Unigram, good balance of speed and quality
+- **Default speed optimization:** `input_sentence_size=10000000` (10M sentences) limits training data for faster training by default
+- **Use all data:** Set `input_sentence_size=0` to use entire corpus (slower but uses more data)
 
 **Memory Behavior:**
 - **Plain text:** SentencePiece loads entire file into memory during training (no streaming)
