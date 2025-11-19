@@ -40,9 +40,24 @@ EPOCH_RECOMMENDATIONS = [
 ]
 
 def count_text_samples(text_path: str) -> int:
-    """Count lines in text file"""
+    """Count lines in text file, using offset cache if available"""
     if not os.path.exists(text_path):
         return 0
+    
+    # Try to use offset cache first (much faster for large files)
+    offset_cache_path = f"{text_path}.line_offsets.pkl"
+    if os.path.exists(offset_cache_path):
+        try:
+            with open(offset_cache_path, 'rb') as cache_file:
+                cached_data = pickle.load(cache_file)
+                cached_offsets = cached_data.get('offsets', [])
+                if cached_offsets:
+                    print(f"  Using cached line offset index: {len(cached_offsets):,} samples")
+                    return len(cached_offsets)
+        except Exception:
+            pass  # Cache invalid, fall back to counting
+    
+    # Fall back to counting lines
     count = 0
     try:
         with open(text_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -80,10 +95,27 @@ def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None
     
     return BPETokenizer(tokenizer_model)
 
-def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> int:
-    """Count actual tokens in text file using tokenizer (streams line-by-line, resumable)"""
+def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None, 
+                     skip_tokenization: bool = False, assumed_token_count: Optional[int] = None) -> int:
+    """
+    Count actual tokens in text file using tokenizer (streams line-by-line, resumable).
+    
+    Args:
+        text_path: Path to text file
+        tokenizer_path: Optional path to tokenizer model
+        skip_tokenization: If True, skip actual tokenization and return assumed_token_count
+        assumed_token_count: Token count to return if skip_tokenization is True
+    
+    Returns:
+        Total token count
+    """
     if not os.path.exists(text_path):
         return 0
+    
+    # If skipping tokenization, return assumed count
+    if skip_tokenization and assumed_token_count is not None:
+        print(f"  Skipping tokenization, using assumed token count: {assumed_token_count:,} tokens")
+        return assumed_token_count
     
     try:
         tokenizer = get_or_create_tokenizer(text_path, tokenizer_path)
@@ -1023,7 +1055,8 @@ def update_config_file(
     print(f"✓ Updated {config_path}")
     return True
 
-def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Optional[List[str]] = None):
+def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Optional[List[str]] = None,
+                                   skip_text_tokenization: bool = False, assumed_text_tokens: Optional[int] = None):
     """
     Analyze all datasets and update config files.
     
@@ -1032,6 +1065,8 @@ def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Opt
         configs_to_update: List of config names to update. If None, update all.
                          Valid names: 'thinker', 'audio_enc', 'vision', 'talker', 
                                      'omni_sft', 'ocr', 'vocoder'
+        skip_text_tokenization: If True, skip actual tokenization of text files
+        assumed_text_tokens: Token count to use if skip_text_tokenization is True (e.g., 8_000_000_000 for 8B)
     """
     # Map config names to their identifiers
     config_map = {
@@ -1077,11 +1112,18 @@ def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Opt
     
     # Count tokens (required)
     if text_path:
-        print(f"  Counting tokens (this may take a while for large files)...")
-        text_tokens = count_text_tokens(text_path)
+        if skip_text_tokenization and assumed_text_tokens is not None:
+            print(f"  Using assumed token count (skipping tokenization)...")
+            text_tokens = count_text_tokens(text_path, skip_tokenization=True, assumed_token_count=assumed_text_tokens)
+        else:
+            print(f"  Counting tokens (this may take a while for large files)...")
+            text_tokens = count_text_tokens(text_path)
         avg_tokens_per_sample = text_tokens / text_samples if text_samples > 0 else 0
         print(f"  Text samples: {text_samples:,} (from {text_path})")
-        print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000:.1f}M tokens)")
+        if text_tokens >= 1_000_000_000:
+            print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000_000:.1f}B tokens)")
+        else:
+            print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000:.1f}M tokens)")
         print(f"  Average tokens per sample: {avg_tokens_per_sample:.1f}")
     else:
         print(f"  ⚠ No text data found")
@@ -1773,15 +1815,22 @@ def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Opt
     print("="*60)
     
     # Print summary
+    def format_tokens(tokens):
+        """Format token count in readable format (B for billions, M for millions)"""
+        if tokens >= 1_000_000_000:
+            return f"{tokens:,} (~{tokens/1_000_000_000:.1f}B)"
+        else:
+            return f"{tokens:,} (~{tokens/1_000_000:.1f}M)"
+    
     print("\nSummary:")
-    print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000:.1f}M)")
-    print(f"  Image caption tokens: {image_tokens:,} (~{image_tokens/1_000_000:.1f}M)")
-    print(f"  Audio transcription tokens: {audio_tokens:,} (~{audio_tokens/1_000_000:.1f}M)")
+    print(f"  Text tokens: {format_tokens(text_tokens)}")
+    print(f"  Image caption tokens: {format_tokens(image_tokens)}")
+    print(f"  Audio transcription tokens: {format_tokens(audio_tokens)}")
     if ocr_tokens > 0:
-        print(f"  OCR tokens: {ocr_tokens:,} (~{ocr_tokens/1_000_000:.1f}M)")
+        print(f"  OCR tokens: {format_tokens(ocr_tokens)}")
     multimodal_tokens = max(text_tokens, image_tokens, audio_tokens)
     if multimodal_tokens > 0:
-        print(f"  Multimodal (max tokens): {multimodal_tokens:,} (~{multimodal_tokens/1_000_000:.1f}M)")
+        print(f"  Multimodal (max tokens): {format_tokens(multimodal_tokens)}")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1800,6 +1849,9 @@ Examples:
   
   # Update only vocoder
   python scripts/update_configs_from_data.py --config vocoder
+  
+  # Skip text tokenization and assume 8B tokens (fast mode)
+  python scripts/update_configs_from_data.py --skip-text-tokenization --assume-text-tokens 8000000000
 
 Valid config names:
   thinker      - Text-only training (thinker_tiny.json)
@@ -1823,11 +1875,29 @@ Valid config names:
         metavar="CONFIG",
         help="Specific config(s) to update. Can specify multiple. If not specified, all configs are updated."
     )
+    parser.add_argument(
+        "--skip-text-tokenization",
+        action="store_true",
+        help="Skip actual tokenization of text files (use --assume-text-tokens instead)"
+    )
+    parser.add_argument(
+        "--assume-text-tokens",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Assume N tokens for text data (e.g., 8000000000 for 8B tokens). Requires --skip-text-tokenization."
+    )
     args = parser.parse_args()
+    
+    # Validate arguments
+    if args.assume_text_tokens is not None and not args.skip_text_tokenization:
+        parser.error("--assume-text-tokens requires --skip-text-tokenization")
     
     analyze_and_update_all_configs(
         dry_run=args.dry_run,
-        configs_to_update=args.config
+        configs_to_update=args.config,
+        skip_text_tokenization=args.skip_text_tokenization,
+        assumed_text_tokens=args.assume_text_tokens
     )
 
 if __name__ == "__main__":

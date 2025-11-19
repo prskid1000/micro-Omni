@@ -84,6 +84,9 @@ python scripts/update_configs_from_data.py --config audio_enc talker vocoder
 
 # Dry run for specific configs
 python scripts/update_configs_from_data.py --dry-run --config omni_sft
+
+# Skip text tokenization and assume 8B tokens (fast mode for large datasets)
+python scripts/update_configs_from_data.py --skip-text-tokenization --assume-text-tokens 8000000000
 ```
 
 **Supported config names:**
@@ -153,6 +156,7 @@ python scripts/update_configs_from_data.py --dry-run --config omni_sft
   - **OCR:** Tokens from extracted text (not used for step calculation, only reference)
 - If no tokenizer exists, one will be created automatically from the data
 - **Important:** For vision/audio/talker/OCR, token counts are shown for reference only. Step calculation uses sample counts.
+- **Fast mode:** Use `--skip-text-tokenization --assume-text-tokens N` to skip tokenization and use an assumed token count (e.g., 8000000000 for 8B tokens). Sample counts are still read from offset cache files when available.
 
 **Memory-efficient processing:**
 - Tokenizer training: Plain text passed directly to SentencePiece (no streaming). CSV/JSON streams text extraction to temp file.

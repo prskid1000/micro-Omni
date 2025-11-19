@@ -721,6 +721,9 @@ python scripts/update_configs_from_data.py --config audio_enc talker vocoder
 
 # Dry run for specific configs
 python scripts/update_configs_from_data.py --dry-run --config omni_sft
+
+# Skip text tokenization and assume 8B tokens (fast mode for large datasets)
+python scripts/update_configs_from_data.py --skip-text-tokenization --assume-text-tokens 8000000000
 ```
 
 **Supported config names:**
@@ -746,8 +749,14 @@ python scripts/update_configs_from_data.py --dry-run --config omni_sft
 - ✅ Applies best practices based on dataset size and model architecture
 - ✅ **Uses offset index caching** - builds and caches file offset indices for fast token counting
 - ✅ **Selective updates** - Use `--config` to update only specific configs (e.g., `--config thinker vision`)
+- ✅ **Skip tokenization mode** - Use `--skip-text-tokenization --assume-text-tokens N` to skip slow tokenization and use assumed token count (e.g., 8000000000 for 8B tokens)
 
 **Performance Note:** The first run may take time to build offset indices for large files. Subsequent runs will use cached indices and be much faster. Cache files (`.line_offsets.pkl`, `.row_offsets.pkl`, `.json_offsets.pkl`) are automatically created and validated.
+
+**Fast Mode for Large Datasets:**
+- If you already know your token count (e.g., 8B tokens), use `--skip-text-tokenization --assume-text-tokens 8000000000` to skip the slow tokenization process
+- Sample counts are still read from offset cache files when available (fast)
+- This is especially useful for very large text corpora where tokenization can take hours
 
 **Why it matters:**
 - **Text training:** Uses tokens because each sample is tokenized to `ctx_len` tokens

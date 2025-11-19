@@ -31,6 +31,6 @@
   "checkpoint_freq": 10000,
   "max_grad_norm": 1.0,
   "seed": 42,
-  "train_text": "data/text/dialogstudio.txt",
+  "train_text": "data/text/production_corpus.txt",
   "save_dir": "checkpoints/thinker_tiny"
 }

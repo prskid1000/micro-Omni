@@ -97,6 +97,7 @@ Each chapter includes:
 - ✅ **Training loops** - All scripts support resumable training with checkpoints
 - ✅ **Mixed precision** - FP16 enabled by default for 2x speedup
 - ✅ **Gradient accumulation** - Automatic adjustment based on model size
+- ✅ **Fast config updates** - Skip tokenization mode for large datasets (`--skip-text-tokenization --assume-text-tokens N`)
 
 ---
 
