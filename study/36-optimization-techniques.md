@@ -99,187 +99,84 @@ model = torch.quantization.quantize_dynamic(
 
 ## 💾 Memory Optimizations
 
-### 1. Lazy Dataset Loading
+### 1. Streaming Dataset Loading
 
-**What:** Load data on-demand instead of pre-loading into RAM  
+**What:** Stream data directly from files without pre-loading into RAM  
 **Benefit:** Reduces RAM usage by 90%+ for large datasets  
 **Status:** ✅ Implemented in all μOmni training scripts (2024 optimization)
 
 **Technical Approach:**
-- Uses binary file mode (`'rb'`) for accurate byte offset tracking
-- Manually tracks file positions instead of relying on `f.tell()` (which can be unreliable)
-- Stores only integer offsets, not actual data content
-- Reads specific items on-demand in `__getitem__` using `f.seek()`
+- All datasets use `IterableDataset` for true streaming
+- Sequential I/O with large buffers (8MB) for efficiency
+- Direct file iteration - no offset tracking or caching
+- Worker sharding for multi-process data loading
+- Buffer-based shuffling for randomization
 
 **Optimized Datasets (All Training Scripts):**
 
 | Dataset | Files | Optimization | Memory Savings |
 |---------|-------|--------------|----------------|
-| **TextDataset** | `train_text.py` | File offset indexing | ~8 bytes/line vs full text |
-| **ASRDataset** | `train_audio_enc.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
-| **TTSDataset** | `train_talker.py` | CSV row offset indexing | ~8 bytes/row vs full dict |
-| **ImgCapDataset** | `train_vision.py` | JSON object offset indexing | ~16 bytes/object vs full JSON |
-| **MixDataset** | `sft_omni.py` | All three types (text, CSV, JSON) | Combined savings |
+| **TextDataset** | `train_text.py` | Direct line streaming | No pre-loading |
+| **ASRDataset** | `train_audio_enc.py` | CSV row streaming | No pre-loading |
+| **TTSDataset** | `train_talker.py` | CSV row streaming | No pre-loading |
+| **OCRDataset** | `train_ocr.py` | CSV row streaming | No pre-loading |
+| **ImgCapDataset** | `train_vision.py` | JSON item streaming | No pre-loading |
+| **VocoderDataset** | `train_vocoder.py` | CSV row streaming | No pre-loading |
+| **MixDataset** | `sft_omni.py` | All three types streaming | Combined savings |
 
 **Implementation Details:**
 
 **Text Files:**
 ```python
-# Before: Loads entire file into RAM
-self.lines = [l.strip() for l in open(path) if l.strip()]  # Could be GB!
-
-# After: Only stores file positions (integers)
-self.line_offsets = []  # Just 8 bytes per line
-with open(path, 'rb') as f:
-    offset = 0
-    while True:
-        line_start = offset
-        line_bytes = f.readline()
-        if not line_bytes:
-            break
-        if line_bytes.decode('utf-8').strip():
-            self.line_offsets.append(line_start)
-        offset += len(line_bytes)  # Manual tracking
-
-# Reads on-demand in __getitem__
-def __getitem__(self, i):
-    with open(self.path, 'rb') as f:
-        f.seek(self.line_offsets[i])
-        text = f.readline().decode('utf-8').strip()
+# Streaming: Reads line-by-line directly
+def __iter__(self):
+    with open(self.path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+        for idx, line in enumerate(f):
+            # Worker sharding, train/val split, skip_samples support
+            text = line.strip()
+            if text:
+                # Process and yield immediately
+                yield processed_text
 ```
 
 **CSV Files:**
 ```python
-# Before: Loads all rows into RAM
-self.rows = []
-for r in csv.DictReader(open(csv_path)):
-    self.rows.append(r)  # Could be hundreds of MB!
-
-# After: Stores row offsets + header fieldnames
-self.row_offsets = []  # Just 8 bytes per row
-self.fieldnames = header_line.decode('utf-8').strip().split(',')
-# Reads specific row on-demand with proper CSV parsing
+# Streaming: Uses csv.DictReader directly
+def __iter__(self):
+    with open(self.csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+        reader = csv.DictReader(f)
+        for idx, row in enumerate(reader):
+            # Worker sharding, train/val split, skip_samples support
+            # Process and yield immediately
+            yield processed_data
 ```
 
 **JSON Files:**
 ```python
-# Before: Parses entire JSON array into RAM
-self.items = json.load(open(manifest))  # Could be large!
-
-# After: Custom JSON parser finds object boundaries
-self.item_offsets = []  # 8 bytes per offset
-self.item_lengths = []  # 8 bytes per length
-# Parses JSON byte-by-byte to find { } boundaries
-# Falls back to full load if parsing fails (robust)
+# Streaming: Loads JSON once, then iterates
+def __iter__(self):
+    with open(self.manifest_path, 'r', encoding='utf-8') as f:
+        items = json.load(f)
+    for idx, item in enumerate(items):
+        # Worker sharding, train/val split, skip_samples support
+        # Process and yield immediately
+        yield processed_item
 ```
 
 **Memory Savings Examples:**
-- **10M line text file**: ~500MB → ~80MB (6x reduction)
-- **1M row CSV**: ~200MB → ~8MB (25x reduction)
-- **100K image JSON**: ~50MB → ~1.6MB (30x reduction)
+- **10M line text file**: ~500MB → ~0MB (only current line in memory)
+- **1M row CSV**: ~200MB → ~0MB (only current row in memory)
+- **100K image JSON**: ~50MB → ~50MB (JSON loaded once, then streamed)
 - **Combined (MixDataset)**: All three optimizations applied simultaneously
 
 **Key Benefits:**
 - ✅ RAM usage now typically **lower than VRAM** (was opposite before)
 - ✅ Can train on systems with limited RAM (8GB+)
-- ✅ No code changes needed - automatic in all datasets
-- ✅ Robust fallback for malformed JSON files
-- ✅ Maintains same training speed (minimal I/O overhead)
-
-### 1.1. Offset Index Caching (2024 Enhancement)
-
-**What:** Cache file offset indices to disk for instant loading on subsequent runs  
-**Benefit:** Eliminates time-consuming index rebuilding when resuming training or restarting scripts  
-**Status:** ✅ Implemented in all training scripts and `update_configs_from_data.py`
-
-**Problem Solved:**
-When training scripts start, they need to build offset indices to enable lazy loading. For large files (millions of lines/rows), this can take several minutes. Previously, this index was rebuilt every time, even when resuming training.
-
-**Solution:**
-- Cache offset indices to disk using pickle files
-- Validate cache by comparing file modification times
-- Load cached indices instantly if source file hasn't changed
-- Automatically rebuild if cache is invalid or missing
-
-**Cache Files Created:**
-- **Text files**: `{file_path}.line_offsets.pkl` - Stores line start positions
-- **CSV files**: `{file_path}.row_offsets.pkl` - Stores row start positions + fieldnames
-- **JSON files**: `{file_path}.json_offsets.pkl` - Stores object offsets + lengths + format info
-
-**Implementation Example:**
-```python
-# Text file caching (train_text.py, sft_omni.py)
-offset_cache_path = f"{path}.line_offsets.pkl"
-file_mtime = os.path.getmtime(path)
-cache_valid = False
-
-if os.path.exists(offset_cache_path):
-    try:
-        with open(offset_cache_path, 'rb') as cache_file:
-            cached_data = pickle.load(cache_file)
-            cached_mtime = cached_data.get('mtime', 0)
-            cached_offsets = cached_data.get('offsets', [])
-            
-            # Validate cache (file hasn't changed)
-            if abs(cached_mtime - file_mtime) < 1.0:
-                self.line_offsets = cached_offsets
-                cache_valid = True
-    except Exception:
-        pass  # Cache invalid, will rebuild
-
-if not cache_valid:
-    # Build index from scratch...
-    # ... (index building code) ...
-    
-    # Save cache for future use
-    try:
-        with open(offset_cache_path, 'wb') as cache_file:
-            pickle.dump({'mtime': file_mtime, 'offsets': self.line_offsets}, cache_file)
-    except Exception:
-        pass  # Cache write failed, but continue anyway
-```
-
-**Performance Impact:**
-- **First run**: Builds index (may take minutes for large files) + saves cache
-- **Subsequent runs**: Loads cache instantly (< 1 second) if file unchanged
-- **After file modification**: Automatically detects change and rebuilds cache
-- **Resuming training**: No delay - cache loads instantly
-
-**Files Using Caching:**
-| Script | Cache Type | Cache File Pattern |
-|--------|-----------|-------------------|
-| `train_text.py` | Line offsets | `{text_path}.line_offsets.pkl` |
-| `train_audio_enc.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
-| `train_vision.py` | JSON offsets | `{manifest}.json_offsets.pkl` |
-| `train_ocr.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
-| `train_talker.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
-| `train_vocoder.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
-| `sft_omni.py` | All three types | Multiple cache files |
-| `update_configs_from_data.py` | All three types | Multiple cache files |
-
-**Key Benefits:**
-- ✅ **Instant dataset initialization** - No waiting for index building
-- ✅ **Faster resuming** - Training resumes immediately without delay
-- ✅ **Automatic validation** - Cache invalidated if source file changes
-- ✅ **Graceful fallback** - Rebuilds automatically if cache is corrupted
-- ✅ **Transparent** - Works automatically, no user action needed
-
-**Cache File Locations:**
-Cache files are stored next to the source data files:
-```
-data/
-├── text/
-│   ├── production_corpus.txt
-│   └── production_corpus.txt.line_offsets.pkl  ← Cache file
-├── audio/
-│   ├── production_asr.csv
-│   └── production_asr.csv.row_offsets.pkl  ← Cache file
-└── images/
-    ├── production_annotations.json
-    └── production_annotations.json.json_offsets.pkl  ← Cache file
-```
-
-**Note:** Cache files are automatically created and managed. You can safely delete them if needed - they will be regenerated on the next run.
+- ✅ No cache files needed - simpler and cleaner
+- ✅ True streaming - data processed on-demand
+- ✅ Efficient resuming via `skip_samples` parameter
+- ✅ Worker sharding for multi-process data loading
+- ✅ Buffer-based shuffling for randomization
 
 ### 2. Efficient Tokenizer Training
 
@@ -368,9 +265,9 @@ data/
 ✅ **Enable KV caching** for generation  
 ✅ **Use Flash Attention** if available  
 ✅ **Gradient accumulation** for large batches  
-✅ **Lazy loading enabled** by default (no action needed)  
-✅ **Offset index caching** - instant dataset initialization on subsequent runs  
-✅ **Chunked tokenizer training** - automatically streams entire corpus  
+✅ **Streaming datasets enabled** by default (no action needed)  
+✅ **Direct file iteration** - no cache files needed  
+✅ **Efficient tokenizer training** - plain text passed directly to SentencePiece  
 ✅ **Resumable preprocessing** - safe to interrupt and resume  
 ✅ **Monitor GPU memory** with `nvidia-smi`  
 ✅ **Monitor RAM usage** - should be much lower than VRAM now  

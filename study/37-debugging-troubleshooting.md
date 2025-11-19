@@ -56,12 +56,13 @@ model.gradient_checkpointing_enable()
 
 **Symptoms:** Out of memory when building vocabulary or counting tokens  
 **Solutions:**
-- ✅ **Automatic:** All preprocessing uses efficient processing (no action needed)
+- ✅ **Automatic:** All preprocessing uses efficient streaming (no action needed)
 - ✅ **Resumable:** If interrupted, just restart - will resume from checkpoint
 - ✅ **Tokenizer training:** SentencePiece handles large files directly (no temp files for plain text)
 - ✅ **Temp files:** Only used for CSV/JSON extraction, stored in `data/.temp/` and auto-cleaned
 - ✅ **Vocabulary building:** Processes incrementally with checkpoints
 - ✅ **Token counting:** Streams line-by-line with resume support
+- ✅ **Datasets:** All use streaming `IterableDataset` (no cache files, minimal memory)
 
 **Checkpoint Files:**
 - Vocabulary: `{save_dir}/vocab_build_checkpoint.json`

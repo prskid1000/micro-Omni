@@ -9,7 +9,6 @@ import csv
 import io
 import tempfile
 import argparse
-import pickle
 from typing import Dict, Tuple, Optional, List
 
 # Import tokenizer (required)
@@ -40,27 +39,13 @@ EPOCH_RECOMMENDATIONS = [
 ]
 
 def count_text_samples(text_path: str) -> int:
-    """Count lines in text file, using offset cache if available"""
+    """Count lines in text file"""
     if not os.path.exists(text_path):
         return 0
     
-    # Try to use offset cache first (much faster for large files)
-    offset_cache_path = f"{text_path}.line_offsets.pkl"
-    if os.path.exists(offset_cache_path):
-        try:
-            with open(offset_cache_path, 'rb') as cache_file:
-                cached_data = pickle.load(cache_file)
-                cached_offsets = cached_data.get('offsets', [])
-                if cached_offsets:
-                    print(f"  Using cached line offset index: {len(cached_offsets):,} samples")
-                    return len(cached_offsets)
-        except Exception:
-            pass  # Cache invalid, fall back to counting
-    
-    # Fall back to counting lines
     count = 0
     try:
-        with open(text_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(text_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
             for line in f:
                 if line.strip():
                     count += 1
@@ -136,60 +121,17 @@ def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None,
                 total_tokens = 0
                 start_line_idx = 0
         
-        # Build or load cached line offset index (speeds up resuming)
-        offset_cache_path = f"{text_path}.line_offsets.pkl"
-        line_offsets = []
-        file_mtime = os.path.getmtime(text_path)
-        cache_valid = False
-        
-        if os.path.exists(offset_cache_path):
-            try:
-                with open(offset_cache_path, 'rb') as cache_file:
-                    cached_data = pickle.load(cache_file)
-                    cached_mtime = cached_data.get('mtime', 0)
-                    cached_offsets = cached_data.get('offsets', [])
-                    
-                    # Check if cache is valid (file hasn't changed)
-                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
-                        line_offsets = cached_offsets
-                        cache_valid = True
-                        print(f"  Loaded cached line offset index ({len(line_offsets):,} lines)")
-            except Exception:
-                pass  # Cache invalid, will rebuild
-        
-        if not cache_valid:
-            print(f"  Building line offset index (this may take a while for large files)...")
-            with open(text_path, 'rb') as f:
-                offset = 0
-                while True:
-                    line_start = offset
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
-                    try:
-                        decoded = line_bytes.decode('utf-8')
-                        if decoded.strip():
-                            line_offsets.append(line_start)
-                    except UnicodeDecodeError:
-                        pass  # Skip invalid UTF-8 lines
-                    offset += len(line_bytes)  # Manually track offset
-            
-            # Cache the offset index for future use
-            try:
-                with open(offset_cache_path, 'wb') as cache_file:
-                    pickle.dump({'mtime': file_mtime, 'offsets': line_offsets}, cache_file)
-            except Exception:
-                pass  # Cache write failed, but continue anyway
-        
         sample_count = start_line_idx
         checkpoint_freq = 10000  # Save checkpoint every N lines
         
-        # Process lines one at a time using offsets (memory efficient)
-        with open(text_path, 'rb') as f:
-            for line_idx, line_start in enumerate(line_offsets[start_line_idx:], start_line_idx):
-                f.seek(line_start)
-                line_bytes = f.readline()
-                text = line_bytes.decode('utf-8').strip()
+        # Process lines directly (memory efficient streaming)
+        with open(text_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+            for line_idx, line in enumerate(f):
+                # Skip lines until we reach where we left off
+                if line_idx < start_line_idx:
+                    continue
+                
+                text = line.strip()
                 if text:
                     tokens = tokenizer.encode(text)
                     total_tokens += len(tokens)
@@ -251,38 +193,12 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
             
             temp_text_created = False
             try:
-                # Build row offset index first
-                row_offsets = []
-                fieldnames = None
-                with open(csv_path, 'rb') as f:
-                    header_line = f.readline()
-                    if not header_line:
-                        raise ValueError("CSV file is empty")
-                    fieldnames = header_line.decode('utf-8').strip().split(',')
-                    offset = f.tell()
-                    while True:
-                        line_start = offset
-                        line_bytes = f.readline()
-                        if not line_bytes:
-                            break
-                        try:
-                            decoded = line_bytes.decode('utf-8').strip()
-                            if decoded:
-                                row_offsets.append(line_start)
-                        except UnicodeDecodeError:
-                            pass
-                        offset += len(line_bytes)
-                
                 # Stream through rows to extract text (entire dataset)
                 rows_written = 0
                 with open(temp_text, 'w', encoding='utf-8') as out:
-                    with open(csv_path, 'rb') as f:
-                        for row_start in row_offsets:
-                            f.seek(row_start)
-                            line_bytes = f.readline()
-                            line = line_bytes.decode('utf-8').strip()
-                            reader = csv.DictReader(io.StringIO(line), fieldnames=fieldnames)
-                            row = next(reader)
+                    with open(csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
                             text = row.get(text_column, '').strip()
                             if text:
                                 out.write(text + '\n')
@@ -305,58 +221,6 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
                 if temp_text_created and os.path.exists(temp_text):
                     os.remove(temp_text)
         
-        # Build or load cached row offset index (speeds up resuming)
-        offset_cache_path = f"{csv_path}.row_offsets.pkl"
-        row_offsets = []
-        fieldnames = None
-        file_mtime = os.path.getmtime(csv_path)
-        cache_valid = False
-        
-        if os.path.exists(offset_cache_path):
-            try:
-                with open(offset_cache_path, 'rb') as cache_file:
-                    cached_data = pickle.load(cache_file)
-                    cached_mtime = cached_data.get('mtime', 0)
-                    cached_offsets = cached_data.get('offsets', [])
-                    cached_fieldnames = cached_data.get('fieldnames', None)
-                    
-                    # Check if cache is valid (file hasn't changed)
-                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
-                        row_offsets = cached_offsets
-                        fieldnames = cached_fieldnames
-                        cache_valid = True
-                        print(f"  Loaded cached row offset index ({len(row_offsets):,} rows)")
-            except Exception:
-                pass  # Cache invalid, will rebuild
-        
-        if not cache_valid:
-            print(f"  Building row offset index (this may take a while for large files)...")
-            with open(csv_path, 'rb') as f:
-                header_line = f.readline()
-                if not header_line:
-                    raise ValueError("CSV file is empty")
-                fieldnames = header_line.decode('utf-8').strip().split(',')
-                offset = f.tell()
-                while True:
-                    line_start = offset
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
-                    try:
-                        decoded = line_bytes.decode('utf-8').strip()
-                        if decoded:
-                            row_offsets.append(line_start)
-                    except UnicodeDecodeError:
-                        pass
-                    offset += len(line_bytes)  # Manually track offset
-            
-            # Cache the offset index for future use
-            try:
-                with open(offset_cache_path, 'wb') as cache_file:
-                    pickle.dump({'mtime': file_mtime, 'offsets': row_offsets, 'fieldnames': fieldnames}, cache_file)
-            except Exception:
-                pass  # Cache write failed, but continue anyway
-        
         # Check for existing count checkpoint (resumable)
         checkpoint_path = f"{csv_path}.token_count_checkpoint.json"
         total_tokens = 0
@@ -376,15 +240,14 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
         sample_count = start_row_idx
         checkpoint_freq = 10000  # Save checkpoint every N rows
         
-        # Process rows one at a time using offsets (memory efficient)
-        with open(csv_path, 'rb') as f:
-            for row_idx, row_start in enumerate(row_offsets[start_row_idx:], start_row_idx):
-                f.seek(row_start)
-                line_bytes = f.readline()
-                line = line_bytes.decode('utf-8').strip()
-                # Parse CSV row properly (handles quoted fields)
-                reader = csv.DictReader(io.StringIO(line), fieldnames=fieldnames)
-                row = next(reader)
+        # Process rows directly (memory efficient streaming)
+        with open(csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+            reader = csv.DictReader(f)
+            for row_idx, row in enumerate(reader):
+                # Skip rows until we reach where we left off
+                if row_idx < start_row_idx:
+                    continue
+                
                 text = row.get(text_column, '').strip()
                 if text:
                     tokens = tokenizer.encode(text)
@@ -434,155 +297,13 @@ def count_ocr_tokens(csv_path: str, tokenizer_path: Optional[str] = None) -> int
     """Count tokens from OCR text (text column in CSV)"""
     return count_csv_tokens(csv_path, 'text', tokenizer_path)
 
-def _build_json_offset_index(manifest_path: str) -> Tuple[list, list, bool]:
-    """Build an index of JSON object offsets without loading entire file into memory.
-    Returns (item_offsets, item_lengths, is_dict_format) where is_dict_format indicates
-    if the JSON is a dict with 'images' key rather than a direct array.
-    Uses caching to speed up resuming."""
-    offset_cache_path = f"{manifest_path}.json_offsets.pkl"
-    file_mtime = os.path.getmtime(manifest_path)
-    cache_valid = False
-    
-    # Try to load from cache
-    if os.path.exists(offset_cache_path):
-        try:
-            with open(offset_cache_path, 'rb') as cache_file:
-                cached_data = pickle.load(cache_file)
-                cached_mtime = cached_data.get('mtime', 0)
-                
-                # Check if cache is valid (file hasn't changed)
-                if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
-                    item_offsets = cached_data.get('offsets', [])
-                    item_lengths = cached_data.get('lengths', [])
-                    is_dict_format = cached_data.get('is_dict_format', False)
-                    return item_offsets, item_lengths, is_dict_format
-        except Exception:
-            pass  # Cache invalid, will rebuild
-    
-    # Build index from scratch
-    item_offsets = []
-    item_lengths = []
-    is_dict_format = False
-    
-    try:
-        with open(manifest_path, 'rb') as f:
-            content = f.read()
-            
-            # Find array start
-            start_pos = content.find(b'[')
-            if start_pos == -1:
-                # Try dict format with 'images' key
-                dict_start = content.find(b'{')
-                if dict_start == -1:
-                    raise ValueError("JSON manifest must be an array or dict")
-                # For dict format, find 'images' array
-                images_key_pos = content.find(b'"images"')
-                if images_key_pos == -1:
-                    raise ValueError("JSON dict must have 'images' key")
-                # Find array after 'images' key
-                start_pos = content.find(b'[', images_key_pos)
-                if start_pos == -1:
-                    raise ValueError("Could not find images array")
-                is_dict_format = True
-            
-            # Parse JSON to find object boundaries
-            pos = start_pos + 1
-            depth = 0
-            obj_start = None
-            in_string = False
-            escape_next = False
-            
-            while pos < len(content):
-                byte = content[pos:pos+1]
-                if escape_next:
-                    escape_next = False
-                elif byte == b'\\':
-                    escape_next = True
-                elif byte == b'"' and not escape_next:
-                    in_string = not in_string
-                elif not in_string:
-                    if byte == b'{':
-                        if depth == 0:
-                            obj_start = pos
-                        depth += 1
-                    elif byte == b'}':
-                        depth -= 1
-                        if depth == 0 and obj_start is not None:
-                            # Found complete object
-                            item_offsets.append(obj_start)
-                            item_lengths.append(pos - obj_start + 1)
-                            obj_start = None
-                    elif byte == b']' and depth == 0:
-                        # End of array
-                        break
-                pos += 1
-    except Exception as e:
-        # If parsing fails, return empty index (will use fallback)
-        return [], [], False
-    
-    # Cache the offset index for future use
-    try:
-        with open(offset_cache_path, 'wb') as cache_file:
-            pickle.dump({
-                'mtime': file_mtime,
-                'offsets': item_offsets,
-                'lengths': item_lengths,
-                'is_dict_format': is_dict_format
-            }, cache_file)
-    except Exception:
-        pass  # Cache write failed, but continue anyway
-    
-    return item_offsets, item_lengths, is_dict_format
-
 def _stream_json_items(manifest_path: str):
-    """Stream JSON items from a file without loading entire file into memory.
-    Uses offset index to read items one at a time."""
-    item_offsets, item_lengths, is_dict_format = _build_json_offset_index(manifest_path)
-    
-    if not item_offsets:
-        # Fallback: load entire JSON (for malformed JSON or small files)
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            items = data if isinstance(data, list) else data.get('images', [])
-            for item in items:
-                yield item
-        return
-    
-    # Stream through items using offsets
-    with open(manifest_path, 'rb') as f:
-        for offset, length in zip(item_offsets, item_lengths):
-            f.seek(offset)
-            obj_bytes = f.read(length)
-            try:
-                obj = json.loads(obj_bytes.decode('utf-8'))
-                yield obj
-            except json.JSONDecodeError:
-                # Try reading a bit more if parsing fails (handles trailing commas)
-                chunk = obj_bytes
-                while True:
-                    next_byte = f.read(1)
-                    if not next_byte or next_byte in [b'{', b']']:
-                        break
-                    chunk += next_byte
-                # Try to find and parse the JSON object in the chunk
-                chunk_str = chunk.decode('utf-8')
-                start = chunk_str.find('{')
-                if start != -1:
-                    depth = 0
-                    end = start
-                    for j, char in enumerate(chunk_str[start:], start):
-                        if char == '{':
-                            depth += 1
-                        elif char == '}':
-                            depth -= 1
-                            if depth == 0:
-                                end = j + 1
-                                break
-                    try:
-                        obj = json.loads(chunk_str[start:end])
-                        yield obj
-                    except json.JSONDecodeError:
-                        pass  # Skip malformed objects
+    """Stream JSON items from a file by loading the entire JSON."""
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        items = data if isinstance(data, list) else data.get('images', [])
+        for item in items:
+            yield item
 
 def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None) -> int:
     """
@@ -710,15 +431,10 @@ def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None)
         raise
 
 def count_image_samples(manifest_path: str) -> int:
-    """Count entries in image JSON manifest using streaming parsing"""
+    """Count entries in image JSON manifest"""
     if not os.path.exists(manifest_path):
         return 0
     try:
-        # Use offset index to count without loading entire file
-        item_offsets, _, _ = _build_json_offset_index(manifest_path)
-        if item_offsets:
-            return len(item_offsets)
-        # Fallback: load entire JSON if offset indexing failed
         with open(manifest_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             if isinstance(data, list):

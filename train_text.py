@@ -1,77 +1,12 @@
 
-import argparse, json, torch, os, pickle
+import argparse, json, torch, os
 from torch import nn
 from torch.amp import autocast, GradScaler
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, TextDataset
 from tqdm import tqdm
-
-class TextDataset(Dataset):
-    def __init__(self, path, tokenizer, ctx):
-        self.path = path
-        self.tok = tokenizer; self.ctx = ctx
-        # Build or load cached line offset index (speeds up resuming)
-        offset_cache_path = f"{path}.line_offsets.pkl"
-        file_mtime = os.path.getmtime(path)
-        cache_valid = False
-        
-        if os.path.exists(offset_cache_path):
-            try:
-                with open(offset_cache_path, 'rb') as cache_file:
-                    cached_data = pickle.load(cache_file)
-                    cached_mtime = cached_data.get('mtime', 0)
-                    cached_offsets = cached_data.get('offsets', [])
-                    
-                    # Check if cache is valid (file hasn't changed)
-                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
-                        self.line_offsets = cached_offsets
-                        cache_valid = True
-            except Exception:
-                pass  # Cache invalid, will rebuild
-        
-        if not cache_valid:
-            # Build line offset index (stores file positions, not content)
-            # Read in binary mode and manually track offsets
-            self.line_offsets = []
-            with open(path, 'rb') as f:
-                offset = 0
-                while True:
-                    line_start = offset
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
-                    # Decode to check if line is non-empty
-                    try:
-                        decoded = line_bytes.decode('utf-8')
-                        if decoded.strip():
-                            self.line_offsets.append(line_start)
-                    except UnicodeDecodeError:
-                        # Skip invalid UTF-8 lines
-                        pass
-                    # Manually track offset by adding line length
-                    offset += len(line_bytes)
-            
-            # Cache the offset index for future use
-            try:
-                with open(offset_cache_path, 'wb') as cache_file:
-                    pickle.dump({'mtime': file_mtime, 'offsets': self.line_offsets}, cache_file)
-            except Exception:
-                pass  # Cache write failed, but continue anyway
-    def __len__(self): return len(self.line_offsets)
-    def __getitem__(self, i):
-        # Read only the specific line using file offset
-        with open(self.path, 'rb') as f:
-            f.seek(self.line_offsets[i])
-            line_bytes = f.readline()
-            text = line_bytes.decode('utf-8').strip()
-        ids = self.tok.encode(text)[:self.ctx-1]
-        ids = [1] + ids  # BOS=1 (SentencePiece default)
-        pad = [0] * (self.ctx - len(ids))
-        x = torch.tensor(ids + pad, dtype=torch.long)
-        y = x.clone(); y[:-1]=x[1:]; y[-1]=0
-        return x, y
 
 def main(cfg):
     # Set random seed for reproducibility
@@ -87,8 +22,8 @@ def main(cfg):
         BPETokenizer.train_new(cfg["train_text"], spm_model, vocab_size=cfg["vocab_size"])
         print(f"✓ Tokenizer created: {spm_model}")
     tok = BPETokenizer(spm_model)
-    ds = TextDataset(cfg["train_text"], tok, cfg["ctx_len"])
-    dl = DataLoader(ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    
+    print("Using TextDataset (streaming, lower memory, sequential I/O)")
     
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
@@ -133,17 +68,54 @@ def main(cfg):
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
-    total_size = len(ds)
-    val_size = int(total_size * val_split)
-    train_size = total_size - val_size
-    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(seed))
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    
+    # Initialize step for skip calculation (will be updated if resuming)
+    step = 0
+    
+    # Use hash-based train/val split
+    # Both datasets read from same file but filter based on hash of line index
+    
+    # Calculate samples to skip when resuming (will be updated after checkpoint load)
+    # This is approximate: step * batch_size gives number of samples processed
+    skip_samples = 0  # Will be set after checkpoint loading if resuming
+    
+    train_ds = TextDataset(
+        cfg["train_text"], 
+        tok, 
+        cfg["ctx_len"],
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
+        seed=seed,
+        skip_samples=skip_samples  # Will be updated after checkpoint load
+    )
+    train_ds._val_split = val_split
+    train_ds._val_mode = False  # Training mode
+    
+    val_ds = TextDataset(
+        cfg["train_text"], 
+        tok, 
+        cfg["ctx_len"],
+        shuffle_buffer_size=0,  # No shuffling for validation
+        seed=seed,  # Same seed for consistent hash-based split
+        skip_samples=0  # Don't skip validation samples
+    )
+    val_ds._val_split = val_split
+    val_ds._val_mode = True  # Validation mode
+    
+    # Approximate sizes for logging (will count if needed)
+    try:
+        total_size = train_ds.get_length()
+        train_size = int(total_size * (1 - val_split))
+        val_size = total_size - train_size
+    except:
+        train_size = val_size = None  # Unknown size
+    
+    # Note: shuffle=False for IterableDataset (shuffling handled internally)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
     val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False)
     
     # Initialize logger
     logger = SimpleLogger("Thinker")
     
-    step=0
     model.train()
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 1)
@@ -186,24 +158,35 @@ def main(cfg):
                 model.load_state_dict(checkpoint)
                 logger.info(f"Loaded model weights from checkpoint (legacy format)")
     
+    # Update skip_samples for dataset if resuming
+    if step > 0:
+        # Calculate approximate samples to skip: step * batch_size
+        # This is approximate because of gradient accumulation, but close enough
+        batch_size = cfg.get("batch_size", 8)
+        skip_samples = step * batch_size
+        train_ds.skip_samples = skip_samples
+        logger.info(f"Dataset: will skip approximately {skip_samples} samples when resuming")
+        # Recreate DataLoader so workers pick up the new skip_samples value
+        train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
     # Skip to the correct epoch/step if resuming
     start_epoch = 0
-    steps_per_epoch = len(train_dl)
     initial_step = step
     if step > 0:
-        start_epoch = step // steps_per_epoch
-        logger.info(f"Resuming from epoch {start_epoch}, step {step}")
+        logger.info(f"Resuming from step {step} (epoch tracking approximate)")
     
     for epoch in range(start_epoch, max_epochs):
         logger.epoch_start(epoch)
-        for batch_idx, (x,y) in enumerate(tqdm(train_dl, desc=f"epoch{epoch}")):
-            # Skip batches if resuming mid-epoch
-            if epoch == start_epoch and initial_step > 0:
-                current_batch_step = epoch * steps_per_epoch + batch_idx
-                if current_batch_step < initial_step:
-                    continue
+        # Create progress bar with step info
+        pbar_desc = f"epoch{epoch} step{step}"
+        pbar = tqdm(train_dl, desc=pbar_desc)
+        
+        for batch_idx, (x,y) in enumerate(pbar):
+            # Update progress bar description with current step
+            pbar.set_description(f"epoch{epoch} step{step}")
+            # Samples are already skipped at dataset level when resuming
             x,y = x.to(device), y.to(device)
             
             # Mark step begin for CUDAGraphs optimization
@@ -244,10 +227,8 @@ def main(cfg):
                     )
                     if reloaded_step > 0:
                         step = reloaded_step
-                        # Recalculate start_epoch and initial_step for resuming
-                        start_epoch = step // steps_per_epoch
                         initial_step = step
-                        logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                        logger.info(f"Resuming from step {step}")
                     opt.zero_grad()
                     # Don't call scaler.update() here - no backward pass occurred, so no inf checks were recorded
                     continue
@@ -436,9 +417,8 @@ def main(cfg):
                                 )
                                 if reloaded_step > 0:
                                     step = reloaded_step
-                                    start_epoch = step // steps_per_epoch
                                     initial_step = step
-                                    logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                                    logger.info(f"Resuming from step {step}")
                                 model.train()
                                 break
                             else:
@@ -514,9 +494,8 @@ def main(cfg):
                             )
                             if reloaded_step > 0:
                                 step = reloaded_step
-                                start_epoch = step // steps_per_epoch
                                 initial_step = step
-                                logger.info(f"Resuming from step {step}, epoch {start_epoch}")
+                                logger.info(f"Resuming from step {step}")
                             model.train()
                             break
                         else:

@@ -48,9 +48,10 @@ python scripts/download_production_text.py --dataset general --combine
 - ✅ Diverse knowledge: General
 - ✅ Sample-based limits (default: 1,000,000 samples per dataset, combined totals: Text ~2M, Audio ~4M, Images ~4M)
 - ✅ Ready to use - no formatting needed
-- ✅ **Plain text:** Passed directly to SentencePiece (no streaming, no temp files)
-- ✅ **CSV/JSON:** Streams text extraction to temp file (streams row-by-row/item-by-item), stored in `data/.temp/` and auto-cleaned
+- ✅ **Plain text:** Passed directly to SentencePiece (no temp files)
+- ✅ **CSV/JSON:** Streams text extraction to temp file (row-by-row/item-by-item), stored in `data/.temp/` and auto-cleaned
 - ✅ **Resumable:** All preprocessing operations can resume if interrupted
+- ✅ **Streaming datasets:** All datasets stream directly from files (no cache files)
 
 ---
 
@@ -747,15 +748,14 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 - ✅ Adjusts validation and checkpoint frequencies
 - ✅ Updates data paths to production files automatically
 - ✅ Applies best practices based on dataset size and model architecture
-- ✅ **Uses offset index caching** - builds and caches file offset indices for fast token counting
+- ✅ **Streaming token counting** - processes files line-by-line efficiently
 - ✅ **Selective updates** - Use `--config` to update only specific configs (e.g., `--config thinker vision`)
 - ✅ **Skip tokenization mode** - Use `--skip-text-tokenization --assume-text-tokens N` to skip slow tokenization and use assumed token count (e.g., 8000000000 for 8B tokens)
 
-**Performance Note:** The first run may take time to build offset indices for large files. Subsequent runs will use cached indices and be much faster. Cache files (`.line_offsets.pkl`, `.row_offsets.pkl`, `.json_offsets.pkl`) are automatically created and validated.
+**Performance Note:** Token counting streams files directly line-by-line. For very large files, this may take time but uses minimal memory.
 
 **Fast Mode for Large Datasets:**
 - If you already know your token count (e.g., 8B tokens), use `--skip-text-tokenization --assume-text-tokens 8000000000` to skip the slow tokenization process
-- Sample counts are still read from offset cache files when available (fast)
 - This is especially useful for very large text corpora where tokenization can take hours
 
 **Why it matters:**

@@ -9,9 +9,17 @@ Training utilities for standard ML practices:
 
 import random
 import math
+import os
+import csv
+import json
+import io
 import torch
 import torch.nn as nn
 from datetime import datetime
+from torch.utils.data import IterableDataset, Dataset
+import torchaudio
+from PIL import Image
+from torchvision import transforms
 
 def set_seed(seed=42):
     """Set random seed for reproducibility"""
@@ -417,3 +425,490 @@ def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, mod
         logger.error(f"Failed to reload from checkpoint: {e}")
         return 0
 
+class TextDataset(IterableDataset):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
+    def __init__(self, path, tokenizer, ctx, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+        self.path, self.tok, self.ctx = path, tokenizer, ctx
+        self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self._num_lines = None
+    
+    def get_length(self):
+        """Count lines (expensive, cached after first call)"""
+        if self._num_lines is None:
+            self._num_lines = sum(1 for _ in open(self.path, 'r', encoding='utf-8', errors='ignore'))
+        return self._num_lines
+    
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info else 1
+        worker_id = worker_info.id if worker_info else 0
+        rng = random.Random(self.seed + worker_id if self.seed else None)
+        buffer = []
+        
+        val_split = getattr(self, '_val_split', None)
+        val_mode = getattr(self, '_val_mode', False)
+        
+        # Distribute skip_samples across workers
+        worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
+        skipped = 0
+        
+        with open(self.path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+            for idx, line in enumerate(f):
+                # Worker sharding
+                if idx % num_workers != worker_id:
+                    continue
+                
+                # Train/val split
+                if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                    continue
+                
+                text = line.strip()
+                if not text:
+                    continue
+                
+                # Skip samples when resuming
+                if skipped < worker_skip:
+                    skipped += 1
+                    continue
+                
+                # Tokenize and create tensors
+                ids = [1] + self.tok.encode(text)[:self.ctx-1]  # BOS=1
+                x = torch.tensor(ids + [0] * (self.ctx - len(ids)), dtype=torch.long)
+                y = torch.cat([x[1:], torch.tensor([0], dtype=torch.long)])  # Shift for next-token prediction
+                
+                # Buffer-based shuffling
+                if self.shuffle_buffer_size > 0:
+                    buffer.append((x, y))
+                    if len(buffer) >= self.shuffle_buffer_size:
+                        yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                else:
+                    yield x, y
+        
+        # Yield remaining buffer items
+        if buffer:
+            rng.shuffle(buffer)
+            yield from buffer
+
+class ASRDataset(IterableDataset):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
+    def __init__(self, csv_path, sr=16000, n_mels=128, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+        self.csv_path, self.sr = csv_path, sr
+        self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=160, win_length=400, n_mels=n_mels)
+    
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info else 1
+        worker_id = worker_info.id if worker_info else 0
+        rng = random.Random(self.seed + worker_id if self.seed else None)
+        buffer = []
+        
+        val_split = getattr(self, '_val_split', None)
+        val_mode = getattr(self, '_val_mode', False)
+        
+        # Distribute skip_samples across workers
+        worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
+        skipped = 0
+        
+        with open(self.csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+            reader = csv.DictReader(f)
+            for idx, row in enumerate(reader):
+                # Worker sharding
+                if idx % num_workers != worker_id:
+                    continue
+                
+                # Train/val split
+                if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                    continue
+                
+                # Skip samples when resuming
+                if skipped < worker_skip:
+                    skipped += 1
+                    continue
+                
+                try:
+                    wav, sr = torchaudio.load(row["wav"])
+                    if sr != self.sr:
+                        wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
+                    mel = self.melspec(wav)[0].T
+                    text = row["text"]
+                    
+                    # Buffer-based shuffling
+                    if self.shuffle_buffer_size > 0:
+                        buffer.append((mel, text))
+                        if len(buffer) >= self.shuffle_buffer_size:
+                            yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                    else:
+                        yield mel, text
+                except Exception:
+                    continue
+        
+        # Yield remaining buffer items
+        if buffer:
+            rng.shuffle(buffer)
+            yield from buffer
+
+class OCRDataset(IterableDataset):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
+    def __init__(self, csv_path, image_root, img_size=224, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+        self.csv_path, self.image_root, self.img_size = csv_path, image_root, img_size
+        self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
+        self.char_to_idx, self.idx_to_char = {}, {}
+        self._build_vocab(csv_path)
+    
+    def _build_vocab(self, csv_path):
+        """Build character vocabulary from CSV."""
+        print("Building character vocabulary from OCR dataset...")
+        chars = set()
+        
+        with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+            reader = csv.DictReader(f)
+            for row_idx, row in enumerate(reader):
+                chars.update(row.get("text", "") or row.get("label", "") or row.get("text_label", ""))
+                if (row_idx + 1) % 10000 == 0:
+                    print(f"  Processed {row_idx+1:,} rows...")
+        
+        # Build vocabulary
+        self.char_to_idx = {'<PAD>': 0, '<BOS>': 1, '<EOS>': 2, '<UNK>': 3}
+        self.idx_to_char = {0: '<PAD>', 1: '<BOS>', 2: '<EOS>', 3: '<UNK>'}
+        for char in sorted(chars):
+            if char not in self.char_to_idx:
+                idx = len(self.char_to_idx)
+                self.char_to_idx[char] = idx
+                self.idx_to_char[idx] = char
+        
+        print(f"Vocabulary size: {len(self.char_to_idx)} characters")
+    
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info else 1
+        worker_id = worker_info.id if worker_info else 0
+        rng = random.Random(self.seed + worker_id if self.seed else None)
+        buffer = []
+        
+        val_split = getattr(self, '_val_split', None)
+        val_mode = getattr(self, '_val_mode', False)
+        
+        # Distribute skip_samples across workers
+        worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
+        skipped = 0
+        
+        with open(self.csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+            reader = csv.DictReader(f)
+            for idx, row in enumerate(reader):
+                # Worker sharding
+                if idx % num_workers != worker_id:
+                    continue
+                
+                # Train/val split
+                if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                    continue
+                
+                # Skip samples when resuming
+                if skipped < worker_skip:
+                    skipped += 1
+                    continue
+                
+                img_path = row.get("image") or row.get("img")
+                if not img_path:
+                    continue
+                text = row.get("text", "") or row.get("label", "") or row.get("text_label", "")
+                
+                try:
+                    full_img_path = os.path.join(self.image_root, img_path) if not os.path.isabs(img_path) else img_path
+                    img = Image.open(full_img_path).convert("RGB")
+                    text_ids = [self.char_to_idx.get(c, self.char_to_idx['<UNK>']) for c in text] or [self.char_to_idx['<UNK>']]
+                    result = (self.tf(img), [self.char_to_idx['<BOS>']] + text_ids + [self.char_to_idx['<EOS>']])
+                    
+                    # Buffer-based shuffling
+                    if self.shuffle_buffer_size > 0:
+                        buffer.append(result)
+                        if len(buffer) >= self.shuffle_buffer_size:
+                            yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                    else:
+                        yield result
+                except Exception:
+                    continue
+        
+        # Yield remaining buffer items
+        if buffer:
+            rng.shuffle(buffer)
+            yield from buffer
+
+class TTSDataset(IterableDataset):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
+    def __init__(self, csv_path, sr=16000, n_mels=128, frame_ms=80, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+        self.csv_path, self.sr = csv_path, sr
+        self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        hop_length = int(sr * frame_ms / 1000)
+        win_length = min(1024, hop_length * 4)
+        self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=hop_length, win_length=win_length, n_mels=n_mels)
+        self.frame = int(sr * 0.08)
+    
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info else 1
+        worker_id = worker_info.id if worker_info else 0
+        rng = random.Random(self.seed + worker_id if self.seed else None)
+        buffer = []
+        
+        val_split = getattr(self, '_val_split', None)
+        val_mode = getattr(self, '_val_mode', False)
+        
+        # Distribute skip_samples across workers
+        worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
+        skipped = 0
+        
+        with open(self.csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+            reader = csv.DictReader(f)
+            for idx, row in enumerate(reader):
+                # Worker sharding
+                if idx % num_workers != worker_id:
+                    continue
+                
+                # Train/val split
+                if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                    continue
+                
+                # Skip samples when resuming
+                if skipped < worker_skip:
+                    skipped += 1
+                    continue
+                
+                try:
+                    wav, sr = torchaudio.load(row["wav"])
+                    if sr != self.sr:
+                        wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
+                    mel = self.melspec(wav)[0].T
+                    
+                    # Buffer-based shuffling
+                    if self.shuffle_buffer_size > 0:
+                        buffer.append(mel)
+                        if len(buffer) >= self.shuffle_buffer_size:
+                            yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                    else:
+                        yield mel
+                except Exception:
+                    continue
+        
+        # Yield remaining buffer items
+        if buffer:
+            rng.shuffle(buffer)
+            yield from buffer
+
+class ImgCapDataset(IterableDataset):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
+    def __init__(self, manifest, image_root, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+        self.manifest_path, self.root = manifest, image_root
+        self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
+    
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info else 1
+        worker_id = worker_info.id if worker_info else 0
+        rng = random.Random(self.seed + worker_id if self.seed else None)
+        buffer = []
+        
+        val_split = getattr(self, '_val_split', None)
+        val_mode = getattr(self, '_val_mode', False)
+        
+        # Distribute skip_samples across workers
+        worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
+        skipped = 0
+        
+        with open(self.manifest_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+        
+        for idx, it in enumerate(items):
+            # Worker sharding
+            if idx % num_workers != worker_id:
+                continue
+            
+            # Train/val split
+            if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                continue
+            
+            # Skip samples when resuming
+            if skipped < worker_skip:
+                skipped += 1
+                continue
+            
+            try:
+                img = Image.open(os.path.join(self.root, it["image"])).convert("RGB")
+                result = (self.tf(img), it["caption"])
+                
+                # Buffer-based shuffling
+                if self.shuffle_buffer_size > 0:
+                    buffer.append(result)
+                    if len(buffer) >= self.shuffle_buffer_size:
+                        yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                else:
+                    yield result
+            except Exception:
+                continue
+        
+        # Yield remaining buffer items
+        if buffer:
+            rng.shuffle(buffer)
+            yield from buffer
+
+class VocoderDataset(IterableDataset):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
+    def __init__(self, csv_path, sr=16000, n_mels=128, n_fft=1024, hop_length=256, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+        self.csv_path, self.sr, self.n_mels = csv_path, sr, n_mels
+        self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self.max_audio_length = cfg.get("max_audio_length", None) if cfg else None
+        self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=n_fft, hop_length=hop_length, win_length=n_fft, n_mels=n_mels, fmin=0.0, fmax=sr / 2.0)
+    
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info else 1
+        worker_id = worker_info.id if worker_info else 0
+        rng = random.Random(self.seed + worker_id if self.seed else None)
+        buffer = []
+        
+        val_split = getattr(self, '_val_split', None)
+        val_mode = getattr(self, '_val_mode', False)
+        
+        # Distribute skip_samples across workers
+        worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
+        skipped = 0
+        
+        with open(self.csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as f:
+            reader = csv.DictReader(f)
+            for idx, row in enumerate(reader):
+                # Worker sharding
+                if idx % num_workers != worker_id:
+                    continue
+                
+                # Train/val split
+                if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                    continue
+                
+                # Skip samples when resuming
+                if skipped < worker_skip:
+                    skipped += 1
+                    continue
+                
+                path = row.get("wav") or row.get("audio")
+                if not path:
+                    continue
+                
+                try:
+                    audio, sr = torchaudio.load(path)
+                    if sr != self.sr:
+                        audio = torchaudio.transforms.Resample(sr, self.sr)(audio)
+                    if audio.shape[0] > 1:
+                        audio = audio.mean(dim=0, keepdim=True)
+                    audio = audio.squeeze(0)
+                    
+                    if self.max_audio_length and audio.shape[0] > self.max_audio_length:
+                        start_idx = torch.randint(0, audio.shape[0] - self.max_audio_length + 1, (1,)).item() if self.max_audio_length < audio.shape[0] else 0
+                        audio = audio[start_idx:start_idx + self.max_audio_length]
+                    
+                    mel = self.melspec(audio.unsqueeze(0))[0].T
+                    mel_min, mel_max = mel.min(), mel.max()
+                    if mel_max > mel_min + 1e-6:
+                        mel = (mel - mel_min) / (mel_max - mel_min + 1e-8)
+                    
+                    result = (mel, audio)
+                    
+                    # Buffer-based shuffling
+                    if self.shuffle_buffer_size > 0:
+                        buffer.append(result)
+                        if len(buffer) >= self.shuffle_buffer_size:
+                            yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                    else:
+                        yield result
+                except Exception:
+                    continue
+        
+        # Yield remaining buffer items
+        if buffer:
+            rng.shuffle(buffer)
+            yield from buffer
+
+class MixDataset(IterableDataset):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
+    def __init__(self, text_path, image_manifest, image_root, asr_csv, ctx=1024, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+        self.text_path, self.image_manifest_path, self.image_root, self.asr_csv_path, self.ctx = text_path, image_manifest, image_root, asr_csv, ctx
+        self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self.tf = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+    
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info else 1
+        worker_id = worker_info.id if worker_info else 0
+        rng = random.Random(self.seed + worker_id if self.seed else None)
+        buffer = []
+        
+        val_split = getattr(self, '_val_split', None)
+        val_mode = getattr(self, '_val_mode', False)
+        
+        # Distribute skip_samples across workers
+        worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
+        skipped = 0
+        
+        # Load image manifest
+        with open(self.image_manifest_path, 'r', encoding='utf-8') as f:
+            images = json.load(f)
+        
+        # Create iterators for text and ASR
+        text_lines = []
+        with open(self.text_path, 'r', encoding='utf-8', errors='ignore') as f:
+            text_lines = [line.strip() for line in f if line.strip()]
+        
+        asr_rows = []
+        with open(self.asr_csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+            reader = csv.DictReader(f)
+            asr_rows = list(reader)
+        
+        max_len = max(len(text_lines), len(images), len(asr_rows))
+        
+        for idx in range(max_len):
+            # Worker sharding
+            if idx % num_workers != worker_id:
+                continue
+            
+            # Train/val split
+            if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                continue
+            
+            # Skip samples when resuming
+            if skipped < worker_skip:
+                skipped += 1
+                continue
+            
+            it = {}
+            
+            # Load text
+            if idx < len(text_lines):
+                it["text"] = text_lines[idx]
+            else:
+                it["text"] = "Describe the image or audio."
+            
+            # Load image
+            if idx < len(images):
+                img_item = images[idx]
+                img_path = os.path.join(self.image_root, img_item["image"])
+                it["image"], it["caption"] = img_path, img_item["caption"]
+            
+            # Load ASR
+            if idx < len(asr_rows):
+                row = asr_rows[idx]
+                it["audio"], it["trans"] = row["wav"], row["text"]
+            
+            # Buffer-based shuffling
+            if self.shuffle_buffer_size > 0:
+                buffer.append(it)
+                if len(buffer) >= self.shuffle_buffer_size:
+                    yield buffer.pop(rng.randint(0, len(buffer) - 1))
+            else:
+                yield it
+        
+        # Yield remaining buffer items
+        if buffer:
+            rng.shuffle(buffer)
+            yield from buffer

@@ -156,14 +156,15 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
   - **OCR:** Tokens from extracted text (not used for step calculation, only reference)
 - If no tokenizer exists, one will be created automatically from the data
 - **Important:** For vision/audio/talker/OCR, token counts are shown for reference only. Step calculation uses sample counts.
-- **Fast mode:** Use `--skip-text-tokenization --assume-text-tokens N` to skip tokenization and use an assumed token count (e.g., 8000000000 for 8B tokens). Sample counts are still read from offset cache files when available.
+- **Fast mode:** Use `--skip-text-tokenization --assume-text-tokens N` to skip tokenization and use an assumed token count (e.g., 8000000000 for 8B tokens).
 
 **Memory-efficient processing:**
-- Tokenizer training: Plain text passed directly to SentencePiece (no streaming). CSV/JSON streams text extraction to temp file.
-- Temp files: Only used for CSV/JSON text extraction (streams extraction), stored in `data/.temp/` and auto-cleaned
-- Token counting processes files line-by-line with automatic resume support
+- Tokenizer training: Plain text passed directly to SentencePiece. CSV/JSON streams text extraction to temp file.
+- Temp files: Only used for CSV/JSON text extraction, stored in `data/.temp/` and auto-cleaned
+- Token counting: Streams files line-by-line with automatic resume support
 - All operations are resumable - if interrupted, will continue from last checkpoint
 - Checkpoints saved every 10K samples/lines for safe resumption
+- Datasets: All use streaming `IterableDataset` (no cache files needed)
 
 **Files checked:**
 - Text: `data/text/production_corpus.txt` or `data/text/tiny_corpus.txt`

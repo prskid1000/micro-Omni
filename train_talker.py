@@ -1,12 +1,11 @@
 
-import argparse, json, os, csv, torch, pickle
+import argparse, json, os, torch
 from torch import nn
 from torch.amp import autocast, GradScaler
-from torch.utils.data import Dataset, DataLoader
-import torchaudio
+from torch.utils.data import DataLoader
 from omni.codec import RVQ
 from omni.talker import TalkerTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, cleanup_old_checkpoints
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, cleanup_old_checkpoints, TTSDataset
 from tqdm import tqdm
 
 def collate_mel_fn(batch):
@@ -22,89 +21,6 @@ def collate_mel_fn(batch):
         padded.append(m)
     return torch.stack(padded)
 
-class TTSDataset(Dataset):
-    def __init__(self, csv_path, sr=16000, n_mels=128, frame_ms=80, cfg=None):
-        self.csv_path = csv_path
-        self.sr = sr
-        # Fix: win_length must be <= n_fft, and hop_length should be reasonable
-        hop_length = int(sr * frame_ms / 1000)  # e.g., 16000 * 0.08 = 1280 samples
-        win_length = min(1024, hop_length * 4)  # Ensure win_length <= n_fft
-        self.melspec = torchaudio.transforms.MelSpectrogram(
-            sample_rate=sr, 
-            n_fft=1024, 
-            hop_length=hop_length, 
-            win_length=win_length, 
-            n_mels=n_mels
-        )
-        self.frame = int(sr*0.08)
-        # Build or load cached row offset index (speeds up resuming)
-        offset_cache_path = f"{csv_path}.row_offsets.pkl"
-        file_mtime = os.path.getmtime(csv_path)
-        cache_valid = False
-        
-        if os.path.exists(offset_cache_path):
-            try:
-                with open(offset_cache_path, 'rb') as cache_file:
-                    cached_data = pickle.load(cache_file)
-                    cached_mtime = cached_data.get('mtime', 0)
-                    cached_offsets = cached_data.get('offsets', [])
-                    cached_fieldnames = cached_data.get('fieldnames', None)
-                    
-                    # Check if cache is valid (file hasn't changed)
-                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
-                        self.row_offsets = cached_offsets
-                        self.fieldnames = cached_fieldnames
-                        cache_valid = True
-            except Exception:
-                pass  # Cache invalid, will rebuild
-        
-        if not cache_valid:
-            # Build row offset index (stores file positions, not content)
-            self.row_offsets = []
-            self.fieldnames = None
-            with open(csv_path, 'rb') as f:
-                # Read header
-                header_line = f.readline()
-                if not header_line:
-                    raise ValueError("CSV file is empty")
-                self.fieldnames = header_line.decode('utf-8').strip().split(',')
-                # Build offset index for data rows
-                offset = f.tell()
-                while True:
-                    line_start = offset
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
-                    try:
-                        decoded = line_bytes.decode('utf-8').strip()
-                        if decoded:
-                            self.row_offsets.append(line_start)
-                    except UnicodeDecodeError:
-                        pass
-                    offset += len(line_bytes)
-            
-            # Cache the offset index for future use
-            try:
-                with open(offset_cache_path, 'wb') as cache_file:
-                    pickle.dump({'mtime': file_mtime, 'offsets': self.row_offsets, 'fieldnames': self.fieldnames}, cache_file)
-            except Exception:
-                pass  # Cache write failed, but continue anyway
-
-    def __len__(self): return len(self.row_offsets)
-    def __getitem__(self, i):
-        # Read only the specific row using file offset
-        with open(self.csv_path, 'rb') as f:
-            f.seek(self.row_offsets[i])
-            line_bytes = f.readline()
-            line = line_bytes.decode('utf-8').strip()
-        # Parse CSV row properly (handles quoted fields)
-        import io
-        reader = csv.DictReader(io.StringIO(line), fieldnames=self.fieldnames)
-        row = next(reader)
-        text, path = row["text"], row["wav"]
-        wav, sr = torchaudio.load(path); assert sr==self.sr
-        mel = self.melspec(wav)[0].T  # (T, n_mels)
-        return mel
 
 def main(cfg):
     # Set random seed for reproducibility

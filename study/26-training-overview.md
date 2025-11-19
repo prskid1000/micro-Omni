@@ -404,9 +404,9 @@ python scripts/update_configs_from_data.py --dry-run
 - ✅ Updates data paths to production files if they exist
 - ✅ Uses best practices: 1-3 epochs for large datasets, 5-10 for small
 - ✅ Ensures optimal memory usage by adjusting batch size for larger models
-- ✅ **Uses offset index caching** - builds and caches file offset indices for fast token counting
+- ✅ **Streaming token counting** - processes files line-by-line efficiently
 
-**Performance Note:** The first run may take time to build offset indices for large files. Subsequent runs will use cached indices and be much faster.
+**Performance Note:** Token counting streams files directly line-by-line. For very large files, this may take time but uses minimal memory.
 
 **When to run:**
 - After downloading production datasets

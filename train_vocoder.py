@@ -9,15 +9,12 @@ Uses adversarial training with Multi-Period Discriminator (MPD) and Multi-Scale 
 import argparse
 import json
 import os
-import csv
-import pickle
 import torch
 from torch import nn
 from torch.amp import autocast, GradScaler
-from torch.utils.data import Dataset, DataLoader
-import torchaudio
+from torch.utils.data import DataLoader
 from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, cleanup_old_checkpoints
+from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, cleanup_old_checkpoints, VocoderDataset
 from tqdm import tqdm
 
 
@@ -47,137 +44,6 @@ def collate_mel_audio_fn(batch):
     return torch.stack(padded_mels), torch.stack(padded_audios)
 
 
-class VocoderDataset(Dataset):
-    """Dataset for vocoder training - loads audio and computes mel spectrograms"""
-    def __init__(self, csv_path, sr=16000, n_mels=128, n_fft=1024, hop_length=256, cfg=None):
-        self.csv_path = csv_path
-        self.sr = sr
-        self.n_mels = n_mels
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        
-        # Limit audio length to save memory (default: ~0.5 seconds at 16kHz)
-        # Set to None to use full audio length
-        self.max_audio_length = cfg.get("max_audio_length", None) if cfg else None
-        
-        # Mel spectrogram transform (matches vocoder input)
-        self.melspec = torchaudio.transforms.MelSpectrogram(
-            sample_rate=sr,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=n_fft,
-            n_mels=n_mels,
-            fmin=0.0,
-            fmax=sr / 2.0
-        )
-        
-        # Build or load cached row offset index (speeds up resuming)
-        offset_cache_path = f"{csv_path}.row_offsets.pkl"
-        file_mtime = os.path.getmtime(csv_path)
-        cache_valid = False
-        
-        if os.path.exists(offset_cache_path):
-            try:
-                with open(offset_cache_path, 'rb') as cache_file:
-                    cached_data = pickle.load(cache_file)
-                    cached_mtime = cached_data.get('mtime', 0)
-                    cached_offsets = cached_data.get('offsets', [])
-                    cached_fieldnames = cached_data.get('fieldnames', None)
-                    
-                    # Check if cache is valid (file hasn't changed)
-                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
-                        self.row_offsets = cached_offsets
-                        self.fieldnames = cached_fieldnames
-                        cache_valid = True
-            except Exception:
-                pass  # Cache invalid, will rebuild
-        
-        if not cache_valid:
-            # Build row offset index for efficient random access
-            self.row_offsets = []
-            self.fieldnames = None
-            with open(csv_path, 'rb') as f:
-                header_line = f.readline()
-                if not header_line:
-                    raise ValueError("CSV file is empty")
-                self.fieldnames = header_line.decode('utf-8').strip().split(',')
-                offset = f.tell()
-                while True:
-                    line_start = offset
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
-                    try:
-                        decoded = line_bytes.decode('utf-8').strip()
-                        if decoded:
-                            self.row_offsets.append(line_start)
-                    except UnicodeDecodeError:
-                        pass
-                    offset += len(line_bytes)
-            
-            # Cache the offset index for future use
-            try:
-                with open(offset_cache_path, 'wb') as cache_file:
-                    pickle.dump({'mtime': file_mtime, 'offsets': self.row_offsets, 'fieldnames': self.fieldnames}, cache_file)
-            except Exception:
-                pass  # Cache write failed, but continue anyway
-    
-    def __len__(self):
-        return len(self.row_offsets)
-    
-    def __getitem__(self, i):
-        """Load audio file and return mel spectrogram + audio waveform"""
-        # Read specific row using file offset
-        with open(self.csv_path, 'rb') as f:
-            f.seek(self.row_offsets[i])
-            line_bytes = f.readline()
-            line = line_bytes.decode('utf-8').strip()
-        
-        # Parse CSV row
-        import io
-        reader = csv.DictReader(io.StringIO(line), fieldnames=self.fieldnames)
-        row = next(reader)
-        
-        # Get audio path (works with both ASR and TTS CSV formats)
-        if "wav" in row:
-            path = row["wav"]
-        elif "audio" in row:
-            path = row["audio"]
-        else:
-            raise ValueError(f"CSV must have 'wav' or 'audio' column. Found: {self.fieldnames}")
-        
-        # Load audio
-        audio, sr = torchaudio.load(path)
-        if sr != self.sr:
-            # Resample if needed
-            resampler = torchaudio.transforms.Resample(sr, self.sr)
-            audio = resampler(audio)
-        
-        # Convert to mono if stereo
-        if audio.shape[0] > 1:
-            audio = audio.mean(dim=0, keepdim=True)
-        
-        audio = audio.squeeze(0)  # (T,)
-        
-        # Truncate audio if too long (to save memory)
-        if self.max_audio_length is not None and audio.shape[0] > self.max_audio_length:
-            # Random crop for data augmentation
-            if self.max_audio_length < audio.shape[0]:
-                start_idx = torch.randint(0, audio.shape[0] - self.max_audio_length + 1, (1,)).item()
-                audio = audio[start_idx:start_idx + self.max_audio_length]
-            else:
-                audio = audio[:self.max_audio_length]
-        
-        # Compute mel spectrogram
-        mel = self.melspec(audio.unsqueeze(0))[0].T  # (T_mel, n_mels)
-        
-        # Normalize mel to [0, 1] range (for training stability)
-        mel_min = mel.min()
-        mel_max = mel.max()
-        if mel_max > mel_min + 1e-6:
-            mel = (mel - mel_min) / (mel_max - mel_min + 1e-8)
-        
-        return mel, audio
 
 
 def discriminator_loss(real_outputs, fake_outputs):

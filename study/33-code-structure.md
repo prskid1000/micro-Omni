@@ -48,13 +48,9 @@
 │
 ├── data/                    # Training data (create)
 │   ├── text/                # Text corpus files
-│   │   └── *.line_offsets.pkl  # Cached offset indices (auto-generated)
 │   ├── images/              # Image manifest files
-│   │   └── *.json_offsets.pkl  # Cached offset indices (auto-generated)
 │   ├── audio/               # Audio CSV files
-│   │   └── *.row_offsets.pkl   # Cached offset indices (auto-generated)
 │   └── ocr/                 # OCR CSV files
-│       └── *.row_offsets.pkl   # Cached offset indices (auto-generated)
 │
 ├── checkpoints/             # Model weights (create)
 │   ├── thinker_tiny/
@@ -267,20 +263,20 @@ infer_chat.py
 
 ---
 
-## 💾 Cache Files (Auto-Generated)
+## 💾 Streaming Datasets
 
-Training scripts automatically create cache files to speed up dataset initialization:
+All training scripts use streaming `IterableDataset` implementations:
 
-- **Text files**: `{file_path}.line_offsets.pkl` - Cached line offset indices
-- **CSV files**: `{file_path}.row_offsets.pkl` - Cached row offset indices + fieldnames
-- **JSON files**: `{file_path}.json_offsets.pkl` - Cached JSON object offsets
+- **Text files**: Stream line-by-line directly
+- **CSV files**: Use `csv.DictReader` for row-by-row streaming
+- **JSON files**: Load once, then iterate through items
 
-These cache files:
-- ✅ Created automatically on first run
-- ✅ Validated using file modification times
-- ✅ Rebuilt automatically if source file changes
-- ✅ Can be safely deleted (will regenerate)
-- ✅ Significantly speed up dataset initialization
+**Benefits:**
+- ✅ No cache files needed - simpler and cleaner
+- ✅ Minimal memory usage - only current item in memory
+- ✅ Efficient resuming via `skip_samples` parameter
+- ✅ Worker sharding for multi-process data loading
+- ✅ Buffer-based shuffling for randomization
 
 See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for details.
 
@@ -292,7 +288,7 @@ See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for det
 ✅ **Clear separation** - training vs inference  
 ✅ **Config-driven** - easy to modify parameters  
 ✅ **Self-contained** - minimal dependencies  
-✅ **Offset index caching** - fast dataset initialization
+✅ **Streaming datasets** - efficient memory usage
 
 ---
 
