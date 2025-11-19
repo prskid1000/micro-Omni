@@ -1,5 +1,5 @@
 
-import argparse, json, os, torch, json as js
+import argparse, json, os, torch, json as js, pickle
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -17,47 +17,77 @@ class ImgCapDataset(Dataset):
             transforms.Resize((img_size,img_size)),
             transforms.ToTensor()
         ])
-        # Build item offset index for JSON array
-        # JSON arrays are structured, so we'll parse and store offsets to each object
-        self.item_offsets = []
-        self.item_lengths = []  # Store approximate lengths for seeking
-        try:
-            with open(manifest, 'rb') as f:
-                content = f.read()
-                # Find array start
-                start_pos = content.find(b'[')
-                if start_pos == -1:
-                    raise ValueError("JSON manifest must be an array")
-                # Parse JSON to find object boundaries (handle commas and whitespace)
-                pos = start_pos + 1
-                depth = 0
-                obj_start = None
-                in_string = False
-                escape_next = False
-                while pos < len(content):
-                    byte = content[pos:pos+1]
-                    if escape_next:
-                        escape_next = False
-                    elif byte == b'\\':
-                        escape_next = True
-                    elif byte == b'"' and not escape_next:
-                        in_string = not in_string
-                    elif not in_string:
-                        if byte == b'{':
-                            if depth == 0:
-                                obj_start = pos
-                            depth += 1
-                        elif byte == b'}':
-                            depth -= 1
-                            if depth == 0 and obj_start is not None:
-                                # Found complete object
-                                self.item_offsets.append(obj_start)
-                                self.item_lengths.append(pos - obj_start + 1)
-                                obj_start = None
-                    pos += 1
-        except Exception:
-            # If parsing fails, fall back to loading entire JSON
-            pass
+        # Build or load cached item offset index (speeds up resuming)
+        offset_cache_path = f"{manifest}.json_offsets.pkl"
+        file_mtime = os.path.getmtime(manifest)
+        cache_valid = False
+        
+        if os.path.exists(offset_cache_path):
+            try:
+                with open(offset_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    cached_offsets = cached_data.get('offsets', [])
+                    cached_lengths = cached_data.get('lengths', [])
+                    
+                    # Check if cache is valid (file hasn't changed)
+                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
+                        self.item_offsets = cached_offsets
+                        self.item_lengths = cached_lengths
+                        cache_valid = True
+            except Exception:
+                pass  # Cache invalid, will rebuild
+        
+        if not cache_valid:
+            # Build item offset index for JSON array
+            # JSON arrays are structured, so we'll parse and store offsets to each object
+            self.item_offsets = []
+            self.item_lengths = []  # Store approximate lengths for seeking
+            try:
+                with open(manifest, 'rb') as f:
+                    content = f.read()
+                    # Find array start
+                    start_pos = content.find(b'[')
+                    if start_pos == -1:
+                        raise ValueError("JSON manifest must be an array")
+                    # Parse JSON to find object boundaries (handle commas and whitespace)
+                    pos = start_pos + 1
+                    depth = 0
+                    obj_start = None
+                    in_string = False
+                    escape_next = False
+                    while pos < len(content):
+                        byte = content[pos:pos+1]
+                        if escape_next:
+                            escape_next = False
+                        elif byte == b'\\':
+                            escape_next = True
+                        elif byte == b'"' and not escape_next:
+                            in_string = not in_string
+                        elif not in_string:
+                            if byte == b'{':
+                                if depth == 0:
+                                    obj_start = pos
+                                depth += 1
+                            elif byte == b'}':
+                                depth -= 1
+                                if depth == 0 and obj_start is not None:
+                                    # Found complete object
+                                    self.item_offsets.append(obj_start)
+                                    self.item_lengths.append(pos - obj_start + 1)
+                                    obj_start = None
+                        pos += 1
+            except Exception:
+                # If parsing fails, fall back to loading entire JSON
+                pass
+            
+            # Cache the offset index for future use
+            if self.item_offsets:
+                try:
+                    with open(offset_cache_path, 'wb') as cache_file:
+                        pickle.dump({'mtime': file_mtime, 'offsets': self.item_offsets, 'lengths': self.item_lengths}, cache_file)
+                except Exception:
+                    pass  # Cache write failed, but continue anyway
         
         # Fallback: if parsing failed, load entire JSON (for malformed JSON)
         if not self.item_offsets:

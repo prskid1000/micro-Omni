@@ -1,5 +1,5 @@
 
-import argparse, json, os, torch, csv, json as js
+import argparse, json, os, torch, csv, json as js, pickle
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -14,66 +14,112 @@ from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, Simp
 
 class MixDataset(Dataset):
     def __init__(self, text_path, image_manifest, image_root, asr_csv, ctx=1024):
-        # Lazy-load text: build line offset index
+        # Lazy-load text: build or load cached line offset index
         self.text_path = text_path
-        self.text_offsets = []
-        with open(text_path, 'rb') as f:
-            offset = 0
-            while True:
-                line_start = offset
-                line_bytes = f.readline()
-                if not line_bytes:
-                    break
-                try:
-                    decoded = line_bytes.decode('utf-8').strip()
-                    if decoded:
-                        self.text_offsets.append(line_start)
-                except UnicodeDecodeError:
-                    pass
-                offset += len(line_bytes)
+        text_cache_path = f"{text_path}.line_offsets.pkl"
+        text_file_mtime = os.path.getmtime(text_path)
+        text_cache_valid = False
         
-        # Lazy-load JSON manifest: build item offset index
+        if os.path.exists(text_cache_path):
+            try:
+                with open(text_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    if abs(cached_mtime - text_file_mtime) < 1.0:
+                        self.text_offsets = cached_data.get('offsets', [])
+                        text_cache_valid = True
+            except Exception:
+                pass
+        
+        if not text_cache_valid:
+            self.text_offsets = []
+            with open(text_path, 'rb') as f:
+                offset = 0
+                while True:
+                    line_start = offset
+                    line_bytes = f.readline()
+                    if not line_bytes:
+                        break
+                    try:
+                        decoded = line_bytes.decode('utf-8').strip()
+                        if decoded:
+                            self.text_offsets.append(line_start)
+                    except UnicodeDecodeError:
+                        pass
+                    offset += len(line_bytes)
+            
+            try:
+                with open(text_cache_path, 'wb') as cache_file:
+                    pickle.dump({'mtime': text_file_mtime, 'offsets': self.text_offsets}, cache_file)
+            except Exception:
+                pass
+        
+        # Lazy-load JSON manifest: build or load cached item offset index
         self.image_manifest_path = image_manifest
         self.image_root = image_root
-        self.image_item_offsets = []
-        self.image_item_lengths = []
-        try:
-            with open(image_manifest, 'rb') as f:
-                content = f.read()
-                # Find array start
-                start_pos = content.find(b'[')
-                if start_pos == -1:
-                    raise ValueError("JSON manifest must be an array")
-                # Parse JSON to find object boundaries (handle commas and whitespace)
-                pos = start_pos + 1
-                depth = 0
-                obj_start = None
-                in_string = False
-                escape_next = False
-                while pos < len(content):
-                    byte = content[pos:pos+1]
-                    if escape_next:
-                        escape_next = False
-                    elif byte == b'\\':
-                        escape_next = True
-                    elif byte == b'"' and not escape_next:
-                        in_string = not in_string
-                    elif not in_string:
-                        if byte == b'{':
-                            if depth == 0:
-                                obj_start = pos
-                            depth += 1
-                        elif byte == b'}':
-                            depth -= 1
-                            if depth == 0 and obj_start is not None:
-                                # Found complete object
-                                self.image_item_offsets.append(obj_start)
-                                self.image_item_lengths.append(pos - obj_start + 1)
-                                obj_start = None
-                    pos += 1
-        except Exception:
-            # If parsing fails, fall back to loading entire JSON
-            pass
+        image_cache_path = f"{image_manifest}.json_offsets.pkl"
+        image_file_mtime = os.path.getmtime(image_manifest)
+        image_cache_valid = False
+        
+        if os.path.exists(image_cache_path):
+            try:
+                with open(image_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    if abs(cached_mtime - image_file_mtime) < 1.0:
+                        self.image_item_offsets = cached_data.get('offsets', [])
+                        self.image_item_lengths = cached_data.get('lengths', [])
+                        image_cache_valid = True
+            except Exception:
+                pass
+        
+        if not image_cache_valid:
+            self.image_item_offsets = []
+            self.image_item_lengths = []
+            try:
+                with open(image_manifest, 'rb') as f:
+                    content = f.read()
+                    # Find array start
+                    start_pos = content.find(b'[')
+                    if start_pos == -1:
+                        raise ValueError("JSON manifest must be an array")
+                    # Parse JSON to find object boundaries (handle commas and whitespace)
+                    pos = start_pos + 1
+                    depth = 0
+                    obj_start = None
+                    in_string = False
+                    escape_next = False
+                    while pos < len(content):
+                        byte = content[pos:pos+1]
+                        if escape_next:
+                            escape_next = False
+                        elif byte == b'\\':
+                            escape_next = True
+                        elif byte == b'"' and not escape_next:
+                            in_string = not in_string
+                        elif not in_string:
+                            if byte == b'{':
+                                if depth == 0:
+                                    obj_start = pos
+                                depth += 1
+                            elif byte == b'}':
+                                depth -= 1
+                                if depth == 0 and obj_start is not None:
+                                    # Found complete object
+                                    self.image_item_offsets.append(obj_start)
+                                    self.image_item_lengths.append(pos - obj_start + 1)
+                                    obj_start = None
+                        pos += 1
+            except Exception:
+                # If parsing fails, fall back to loading entire JSON
+                pass
+            
+            if self.image_item_offsets:
+                try:
+                    with open(image_cache_path, 'wb') as cache_file:
+                        pickle.dump({'mtime': image_file_mtime, 'offsets': self.image_item_offsets, 'lengths': self.image_item_lengths}, cache_file)
+                except Exception:
+                    pass
         
         # Fallback: if parsing failed, load entire JSON
         if not self.image_item_offsets:
@@ -83,27 +129,50 @@ class MixDataset(Dataset):
             self._use_image_fallback = False
             self.images = None  # Not used when using lazy loading
         
-        # Lazy-load ASR CSV: build row offset index
+        # Lazy-load ASR CSV: build or load cached row offset index
         self.asr_csv_path = asr_csv
-        self.asr_offsets = []
-        self.asr_fieldnames = None
-        with open(asr_csv, 'rb') as f:
-            header_line = f.readline()
-            if header_line:
-                self.asr_fieldnames = header_line.decode('utf-8').strip().split(',')
-                offset = f.tell()
-                while True:
-                    line_start = offset
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
-                    try:
-                        decoded = line_bytes.decode('utf-8').strip()
-                        if decoded:
-                            self.asr_offsets.append(line_start)
-                    except UnicodeDecodeError:
-                        pass
-                    offset += len(line_bytes)
+        asr_cache_path = f"{asr_csv}.row_offsets.pkl"
+        asr_file_mtime = os.path.getmtime(asr_csv)
+        asr_cache_valid = False
+        
+        if os.path.exists(asr_cache_path):
+            try:
+                with open(asr_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    if abs(cached_mtime - asr_file_mtime) < 1.0:
+                        self.asr_offsets = cached_data.get('offsets', [])
+                        self.asr_fieldnames = cached_data.get('fieldnames', None)
+                        asr_cache_valid = True
+            except Exception:
+                pass
+        
+        if not asr_cache_valid:
+            self.asr_offsets = []
+            self.asr_fieldnames = None
+            with open(asr_csv, 'rb') as f:
+                header_line = f.readline()
+                if header_line:
+                    self.asr_fieldnames = header_line.decode('utf-8').strip().split(',')
+                    offset = f.tell()
+                    while True:
+                        line_start = offset
+                        line_bytes = f.readline()
+                        if not line_bytes:
+                            break
+                        try:
+                            decoded = line_bytes.decode('utf-8').strip()
+                            if decoded:
+                                self.asr_offsets.append(line_start)
+                        except UnicodeDecodeError:
+                            pass
+                        offset += len(line_bytes)
+            
+            try:
+                with open(asr_cache_path, 'wb') as cache_file:
+                    pickle.dump({'mtime': asr_file_mtime, 'offsets': self.asr_offsets, 'fieldnames': self.asr_fieldnames}, cache_file)
+            except Exception:
+                pass
         
         self.tf = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
         self.ctx = ctx

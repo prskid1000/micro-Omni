@@ -1,5 +1,5 @@
 
-import argparse, json, torch, os
+import argparse, json, torch, os, pickle
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -12,26 +12,53 @@ class TextDataset(Dataset):
     def __init__(self, path, tokenizer, ctx):
         self.path = path
         self.tok = tokenizer; self.ctx = ctx
-        # Build line offset index (stores file positions, not content)
-        # Read in binary mode and manually track offsets
-        self.line_offsets = []
-        with open(path, 'rb') as f:
-            offset = 0
-            while True:
-                line_start = offset
-                line_bytes = f.readline()
-                if not line_bytes:
-                    break
-                # Decode to check if line is non-empty
-                try:
-                    decoded = line_bytes.decode('utf-8')
-                    if decoded.strip():
-                        self.line_offsets.append(line_start)
-                except UnicodeDecodeError:
-                    # Skip invalid UTF-8 lines
-                    pass
-                # Manually track offset by adding line length
-                offset += len(line_bytes)
+        # Build or load cached line offset index (speeds up resuming)
+        offset_cache_path = f"{path}.line_offsets.pkl"
+        file_mtime = os.path.getmtime(path)
+        cache_valid = False
+        
+        if os.path.exists(offset_cache_path):
+            try:
+                with open(offset_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    cached_offsets = cached_data.get('offsets', [])
+                    
+                    # Check if cache is valid (file hasn't changed)
+                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
+                        self.line_offsets = cached_offsets
+                        cache_valid = True
+            except Exception:
+                pass  # Cache invalid, will rebuild
+        
+        if not cache_valid:
+            # Build line offset index (stores file positions, not content)
+            # Read in binary mode and manually track offsets
+            self.line_offsets = []
+            with open(path, 'rb') as f:
+                offset = 0
+                while True:
+                    line_start = offset
+                    line_bytes = f.readline()
+                    if not line_bytes:
+                        break
+                    # Decode to check if line is non-empty
+                    try:
+                        decoded = line_bytes.decode('utf-8')
+                        if decoded.strip():
+                            self.line_offsets.append(line_start)
+                    except UnicodeDecodeError:
+                        # Skip invalid UTF-8 lines
+                        pass
+                    # Manually track offset by adding line length
+                    offset += len(line_bytes)
+            
+            # Cache the offset index for future use
+            try:
+                with open(offset_cache_path, 'wb') as cache_file:
+                    pickle.dump({'mtime': file_mtime, 'offsets': self.line_offsets}, cache_file)
+            except Exception:
+                pass  # Cache write failed, but continue anyway
     def __len__(self): return len(self.line_offsets)
     def __getitem__(self, i):
         # Read only the specific line using file offset

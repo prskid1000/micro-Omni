@@ -28,22 +28,33 @@
 │
 ├── scripts/                   # Utility scripts
 │   ├── check_setup.py        # Verify installation
-│   ├── download_datasets.py  # Download data
-│   └── make_synthetic_datasets.py
+│   ├── download_production_text.py  # Download text data
+│   ├── download_production_audio.py # Download audio data
+│   ├── download_production_image.py # Download image data
+│   ├── download_production_ocr.py   # Download OCR data
+│   ├── update_configs_from_data.py # Auto-update configs from data
+│   └── make_synthetic_datasets.py   # Generate test data
 │
 ├── train_text.py             # Stage A: Thinker pretraining
 ├── train_audio_enc.py        # Stage B: Audio encoder
 ├── train_vision.py           # Stage C: Vision encoder
 ├── train_talker.py           # Stage D: Talker + RVQ
+├── train_vocoder.py          # Optional: HiFi-GAN vocoder
+├── train_ocr.py              # Optional: OCR model
 ├── sft_omni.py              # Stage E: Multimodal SFT
 │
 ├── infer_chat.py            # Inference interface
 ├── test_all_media.py        # Test multimodal inputs
 │
 ├── data/                    # Training data (create)
-│   ├── text/
-│   ├── images/
-│   └── audio/
+│   ├── text/                # Text corpus files
+│   │   └── *.line_offsets.pkl  # Cached offset indices (auto-generated)
+│   ├── images/              # Image manifest files
+│   │   └── *.json_offsets.pkl  # Cached offset indices (auto-generated)
+│   ├── audio/               # Audio CSV files
+│   │   └── *.row_offsets.pkl   # Cached offset indices (auto-generated)
+│   └── ocr/                 # OCR CSV files
+│       └── *.row_offsets.pkl   # Cached offset indices (auto-generated)
 │
 ├── checkpoints/             # Model weights (create)
 │   ├── thinker_tiny/
@@ -153,9 +164,21 @@ class GriffinLimVocoder:
 - **Loss**: Cross-entropy + MSE
 - **Output**: `checkpoints/talker_tiny/`
 
+#### `train_vocoder.py`
+- **Optional**: HiFi-GAN vocoder training
+- **Data**: Audio files (TTS/ASR CSV)
+- **Loss**: Adversarial
+- **Output**: `checkpoints/vocoder_tiny/`
+
+#### `train_ocr.py`
+- **Optional**: OCR model training
+- **Data**: Images + text labels
+- **Loss**: Cross-entropy
+- **Output**: `checkpoints/ocr_tiny/`
+
 #### `sft_omni.py`
 - **Stage E**: Multimodal SFT
-- **Data**: Mixed modalities
+- **Data**: Mixed modalities (text, images, audio)
 - **Loss**: Cross-entropy
 - **Output**: `checkpoints/omni_sft_tiny/`
 
@@ -244,12 +267,32 @@ infer_chat.py
 
 ---
 
+## 💾 Cache Files (Auto-Generated)
+
+Training scripts automatically create cache files to speed up dataset initialization:
+
+- **Text files**: `{file_path}.line_offsets.pkl` - Cached line offset indices
+- **CSV files**: `{file_path}.row_offsets.pkl` - Cached row offset indices + fieldnames
+- **JSON files**: `{file_path}.json_offsets.pkl` - Cached JSON object offsets
+
+These cache files:
+- ✅ Created automatically on first run
+- ✅ Validated using file modification times
+- ✅ Rebuilt automatically if source file changes
+- ✅ Can be safely deleted (will regenerate)
+- ✅ Significantly speed up dataset initialization
+
+See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for details.
+
+---
+
 ## 💡 Key Takeaways
 
 ✅ **Modular structure** - each component independent  
 ✅ **Clear separation** - training vs inference  
 ✅ **Config-driven** - easy to modify parameters  
-✅ **Self-contained** - minimal dependencies
+✅ **Self-contained** - minimal dependencies  
+✅ **Offset index caching** - fast dataset initialization
 
 ---
 

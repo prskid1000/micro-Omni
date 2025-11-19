@@ -726,6 +726,9 @@ python scripts/update_configs_from_data.py --dry-run
 - ✅ Adjusts validation and checkpoint frequencies
 - ✅ Updates data paths to production files automatically
 - ✅ Applies best practices based on dataset size and model architecture
+- ✅ **Uses offset index caching** - builds and caches file offset indices for fast token counting
+
+**Performance Note:** The first run may take time to build offset indices for large files. Subsequent runs will use cached indices and be much faster. Cache files (`.line_offsets.pkl`, `.row_offsets.pkl`, `.json_offsets.pkl`) are automatically created and validated.
 
 **Why it matters:**
 - **Text training:** Uses tokens because each sample is tokenized to `ctx_len` tokens

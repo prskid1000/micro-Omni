@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import csv
+import pickle
 import torch
 from torch import nn
 from torch.amp import autocast, GradScaler
@@ -70,27 +71,56 @@ class VocoderDataset(Dataset):
             fmax=sr / 2.0
         )
         
-        # Build row offset index for efficient random access
-        self.row_offsets = []
-        self.fieldnames = None
-        with open(csv_path, 'rb') as f:
-            header_line = f.readline()
-            if not header_line:
-                raise ValueError("CSV file is empty")
-            self.fieldnames = header_line.decode('utf-8').strip().split(',')
-            offset = f.tell()
-            while True:
-                line_start = offset
-                line_bytes = f.readline()
-                if not line_bytes:
-                    break
-                try:
-                    decoded = line_bytes.decode('utf-8').strip()
-                    if decoded:
-                        self.row_offsets.append(line_start)
-                except UnicodeDecodeError:
-                    pass
-                offset += len(line_bytes)
+        # Build or load cached row offset index (speeds up resuming)
+        offset_cache_path = f"{csv_path}.row_offsets.pkl"
+        file_mtime = os.path.getmtime(csv_path)
+        cache_valid = False
+        
+        if os.path.exists(offset_cache_path):
+            try:
+                with open(offset_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    cached_offsets = cached_data.get('offsets', [])
+                    cached_fieldnames = cached_data.get('fieldnames', None)
+                    
+                    # Check if cache is valid (file hasn't changed)
+                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
+                        self.row_offsets = cached_offsets
+                        self.fieldnames = cached_fieldnames
+                        cache_valid = True
+            except Exception:
+                pass  # Cache invalid, will rebuild
+        
+        if not cache_valid:
+            # Build row offset index for efficient random access
+            self.row_offsets = []
+            self.fieldnames = None
+            with open(csv_path, 'rb') as f:
+                header_line = f.readline()
+                if not header_line:
+                    raise ValueError("CSV file is empty")
+                self.fieldnames = header_line.decode('utf-8').strip().split(',')
+                offset = f.tell()
+                while True:
+                    line_start = offset
+                    line_bytes = f.readline()
+                    if not line_bytes:
+                        break
+                    try:
+                        decoded = line_bytes.decode('utf-8').strip()
+                        if decoded:
+                            self.row_offsets.append(line_start)
+                    except UnicodeDecodeError:
+                        pass
+                    offset += len(line_bytes)
+            
+            # Cache the offset index for future use
+            try:
+                with open(offset_cache_path, 'wb') as cache_file:
+                    pickle.dump({'mtime': file_mtime, 'offsets': self.row_offsets, 'fieldnames': self.fieldnames}, cache_file)
+            except Exception:
+                pass  # Cache write failed, but continue anyway
     
     def __len__(self):
         return len(self.row_offsets)

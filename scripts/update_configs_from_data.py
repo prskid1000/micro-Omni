@@ -9,7 +9,8 @@ import csv
 import io
 import tempfile
 import argparse
-from typing import Dict, Tuple, Optional
+import pickle
+from typing import Dict, Tuple, Optional, List
 
 # Import tokenizer (required)
 import sys
@@ -102,22 +103,50 @@ def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> i
                 total_tokens = 0
                 start_line_idx = 0
         
-        # Build line offset index (same approach as train_text.py)
+        # Build or load cached line offset index (speeds up resuming)
+        offset_cache_path = f"{text_path}.line_offsets.pkl"
         line_offsets = []
-        with open(text_path, 'rb') as f:
-            offset = 0
-            while True:
-                line_start = offset
-                line_bytes = f.readline()
-                if not line_bytes:
-                    break
-                try:
-                    decoded = line_bytes.decode('utf-8')
-                    if decoded.strip():
-                        line_offsets.append(line_start)
-                except UnicodeDecodeError:
-                    pass  # Skip invalid UTF-8 lines
-                offset += len(line_bytes)  # Manually track offset
+        file_mtime = os.path.getmtime(text_path)
+        cache_valid = False
+        
+        if os.path.exists(offset_cache_path):
+            try:
+                with open(offset_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    cached_offsets = cached_data.get('offsets', [])
+                    
+                    # Check if cache is valid (file hasn't changed)
+                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
+                        line_offsets = cached_offsets
+                        cache_valid = True
+                        print(f"  Loaded cached line offset index ({len(line_offsets):,} lines)")
+            except Exception:
+                pass  # Cache invalid, will rebuild
+        
+        if not cache_valid:
+            print(f"  Building line offset index (this may take a while for large files)...")
+            with open(text_path, 'rb') as f:
+                offset = 0
+                while True:
+                    line_start = offset
+                    line_bytes = f.readline()
+                    if not line_bytes:
+                        break
+                    try:
+                        decoded = line_bytes.decode('utf-8')
+                        if decoded.strip():
+                            line_offsets.append(line_start)
+                    except UnicodeDecodeError:
+                        pass  # Skip invalid UTF-8 lines
+                    offset += len(line_bytes)  # Manually track offset
+            
+            # Cache the offset index for future use
+            try:
+                with open(offset_cache_path, 'wb') as cache_file:
+                    pickle.dump({'mtime': file_mtime, 'offsets': line_offsets}, cache_file)
+            except Exception:
+                pass  # Cache write failed, but continue anyway
         
         sample_count = start_line_idx
         checkpoint_freq = 10000  # Save checkpoint every N lines
@@ -243,27 +272,57 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
                 if temp_text_created and os.path.exists(temp_text):
                     os.remove(temp_text)
         
-        # Build row offset index (same approach as train_audio_enc.py)
+        # Build or load cached row offset index (speeds up resuming)
+        offset_cache_path = f"{csv_path}.row_offsets.pkl"
         row_offsets = []
         fieldnames = None
-        with open(csv_path, 'rb') as f:
-            header_line = f.readline()
-            if not header_line:
-                raise ValueError("CSV file is empty")
-            fieldnames = header_line.decode('utf-8').strip().split(',')
-            offset = f.tell()
-            while True:
-                line_start = offset
-                line_bytes = f.readline()
-                if not line_bytes:
-                    break
-                try:
-                    decoded = line_bytes.decode('utf-8').strip()
-                    if decoded:
-                        row_offsets.append(line_start)
-                except UnicodeDecodeError:
-                    pass
-                offset += len(line_bytes)  # Manually track offset
+        file_mtime = os.path.getmtime(csv_path)
+        cache_valid = False
+        
+        if os.path.exists(offset_cache_path):
+            try:
+                with open(offset_cache_path, 'rb') as cache_file:
+                    cached_data = pickle.load(cache_file)
+                    cached_mtime = cached_data.get('mtime', 0)
+                    cached_offsets = cached_data.get('offsets', [])
+                    cached_fieldnames = cached_data.get('fieldnames', None)
+                    
+                    # Check if cache is valid (file hasn't changed)
+                    if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
+                        row_offsets = cached_offsets
+                        fieldnames = cached_fieldnames
+                        cache_valid = True
+                        print(f"  Loaded cached row offset index ({len(row_offsets):,} rows)")
+            except Exception:
+                pass  # Cache invalid, will rebuild
+        
+        if not cache_valid:
+            print(f"  Building row offset index (this may take a while for large files)...")
+            with open(csv_path, 'rb') as f:
+                header_line = f.readline()
+                if not header_line:
+                    raise ValueError("CSV file is empty")
+                fieldnames = header_line.decode('utf-8').strip().split(',')
+                offset = f.tell()
+                while True:
+                    line_start = offset
+                    line_bytes = f.readline()
+                    if not line_bytes:
+                        break
+                    try:
+                        decoded = line_bytes.decode('utf-8').strip()
+                        if decoded:
+                            row_offsets.append(line_start)
+                    except UnicodeDecodeError:
+                        pass
+                    offset += len(line_bytes)  # Manually track offset
+            
+            # Cache the offset index for future use
+            try:
+                with open(offset_cache_path, 'wb') as cache_file:
+                    pickle.dump({'mtime': file_mtime, 'offsets': row_offsets, 'fieldnames': fieldnames}, cache_file)
+            except Exception:
+                pass  # Cache write failed, but continue anyway
         
         # Check for existing count checkpoint (resumable)
         checkpoint_path = f"{csv_path}.token_count_checkpoint.json"
@@ -345,7 +404,29 @@ def count_ocr_tokens(csv_path: str, tokenizer_path: Optional[str] = None) -> int
 def _build_json_offset_index(manifest_path: str) -> Tuple[list, list, bool]:
     """Build an index of JSON object offsets without loading entire file into memory.
     Returns (item_offsets, item_lengths, is_dict_format) where is_dict_format indicates
-    if the JSON is a dict with 'images' key rather than a direct array."""
+    if the JSON is a dict with 'images' key rather than a direct array.
+    Uses caching to speed up resuming."""
+    offset_cache_path = f"{manifest_path}.json_offsets.pkl"
+    file_mtime = os.path.getmtime(manifest_path)
+    cache_valid = False
+    
+    # Try to load from cache
+    if os.path.exists(offset_cache_path):
+        try:
+            with open(offset_cache_path, 'rb') as cache_file:
+                cached_data = pickle.load(cache_file)
+                cached_mtime = cached_data.get('mtime', 0)
+                
+                # Check if cache is valid (file hasn't changed)
+                if abs(cached_mtime - file_mtime) < 1.0:  # Within 1 second tolerance
+                    item_offsets = cached_data.get('offsets', [])
+                    item_lengths = cached_data.get('lengths', [])
+                    is_dict_format = cached_data.get('is_dict_format', False)
+                    return item_offsets, item_lengths, is_dict_format
+        except Exception:
+            pass  # Cache invalid, will rebuild
+    
+    # Build index from scratch
     item_offsets = []
     item_lengths = []
     is_dict_format = False
@@ -405,6 +486,18 @@ def _build_json_offset_index(manifest_path: str) -> Tuple[list, list, bool]:
     except Exception as e:
         # If parsing fails, return empty index (will use fallback)
         return [], [], False
+    
+    # Cache the offset index for future use
+    try:
+        with open(offset_cache_path, 'wb') as cache_file:
+            pickle.dump({
+                'mtime': file_mtime,
+                'offsets': item_offsets,
+                'lengths': item_lengths,
+                'is_dict_format': is_dict_format
+            }, cache_file)
+    except Exception:
+        pass  # Cache write failed, but continue anyway
     
     return item_offsets, item_lengths, is_dict_format
 

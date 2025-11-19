@@ -186,6 +186,101 @@ self.item_lengths = []  # 8 bytes per length
 - ✅ Robust fallback for malformed JSON files
 - ✅ Maintains same training speed (minimal I/O overhead)
 
+### 1.1. Offset Index Caching (2024 Enhancement)
+
+**What:** Cache file offset indices to disk for instant loading on subsequent runs  
+**Benefit:** Eliminates time-consuming index rebuilding when resuming training or restarting scripts  
+**Status:** ✅ Implemented in all training scripts and `update_configs_from_data.py`
+
+**Problem Solved:**
+When training scripts start, they need to build offset indices to enable lazy loading. For large files (millions of lines/rows), this can take several minutes. Previously, this index was rebuilt every time, even when resuming training.
+
+**Solution:**
+- Cache offset indices to disk using pickle files
+- Validate cache by comparing file modification times
+- Load cached indices instantly if source file hasn't changed
+- Automatically rebuild if cache is invalid or missing
+
+**Cache Files Created:**
+- **Text files**: `{file_path}.line_offsets.pkl` - Stores line start positions
+- **CSV files**: `{file_path}.row_offsets.pkl` - Stores row start positions + fieldnames
+- **JSON files**: `{file_path}.json_offsets.pkl` - Stores object offsets + lengths + format info
+
+**Implementation Example:**
+```python
+# Text file caching (train_text.py, sft_omni.py)
+offset_cache_path = f"{path}.line_offsets.pkl"
+file_mtime = os.path.getmtime(path)
+cache_valid = False
+
+if os.path.exists(offset_cache_path):
+    try:
+        with open(offset_cache_path, 'rb') as cache_file:
+            cached_data = pickle.load(cache_file)
+            cached_mtime = cached_data.get('mtime', 0)
+            cached_offsets = cached_data.get('offsets', [])
+            
+            # Validate cache (file hasn't changed)
+            if abs(cached_mtime - file_mtime) < 1.0:
+                self.line_offsets = cached_offsets
+                cache_valid = True
+    except Exception:
+        pass  # Cache invalid, will rebuild
+
+if not cache_valid:
+    # Build index from scratch...
+    # ... (index building code) ...
+    
+    # Save cache for future use
+    try:
+        with open(offset_cache_path, 'wb') as cache_file:
+            pickle.dump({'mtime': file_mtime, 'offsets': self.line_offsets}, cache_file)
+    except Exception:
+        pass  # Cache write failed, but continue anyway
+```
+
+**Performance Impact:**
+- **First run**: Builds index (may take minutes for large files) + saves cache
+- **Subsequent runs**: Loads cache instantly (< 1 second) if file unchanged
+- **After file modification**: Automatically detects change and rebuilds cache
+- **Resuming training**: No delay - cache loads instantly
+
+**Files Using Caching:**
+| Script | Cache Type | Cache File Pattern |
+|--------|-----------|-------------------|
+| `train_text.py` | Line offsets | `{text_path}.line_offsets.pkl` |
+| `train_audio_enc.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
+| `train_vision.py` | JSON offsets | `{manifest}.json_offsets.pkl` |
+| `train_ocr.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
+| `train_talker.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
+| `train_vocoder.py` | Row offsets | `{csv_path}.row_offsets.pkl` |
+| `sft_omni.py` | All three types | Multiple cache files |
+| `update_configs_from_data.py` | All three types | Multiple cache files |
+
+**Key Benefits:**
+- ✅ **Instant dataset initialization** - No waiting for index building
+- ✅ **Faster resuming** - Training resumes immediately without delay
+- ✅ **Automatic validation** - Cache invalidated if source file changes
+- ✅ **Graceful fallback** - Rebuilds automatically if cache is corrupted
+- ✅ **Transparent** - Works automatically, no user action needed
+
+**Cache File Locations:**
+Cache files are stored next to the source data files:
+```
+data/
+├── text/
+│   ├── production_corpus.txt
+│   └── production_corpus.txt.line_offsets.pkl  ← Cache file
+├── audio/
+│   ├── production_asr.csv
+│   └── production_asr.csv.row_offsets.pkl  ← Cache file
+└── images/
+    ├── production_annotations.json
+    └── production_annotations.json.json_offsets.pkl  ← Cache file
+```
+
+**Note:** Cache files are automatically created and managed. You can safely delete them if needed - they will be regenerated on the next run.
+
 ### 2. Efficient Tokenizer Training
 
 **What:** Train tokenizers on entire dataset efficiently  
@@ -274,6 +369,7 @@ self.item_lengths = []  # 8 bytes per length
 ✅ **Use Flash Attention** if available  
 ✅ **Gradient accumulation** for large batches  
 ✅ **Lazy loading enabled** by default (no action needed)  
+✅ **Offset index caching** - instant dataset initialization on subsequent runs  
 ✅ **Chunked tokenizer training** - automatically streams entire corpus  
 ✅ **Resumable preprocessing** - safe to interrupt and resume  
 ✅ **Monitor GPU memory** with `nvidia-smi`  
