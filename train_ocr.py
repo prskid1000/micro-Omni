@@ -212,10 +212,12 @@ def main(cfg):
     
     for epoch in range(start_epoch, max_epochs):
         # Create progress bar with correct starting position when resuming mid-epoch
+        remaining_epochs = max_epochs - epoch - 1
+        pbar_desc = f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step}"
         if epoch == start_epoch and start_batch_idx > 0:
-            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", initial=start_batch_idx, total=steps_per_epoch)
+            pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch)
         else:
-            pbar = tqdm(train_dl, desc=f"epoch{epoch} step{step}", total=steps_per_epoch)
+            pbar = tqdm(train_dl, desc=pbar_desc, total=steps_per_epoch)
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
@@ -228,7 +230,8 @@ def main(cfg):
                     continue
             
             # Update progress bar description
-            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
+            remaining_epochs = max_epochs - epoch - 1
+            pbar.set_description(f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step} batch{batch_idx}")
             
             images = images.to(device)  # (B, 3, H, W)
             text_ids = text_ids.to(device)  # (B, T)

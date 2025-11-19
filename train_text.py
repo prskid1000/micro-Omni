@@ -166,10 +166,15 @@ def main(cfg):
     # For IterableDataset, we can't use len() directly, so calculate from dataset size
     drop_last = cfg.get("drop_last", True)
     if train_size is not None:
-        steps_per_epoch = train_size // batch_size
-        if not drop_last and train_size % batch_size != 0:
+        # Ensure batch_size is an integer for division
+        batch_size_int = int(batch_size)
+        if batch_size_int <= 0:
+            logger.warning(f"Invalid batch_size={batch_size}, using default 8")
+            batch_size_int = 8
+        steps_per_epoch = train_size // batch_size_int
+        if not drop_last and train_size % batch_size_int != 0:
             steps_per_epoch += 1
-        logger.info(f"Dataset: train_size={train_size}, batch_size={batch_size}, steps_per_epoch={steps_per_epoch}")
+        logger.info(f"Dataset: train_size={train_size}, batch_size={batch_size_int}, steps_per_epoch={steps_per_epoch} (calculated as {train_size} // {batch_size_int} = {train_size // batch_size_int})")
     else:
         # Fallback: use a large number if size is unknown (for progress bar)
         # The actual training will work fine, just progress bar won't be accurate
@@ -183,7 +188,8 @@ def main(cfg):
     for epoch in range(start_epoch, max_epochs):
         logger.epoch_start(epoch)
         # Create progress bar with step info
-        pbar_desc = f"epoch{epoch} step{step}"
+        remaining_epochs = max_epochs - epoch - 1
+        pbar_desc = f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step}"
         # Initialize progress bar with correct starting position when resuming mid-epoch
         if epoch == start_epoch and start_batch_idx > 0:
             pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch)
@@ -202,7 +208,8 @@ def main(cfg):
                     continue
             
             # Update progress bar description with current step
-            pbar.set_description(f"epoch{epoch} step{step} batch{batch_idx}")
+            remaining_epochs = max_epochs - epoch - 1
+            pbar.set_description(f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step} batch{batch_idx}")
             x,y = x.to(device), y.to(device)
             
             # Mark step begin for CUDAGraphs optimization
