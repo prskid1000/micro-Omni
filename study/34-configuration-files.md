@@ -78,9 +78,11 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What gets updated:**
-- `max_steps`: Calculated from token count, batch size, and context length
+- `max_steps`: Calculated from token count, batch size, and context length using research-based formulas
 - `max_epochs`: Based on token count (1-3 for very large, 5-10 for small)
-- `warmup_steps`: 5-10% of total steps (capped at 10K)
+- `warmup_steps`: 4% of total steps (research-based, typically 3-5%, capped at 10K)
+- `batch_size`: Automatically adjusted based on model size (larger models = smaller batch sizes)
+- `gradient_accumulation_steps`: Automatically adjusted to maintain effective batch size
 - `val_freq`: Every 500-1000 steps or 10% of steps per epoch
 - `checkpoint_freq`: Every 5000-10000 steps or 1 per epoch
 - Data paths: Automatically updated to production files if they exist
@@ -116,6 +118,23 @@ python scripts/update_configs_from_data.py --dry-run
 - If no tokenizer exists, one is automatically created from the text data
 - Token counts are more accurate than sample counts for determining training duration
 
+**Model size integration:**
+- The script calculates model size from config files using mathematical formulas
+- Batch size and gradient accumulation are automatically adjusted based on model size:
+  - **Very large models (>100M params):** Smaller batch size, more gradient accumulation
+  - **Large models (50M-100M params):** Moderate batch size, some gradient accumulation
+  - **Medium models (10M-50M params):** Normal batch size, minimal accumulation
+  - **Small models (<10M params):** Larger batch size, no accumulation needed
+- Effective batch size is maintained: `EBS = batch_size × gradient_accumulation_steps`
+- This ensures optimal memory usage while maintaining training stability
+
+**Research-based formulas:**
+- **Effective Batch Size:** `EBS = Micro Batch Size × Gradient Accumulation × Data Parallel`
+- **Tokens per step:** `tokens_per_step = EBS × context_length`
+- **Steps per epoch:** `steps_per_epoch = training_tokens / tokens_per_step`
+- **Total steps:** `max_steps = steps_per_epoch × recommended_epochs`
+- **Warmup steps:** 4% of total steps (based on research showing 3-5% is optimal)
+
 **Note:** The script only checks production and synthetic files, ignoring intermediate dataset files.
 
 ---
@@ -138,8 +157,10 @@ python scripts/update_configs_from_data.py --dry-run
 - Use gradient accumulation
 
 **Automatic tuning:**
-- Use `scripts/update_configs_from_data.py` to automatically set epochs/steps based on your dataset size
-- Ensures optimal training duration without manual calculation
+- Use `scripts/update_configs_from_data.py` to automatically set epochs/steps based on your dataset size and model architecture
+- Automatically adjusts batch size and gradient accumulation based on model size
+- Uses research-based formulas for optimal training configuration
+- Ensures optimal training duration and memory usage without manual calculation
 
 ---
 

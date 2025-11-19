@@ -393,11 +393,14 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What it does:**
-- ✅ Counts samples in production/synthetic datasets
-- ✅ Calculates appropriate `max_steps`, `max_epochs`, `warmup_steps`
+- ✅ Counts tokens in production/synthetic datasets (using BPE tokenizer)
+- ✅ Calculates model size from config files (using mathematical formulas)
+- ✅ Automatically adjusts `batch_size` and `gradient_accumulation_steps` based on model size
+- ✅ Calculates appropriate `max_steps`, `max_epochs`, `warmup_steps` using research-based formulas
 - ✅ Adjusts `val_freq` and `checkpoint_freq` based on dataset size
 - ✅ Updates data paths to production files if they exist
 - ✅ Uses best practices: 1-3 epochs for large datasets, 5-10 for small
+- ✅ Ensures optimal memory usage by adjusting batch size for larger models
 
 **When to run:**
 - After downloading production datasets

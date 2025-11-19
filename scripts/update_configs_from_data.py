@@ -7,13 +7,23 @@ import os
 import json
 import csv
 import argparse
-from pathlib import Path
 from typing import Dict, Tuple, Optional
 
 # Import tokenizer (required)
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from omni.tokenizer import BPETokenizer
+
+# Import model size calculation functions
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, script_dir)
+from calculate_model_size import (
+    calculate_thinker_params,
+    calculate_audio_encoder_params,
+    calculate_vision_encoder_params,
+    calculate_talker_params,
+    calculate_ocr_params
+)
 
 # Best practices for training duration based on dataset size
 # (samples, min_epochs, max_epochs, recommended_epochs)
@@ -64,7 +74,7 @@ def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None
     return BPETokenizer(tokenizer_model)
 
 def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> int:
-    """Count actual tokens in text file using tokenizer"""
+    """Count actual tokens in text file using tokenizer (streams line-by-line like train_text.py)"""
     if not os.path.exists(text_path):
         return 0
     
@@ -73,11 +83,31 @@ def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> i
         total_tokens = 0
         sample_count = 0
         
-        with open(text_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    tokens = tokenizer.encode(line)
+        # Build line offset index (same approach as train_text.py)
+        line_offsets = []
+        with open(text_path, 'rb') as f:
+            offset = 0
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                try:
+                    decoded = line_bytes.decode('utf-8')
+                    if decoded.strip():
+                        line_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    pass  # Skip invalid UTF-8 lines
+                offset += len(line_bytes)  # Manually track offset
+        
+        # Process lines one at a time using offsets (memory efficient)
+        with open(text_path, 'rb') as f:
+            for line_start in line_offsets:
+                f.seek(line_start)
+                line_bytes = f.readline()
+                text = line_bytes.decode('utf-8').strip()
+                if text:
+                    tokens = tokenizer.encode(text)
                     total_tokens += len(tokens)
                     sample_count += 1
                     
@@ -91,7 +121,7 @@ def count_text_tokens(text_path: str, tokenizer_path: Optional[str] = None) -> i
         raise
 
 def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: Optional[str] = None) -> int:
-    """Count tokens from CSV file (for audio transcriptions or OCR text)"""
+    """Count tokens from CSV file (streams row-by-row like train_audio_enc.py)"""
     if not os.path.exists(csv_path):
         return 0
     
@@ -108,29 +138,86 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
                 break
         
         if not tokenizer:
-            # Create tokenizer from CSV text
+            # Create tokenizer from CSV text (stream through file)
             print(f"  Creating tokenizer from CSV text...")
-            # Extract all text to temp file
             temp_text = f"data/.temp_csv_{text_column}.txt"
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                with open(temp_text, 'w', encoding='utf-8') as out:
-                    for row in reader:
+            # Build row offset index first
+            row_offsets = []
+            fieldnames = None
+            with open(csv_path, 'rb') as f:
+                header_line = f.readline()
+                if not header_line:
+                    raise ValueError("CSV file is empty")
+                fieldnames = header_line.decode('utf-8').strip().split(',')
+                offset = f.tell()
+                while True:
+                    line_start = offset
+                    line_bytes = f.readline()
+                    if not line_bytes:
+                        break
+                    try:
+                        decoded = line_bytes.decode('utf-8').strip()
+                        if decoded:
+                            row_offsets.append(line_start)
+                    except UnicodeDecodeError:
+                        pass
+                    offset += len(line_bytes)
+            
+            # Stream through rows to extract text
+            with open(temp_text, 'w', encoding='utf-8') as out:
+                with open(csv_path, 'rb') as f:
+                    for row_start in row_offsets:
+                        f.seek(row_start)
+                        line_bytes = f.readline()
+                        line = line_bytes.decode('utf-8').strip()
+                        import io
+                        reader = csv.DictReader(io.StringIO(line), fieldnames=fieldnames)
+                        row = next(reader)
                         text = row.get(text_column, '').strip()
                         if text:
                             out.write(text + '\n')
+            
             os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
             tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
             BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
             tokenizer = BPETokenizer(tokenizer_model)
             os.remove(temp_text)  # Clean up
         
+        # Build row offset index (same approach as train_audio_enc.py)
+        row_offsets = []
+        fieldnames = None
+        with open(csv_path, 'rb') as f:
+            header_line = f.readline()
+            if not header_line:
+                raise ValueError("CSV file is empty")
+            fieldnames = header_line.decode('utf-8').strip().split(',')
+            offset = f.tell()
+            while True:
+                line_start = offset
+                line_bytes = f.readline()
+                if not line_bytes:
+                    break
+                try:
+                    decoded = line_bytes.decode('utf-8').strip()
+                    if decoded:
+                        row_offsets.append(line_start)
+                except UnicodeDecodeError:
+                    pass
+                offset += len(line_bytes)  # Manually track offset
+        
         total_tokens = 0
         sample_count = 0
         
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
+        # Process rows one at a time using offsets (memory efficient)
+        with open(csv_path, 'rb') as f:
+            for row_start in row_offsets:
+                f.seek(row_start)
+                line_bytes = f.readline()
+                line = line_bytes.decode('utf-8').strip()
+                # Parse CSV row properly (handles quoted fields)
+                import io
+                reader = csv.DictReader(io.StringIO(line), fieldnames=fieldnames)
+                row = next(reader)
                 text = row.get(text_column, '').strip()
                 if text:
                     tokens = tokenizer.encode(text)
@@ -146,15 +233,149 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
         raise
 
 def count_audio_tokens(csv_path: str, tokenizer_path: Optional[str] = None) -> int:
-    """Count tokens from audio transcriptions (text column in CSV)"""
+    """
+    Count tokens from audio transcriptions (text column in CSV).
+    
+    Note: This counts tokens from the transcription text in the CSV file,
+    NOT from the actual audio waveforms. For audio training, training steps
+    are calculated based on transcription tokens (used in CTC loss).
+    
+    The actual audio files are processed as mel spectrograms by the audio encoder,
+    but training step calculation uses transcription tokens.
+    """
     return count_csv_tokens(csv_path, 'text', tokenizer_path)
 
 def count_ocr_tokens(csv_path: str, tokenizer_path: Optional[str] = None) -> int:
     """Count tokens from OCR text (text column in CSV)"""
     return count_csv_tokens(csv_path, 'text', tokenizer_path)
 
+def _build_json_offset_index(manifest_path: str) -> Tuple[list, list, bool]:
+    """Build an index of JSON object offsets without loading entire file into memory.
+    Returns (item_offsets, item_lengths, is_dict_format) where is_dict_format indicates
+    if the JSON is a dict with 'images' key rather than a direct array."""
+    item_offsets = []
+    item_lengths = []
+    is_dict_format = False
+    
+    try:
+        with open(manifest_path, 'rb') as f:
+            content = f.read()
+            
+            # Find array start
+            start_pos = content.find(b'[')
+            if start_pos == -1:
+                # Try dict format with 'images' key
+                dict_start = content.find(b'{')
+                if dict_start == -1:
+                    raise ValueError("JSON manifest must be an array or dict")
+                # For dict format, find 'images' array
+                images_key_pos = content.find(b'"images"')
+                if images_key_pos == -1:
+                    raise ValueError("JSON dict must have 'images' key")
+                # Find array after 'images' key
+                start_pos = content.find(b'[', images_key_pos)
+                if start_pos == -1:
+                    raise ValueError("Could not find images array")
+                is_dict_format = True
+            
+            # Parse JSON to find object boundaries
+            pos = start_pos + 1
+            depth = 0
+            obj_start = None
+            in_string = False
+            escape_next = False
+            
+            while pos < len(content):
+                byte = content[pos:pos+1]
+                if escape_next:
+                    escape_next = False
+                elif byte == b'\\':
+                    escape_next = True
+                elif byte == b'"' and not escape_next:
+                    in_string = not in_string
+                elif not in_string:
+                    if byte == b'{':
+                        if depth == 0:
+                            obj_start = pos
+                        depth += 1
+                    elif byte == b'}':
+                        depth -= 1
+                        if depth == 0 and obj_start is not None:
+                            # Found complete object
+                            item_offsets.append(obj_start)
+                            item_lengths.append(pos - obj_start + 1)
+                            obj_start = None
+                    elif byte == b']' and depth == 0:
+                        # End of array
+                        break
+                pos += 1
+    except Exception as e:
+        # If parsing fails, return empty index (will use fallback)
+        return [], [], False
+    
+    return item_offsets, item_lengths, is_dict_format
+
+def _stream_json_items(manifest_path: str):
+    """Stream JSON items from a file without loading entire file into memory.
+    Uses offset index to read items one at a time."""
+    item_offsets, item_lengths, is_dict_format = _build_json_offset_index(manifest_path)
+    
+    if not item_offsets:
+        # Fallback: load entire JSON (for malformed JSON or small files)
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            items = data if isinstance(data, list) else data.get('images', [])
+            for item in items:
+                yield item
+        return
+    
+    # Stream through items using offsets
+    with open(manifest_path, 'rb') as f:
+        for offset, length in zip(item_offsets, item_lengths):
+            f.seek(offset)
+            obj_bytes = f.read(length)
+            try:
+                obj = json.loads(obj_bytes.decode('utf-8'))
+                yield obj
+            except json.JSONDecodeError:
+                # Try reading a bit more if parsing fails (handles trailing commas)
+                chunk = obj_bytes
+                while True:
+                    next_byte = f.read(1)
+                    if not next_byte or next_byte in [b'{', b']']:
+                        break
+                    chunk += next_byte
+                # Try to find and parse the JSON object in the chunk
+                chunk_str = chunk.decode('utf-8')
+                start = chunk_str.find('{')
+                if start != -1:
+                    depth = 0
+                    end = start
+                    for j, char in enumerate(chunk_str[start:], start):
+                        if char == '{':
+                            depth += 1
+                        elif char == '}':
+                            depth -= 1
+                            if depth == 0:
+                                end = j + 1
+                                break
+                    try:
+                        obj = json.loads(chunk_str[start:end])
+                        yield obj
+                    except json.JSONDecodeError:
+                        pass  # Skip malformed objects
+
 def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None) -> int:
-    """Count tokens from image captions"""
+    """
+    Count tokens from image captions (text descriptions).
+    
+    Note: This counts tokens from the caption text in the JSON manifest,
+    NOT from the actual image pixels. For vision training, training steps
+    are calculated based on caption tokens (used in contrastive learning).
+    
+    The actual image files are processed as embeddings by the vision encoder,
+    but training step calculation uses caption tokens.
+    """
     if not os.path.exists(manifest_path):
         return 0
     
@@ -171,22 +392,14 @@ def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None)
                 break
         
         if not tokenizer:
-            # Create tokenizer from image captions
+            # Create tokenizer from image captions (stream through file)
             print(f"  Creating tokenizer from image captions...")
             temp_text = "data/.temp_image_captions.txt"
-            with open(manifest_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                with open(temp_text, 'w', encoding='utf-8') as out:
-                    if isinstance(data, list):
-                        for item in data:
-                            caption = item.get('caption', '').strip()
-                            if caption:
-                                out.write(caption + '\n')
-                    elif isinstance(data, dict) and 'images' in data:
-                        for item in data['images']:
-                            caption = item.get('caption', '').strip()
-                            if caption:
-                                out.write(caption + '\n')
+            with open(temp_text, 'w', encoding='utf-8') as out:
+                for item in _stream_json_items(manifest_path):
+                    caption = item.get('caption', '').strip()
+                    if caption:
+                        out.write(caption + '\n')
             os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
             tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
             BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
@@ -196,18 +409,16 @@ def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None)
         total_tokens = 0
         sample_count = 0
         
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            items = data if isinstance(data, list) else data.get('images', [])
-            for item in items:
-                caption = item.get('caption', '').strip()
-                if caption:
-                    tokens = tokenizer.encode(caption)
-                    total_tokens += len(tokens)
-                    sample_count += 1
-                    
-                    if sample_count % 10000 == 0:
-                        print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
+        # Stream through JSON items without loading entire file
+        for item in _stream_json_items(manifest_path):
+            caption = item.get('caption', '').strip()
+            if caption:
+                tokens = tokenizer.encode(caption)
+                total_tokens += len(tokens)
+                sample_count += 1
+                
+                if sample_count % 10000 == 0:
+                    print(f"  Counting tokens: {sample_count:,} samples, {total_tokens:,} tokens so far...")
         
         return total_tokens
     except Exception as e:
@@ -215,10 +426,15 @@ def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None)
         raise
 
 def count_image_samples(manifest_path: str) -> int:
-    """Count entries in image JSON manifest"""
+    """Count entries in image JSON manifest using streaming parsing"""
     if not os.path.exists(manifest_path):
         return 0
     try:
+        # Use offset index to count without loading entire file
+        item_offsets, _, _ = _build_json_offset_index(manifest_path)
+        if item_offsets:
+            return len(item_offsets)
+        # Fallback: load entire JSON if offset indexing failed
         with open(manifest_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             if isinstance(data, list):
@@ -250,6 +466,114 @@ def get_recommended_epochs(num_samples: int) -> Tuple[int, int, int]:
         if num_samples >= threshold:
             return min_epochs, max_epochs, recommended
     return 10, 20, 15  # Default for very small datasets
+
+def estimate_training_memory(model_params: int, ctx_len: int, batch_size: int) -> float:
+    """
+    Estimate training memory requirements in GB (float32).
+    
+    Formula based on research:
+    - Model parameters: params × 4 bytes (float32)
+    - Optimizer (AdamW): params × 8 bytes (momentum + variance)
+    - Gradients: params × 4 bytes
+    - Activations: ~batch_size × ctx_len × d_model × layers (approximate)
+    
+    Args:
+        model_params: Number of model parameters
+        ctx_len: Context length (sequence length)
+        batch_size: Batch size
+    
+    Returns:
+        Estimated memory in GB
+    """
+    # Base memory: model + optimizer + gradients
+    # Research shows: ~6x model size for full training (model + optimizer + gradients)
+    base_memory_gb = (model_params * 6 * 4) / (1024 ** 3)  # 6x for AdamW optimizer
+    
+    # Activation memory (approximate, depends on architecture)
+    # Rough estimate: batch_size × ctx_len × hidden_dim × layers × 4 bytes
+    # For simplicity, use a multiplier based on context length
+    activation_multiplier = 1.0 + (ctx_len / 512) * 0.5  # Scale with context length
+    activation_memory_gb = base_memory_gb * activation_multiplier * 0.3  # ~30% for activations
+    
+    total_memory_gb = base_memory_gb + activation_memory_gb
+    return total_memory_gb
+
+def get_optimal_batch_size_and_grad_accum(
+    model_params: int, 
+    base_batch_size: int = 8, 
+    base_grad_accum: int = 1,
+    ctx_len: int = 512
+) -> Tuple[int, int]:
+    """
+    Calculate optimal batch size and gradient accumulation based on model size.
+    
+    Based on research formulas:
+    - Effective Batch Size (EBS) = Micro Batch Size (MBS) × Gradient Accumulation (GA) × Data Parallel (DP)
+    - Larger models require smaller micro-batch sizes to fit in memory
+    - Gradient accumulation maintains effective batch size while reducing memory
+    
+    Strategy:
+    - Estimate memory requirements
+    - Adjust micro-batch size based on model size
+    - Increase gradient accumulation to maintain effective batch size
+    
+    Args:
+        model_params: Number of model parameters
+        base_batch_size: Base micro-batch size for small models
+        base_grad_accum: Base gradient accumulation steps
+        ctx_len: Context length (affects memory)
+    
+    Returns:
+        (micro_batch_size, gradient_accumulation_steps)
+    """
+    # Estimate memory requirements
+    estimated_memory_gb = estimate_training_memory(model_params, ctx_len, base_batch_size)
+    
+    # Model size categories (in parameters)
+    # Based on research: adjust batch size to fit in typical GPU memory (8-24GB)
+    # Very large (>100M): smaller batch, more accumulation
+    # Large (50M-100M): medium batch, some accumulation
+    # Medium (10M-50M): normal batch, minimal accumulation
+    # Small (<10M): larger batch, no accumulation needed
+    
+    if model_params >= 100_000_000:  # >100M params
+        # Very large models: reduce batch size significantly
+        batch_size = max(1, base_batch_size // 4)
+        grad_accum = base_grad_accum * 4
+    elif model_params >= 50_000_000:  # 50M-100M params
+        # Large models: reduce batch size moderately
+        batch_size = max(2, base_batch_size // 2)
+        grad_accum = base_grad_accum * 2
+    elif model_params >= 10_000_000:  # 10M-50M params
+        # Medium models: use base batch size
+        batch_size = max(4, base_batch_size)
+        grad_accum = base_grad_accum
+    else:  # <10M params
+        # Small models: can use larger batch sizes
+        batch_size = base_batch_size
+        grad_accum = base_grad_accum
+    
+    # Ensure effective batch size is maintained
+    effective_batch = batch_size * grad_accum
+    base_effective_batch = base_batch_size * base_grad_accum
+    
+    # If effective batch size dropped too much, increase gradient accumulation
+    if effective_batch < base_effective_batch * 0.75:
+        grad_accum = int(base_effective_batch / batch_size)
+        grad_accum = max(grad_accum, base_grad_accum)
+    
+    return batch_size, grad_accum
+
+def format_model_size(num_params: int) -> str:
+    """Format model parameter count in readable format"""
+    if num_params >= 1_000_000_000:
+        return f"{num_params / 1_000_000_000:.2f}B"
+    elif num_params >= 1_000_000:
+        return f"{num_params / 1_000_000:.2f}M"
+    elif num_params >= 1_000:
+        return f"{num_params / 1_000:.2f}K"
+    else:
+        return str(num_params)
 
 def calculate_training_params(
     num_samples: int,
@@ -396,7 +720,6 @@ def update_data_paths(config: Dict, config_path: str = "") -> Dict:
 def update_config_file(
     config_path: str,
     params: Dict,
-    dataset_type: str = "general",
     preserve_keys: Optional[list] = None,
     update_paths: bool = True
 ):
@@ -427,6 +750,12 @@ def update_config_file(
     config["val_freq"] = params["val_freq"]
     config["checkpoint_freq"] = params["checkpoint_freq"]
     
+    # Update batch size and gradient accumulation if calculated from model size
+    if "batch_size" in params:
+        config["batch_size"] = params["batch_size"]
+    if "gradient_accumulation_steps" in params:
+        config["gradient_accumulation_steps"] = params["gradient_accumulation_steps"]
+    
     # Restore preserved keys (but keep updated paths)
     for key in preserved:
         if key in config and isinstance(config[key], dict) and isinstance(preserved[key], dict):
@@ -442,7 +771,7 @@ def update_config_file(
     print(f"✓ Updated {config_path}")
     return True
 
-def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "configs", dry_run: bool = False):
+def analyze_and_update_all_configs(dry_run: bool = False):
     """Analyze all datasets and update all config files"""
     print("="*60)
     print("Analyzing Datasets and Updating Configs")
@@ -492,6 +821,8 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
                 image_manifest = imf
     
     # Count tokens from captions (required)
+    # Note: We count tokens from caption text, not from image pixels.
+    # Training steps are based on caption tokens (used in contrastive learning).
     if image_manifest:
         print(f"  Counting tokens from captions (this may take a while for large files)...")
         image_tokens = count_image_tokens(image_manifest)
@@ -499,6 +830,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         print(f"  Image samples: {image_samples:,} (from {image_manifest})")
         print(f"  Caption tokens: {image_tokens:,} (~{image_tokens/1_000_000:.1f}M tokens)")
         print(f"  Average tokens per caption: {avg_tokens_per_sample:.1f}")
+        print(f"  Note: Tokens counted from caption text, not image pixels")
     else:
         print(f"  ⚠ No image data found")
     
@@ -519,6 +851,8 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
                 audio_csv = af
     
     # Count tokens from transcriptions (required)
+    # Note: We count tokens from transcription text, not from audio waveforms.
+    # Training steps are based on transcription tokens (used in CTC loss).
     if audio_csv:
         print(f"  Counting tokens from transcriptions (this may take a while for large files)...")
         audio_tokens = count_audio_tokens(audio_csv)
@@ -526,6 +860,7 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         print(f"  Audio samples: {audio_samples:,} (from {audio_csv})")
         print(f"  Transcription tokens: {audio_tokens:,} (~{audio_tokens/1_000_000:.1f}M tokens)")
         print(f"  Average tokens per transcription: {avg_tokens_per_sample:.1f}")
+        print(f"  Note: Tokens counted from transcription text, not audio waveforms")
     else:
         print(f"  ⚠ No audio data found")
     
@@ -536,37 +871,89 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     
     # Helper function to calculate params from tokens
     def calculate_params_from_tokens(num_tokens: int, batch_size: int, ctx_len: int, gradient_accumulation: int = 1, val_split: float = 0.1):
-        """Calculate training parameters from token count"""
+        """
+        Calculate training parameters from token count.
+        
+        Based on research formulas:
+        - Effective Batch Size (EBS) = Micro Batch Size (MBS) × Gradient Accumulation (GA)
+        - Tokens per step = EBS × Context Length
+        - Steps per epoch = Training Tokens / Tokens per step
+        - Total steps = Steps per epoch × Number of epochs
+        
+        Warmup steps: Research shows 1-10% of total steps, typically 3-5%
+        - Too little warmup: unstable training
+        - Too much warmup: slower convergence
+        
+        Args:
+            num_tokens: Total number of training tokens
+            batch_size: Micro batch size (per device)
+            ctx_len: Context length (sequence length)
+            gradient_accumulation: Gradient accumulation steps
+            val_split: Validation split ratio (default 0.1 = 10%)
+        
+        Returns:
+            Dictionary with calculated training parameters
+        """
+        # Effective batch size formula: EBS = MBS × GA × DP
+        # (DP = Data Parallel replicas, assumed 1 for single GPU)
         effective_batch = batch_size * gradient_accumulation
+        
+        # Training tokens (excluding validation)
         train_tokens = int(num_tokens * (1 - val_split))
+        
+        # Tokens processed per training step
+        # Formula: tokens_per_step = effective_batch_size × context_length
         tokens_per_step = effective_batch * ctx_len
+        
+        # Steps per epoch
+        # Formula: steps_per_epoch = training_tokens / tokens_per_step
         steps_per_epoch = max(1, train_tokens // tokens_per_step)
         
         # Epoch recommendations based on token count
-        if num_tokens >= 100_000_000:
+        # Research: larger datasets need fewer epochs, smaller datasets need more
+        # Based on neural scaling laws and empirical observations
+        if num_tokens >= 100_000_000:  # >100M tokens
             min_epochs, max_epochs, recommended_epochs = 1, 3, 2
-        elif num_tokens >= 50_000_000:
+        elif num_tokens >= 50_000_000:  # 50M-100M tokens
             min_epochs, max_epochs, recommended_epochs = 2, 4, 3
-        elif num_tokens >= 10_000_000:
+        elif num_tokens >= 10_000_000:  # 10M-50M tokens
             min_epochs, max_epochs, recommended_epochs = 3, 6, 4
-        else:
+        else:  # <10M tokens
             min_epochs, max_epochs, recommended_epochs = 5, 10, 7
         
+        # Total training steps
+        # Formula: max_steps = steps_per_epoch × recommended_epochs
         max_steps = steps_per_epoch * recommended_epochs
-        warmup_steps = max(100, min(int(max_steps * 0.1), int(max_steps * 0.05)))
-        warmup_steps = min(warmup_steps, 10000)
+        
+        # Warmup steps calculation
+        # Research: typically 3-5% of total steps, range 1-10%
+        # Minimum 100 steps, maximum 10K steps (to avoid excessive warmup)
+        warmup_percentage = 0.04  # 4% (middle of 3-5% range)
+        warmup_steps = max(100, int(max_steps * warmup_percentage))
+        warmup_steps = min(warmup_steps, 10000)  # Cap at 10K
+        
+        # Validation frequency
+        # Validate every 10% of steps per epoch, but at least every 100 steps
+        # and at most every 1000 steps
         val_freq = max(100, min(1000, steps_per_epoch // 10))
+        
+        # Checkpoint frequency
+        # Checkpoint every epoch, but at least every 1000 steps
+        # and at most every 10000 steps
         checkpoint_freq = max(1000, min(10000, steps_per_epoch))
         
         return {
             "num_tokens": num_tokens,
             "train_tokens": train_tokens,
+            "effective_batch_size": effective_batch,
+            "tokens_per_step": tokens_per_step,
             "steps_per_epoch": steps_per_epoch,
             "min_epochs": min_epochs,
             "max_epochs": max_epochs,
             "recommended_epochs": recommended_epochs,
             "max_steps": max_steps,
             "warmup_steps": warmup_steps,
+            "warmup_percentage": warmup_steps / max_steps if max_steps > 0 else 0,
             "val_freq": val_freq,
             "checkpoint_freq": checkpoint_freq,
         }
@@ -574,22 +961,47 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     # Stage A: Text-only (thinker_tiny.json)
     print("\n[Stage A] Text-only Training (thinker_tiny.json)")
     if text_tokens > 0:
-        # Load config to get ctx_len if available
+        # Load config to get ctx_len and model config
         config_path = "configs/thinker_tiny.json"
         ctx_len = 512  # Default
+        model_params = 0
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
                 ctx_len = cfg.get("ctx_len", 512)
+                # Calculate model size
+                model_params = calculate_thinker_params(
+                    vocab_size=cfg.get("vocab_size", 32000),
+                    n_layers=cfg.get("n_layers", 4),
+                    d_model=cfg.get("d_model", 256),
+                    n_heads=cfg.get("n_heads", 4),
+                    d_ff=cfg.get("d_ff", 1024),
+                    use_gqa=cfg.get("use_gqa", False),
+                    kv_groups=cfg.get("kv_groups", 2),
+                    use_swiglu=cfg.get("use_swiglu", True)
+                )
         
-        text_params = calculate_params_from_tokens(text_tokens, batch_size=8, ctx_len=ctx_len, gradient_accumulation=1)
+        # Adjust batch size and gradient accumulation based on model size
+        # Formula: Effective Batch Size = Micro Batch Size × Gradient Accumulation
+        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+            model_params, base_batch_size=8, base_grad_accum=1, ctx_len=ctx_len
+        )
+        text_params = calculate_params_from_tokens(text_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
         text_params["num_samples"] = text_samples  # Keep for reference
+        text_params["model_params"] = model_params  # Keep for reference
+        text_params["batch_size"] = batch_size  # Store for config update
+        text_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
         
+        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+        effective_batch = text_params.get('effective_batch_size', batch_size * grad_accum)
+        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
         print(f"  Tokens: {text_params['num_tokens']:,} (~{text_params['num_tokens']/1_000_000:.1f}M tokens)")
+        print(f"  Tokens/step: {text_params.get('tokens_per_step', effective_batch * ctx_len):,}")
         print(f"  Steps/epoch: {text_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {text_params['recommended_epochs']}")
         print(f"  Max steps: {text_params['max_steps']:,}")
-        print(f"  Warmup steps: {text_params['warmup_steps']:,}")
+        warmup_pct = text_params.get('warmup_percentage', 0) * 100
+        print(f"  Warmup steps: {text_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
         
         if not dry_run:
             update_config_file(
@@ -607,19 +1019,40 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         # Use ctx_len from config or default
         config_path = "configs/audio_enc_tiny.json"
         ctx_len = 256  # Default for audio (shorter sequences)
+        model_params = 0
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
                 ctx_len = cfg.get("ctx_len", 256)
+                # Calculate model size
+                model_params = calculate_audio_encoder_params(
+                    d_model=cfg.get("d_model", 128),
+                    n_layers=cfg.get("n_layers", 4),
+                    n_heads=cfg.get("n_heads", 2),
+                    d_ff=cfg.get("d_ff", 512),
+                    downsample_factor=cfg.get("downsample_time", 8)
+                )
         
-        audio_params = calculate_params_from_tokens(audio_tokens, batch_size=4, ctx_len=ctx_len, gradient_accumulation=1)
+        # Adjust batch size and gradient accumulation based on model size
+        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+            model_params, base_batch_size=4, base_grad_accum=1, ctx_len=ctx_len
+        )
+        audio_params = calculate_params_from_tokens(audio_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
         audio_params["num_samples"] = audio_samples  # Keep for reference
+        audio_params["model_params"] = model_params  # Keep for reference
+        audio_params["batch_size"] = batch_size  # Store for config update
+        audio_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
         
+        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+        effective_batch = audio_params.get('effective_batch_size', batch_size * grad_accum)
+        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
         print(f"  Tokens: {audio_params['num_tokens']:,} (~{audio_params['num_tokens']/1_000_000:.1f}M tokens)")
+        print(f"  Tokens/step: {audio_params.get('tokens_per_step', effective_batch * ctx_len):,}")
         print(f"  Steps/epoch: {audio_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {audio_params['recommended_epochs']}")
         print(f"  Max steps: {audio_params['max_steps']:,}")
-        print(f"  Warmup steps: {audio_params['warmup_steps']:,}")
+        warmup_pct = audio_params.get('warmup_percentage', 0) * 100
+        print(f"  Warmup steps: {audio_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
         
         if not dry_run:
             update_config_file(
@@ -636,19 +1069,41 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
         # Vision encoder processes caption tokens
         config_path = "configs/vision_tiny.json"
         ctx_len = 128  # Default for captions (shorter sequences)
+        model_params = 0
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
                 ctx_len = cfg.get("ctx_len", 128)
+                # Calculate model size
+                model_params = calculate_vision_encoder_params(
+                    img_size=cfg.get("img_size", 224),
+                    patch=cfg.get("patch", 16),
+                    d_model=cfg.get("d_model", 128),
+                    n_layers=cfg.get("n_layers", 4),
+                    n_heads=cfg.get("n_heads", 2),
+                    d_ff=cfg.get("d_ff", 512)
+                )
         
-        vision_params = calculate_params_from_tokens(image_tokens, batch_size=8, ctx_len=ctx_len, gradient_accumulation=1)
+        # Adjust batch size and gradient accumulation based on model size
+        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+            model_params, base_batch_size=8, base_grad_accum=1, ctx_len=ctx_len
+        )
+        vision_params = calculate_params_from_tokens(image_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
         vision_params["num_samples"] = image_samples  # Keep for reference
+        vision_params["model_params"] = model_params  # Keep for reference
+        vision_params["batch_size"] = batch_size  # Store for config update
+        vision_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
         
+        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+        effective_batch = vision_params.get('effective_batch_size', batch_size * grad_accum)
+        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
         print(f"  Tokens: {vision_params['num_tokens']:,} (~{vision_params['num_tokens']/1_000_000:.1f}M tokens)")
+        print(f"  Tokens/step: {vision_params.get('tokens_per_step', effective_batch * ctx_len):,}")
         print(f"  Steps/epoch: {vision_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {vision_params['recommended_epochs']}")
         print(f"  Max steps: {vision_params['max_steps']:,}")
-        print(f"  Warmup steps: {vision_params['warmup_steps']:,}")
+        warmup_pct = vision_params.get('warmup_percentage', 0) * 100
+        print(f"  Warmup steps: {vision_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
         
         if not dry_run:
             update_config_file(
@@ -684,19 +1139,44 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     if tts_tokens > 0:
         config_path = "configs/talker_tiny.json"
         ctx_len = 256  # Default for TTS
+        model_params = 0
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
                 ctx_len = cfg.get("ctx_len", 256)
+                # Calculate model size (Talker only, RVQ is separate)
+                model_params = calculate_talker_params(
+                    d_model=cfg.get("d_model", 256),
+                    n_layers=cfg.get("n_layers", 4),
+                    n_heads=cfg.get("n_heads", 4),
+                    d_ff=cfg.get("d_ff", 1024),
+                    codebooks=cfg.get("codebooks", 2),
+                    codebook_size=cfg.get("codebook_size", 128),
+                    use_gqa=cfg.get("use_gqa", False),
+                    kv_groups=cfg.get("kv_groups", 1),
+                    use_swiglu=cfg.get("use_swiglu", True)
+                )
         
-        talker_params = calculate_params_from_tokens(tts_tokens, batch_size=4, ctx_len=ctx_len, gradient_accumulation=1)
+        # Adjust batch size and gradient accumulation based on model size
+        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+            model_params, base_batch_size=4, base_grad_accum=1, ctx_len=ctx_len
+        )
+        talker_params = calculate_params_from_tokens(tts_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
         talker_params["num_samples"] = tts_samples  # Keep for reference
+        talker_params["model_params"] = model_params  # Keep for reference
+        talker_params["batch_size"] = batch_size  # Store for config update
+        talker_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
         
+        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+        effective_batch = talker_params.get('effective_batch_size', batch_size * grad_accum)
+        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
         print(f"  Tokens: {talker_params['num_tokens']:,} (~{talker_params['num_tokens']/1_000_000:.1f}M tokens)")
+        print(f"  Tokens/step: {talker_params.get('tokens_per_step', effective_batch * ctx_len):,}")
         print(f"  Steps/epoch: {talker_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {talker_params['recommended_epochs']}")
         print(f"  Max steps: {talker_params['max_steps']:,}")
-        print(f"  Warmup steps: {talker_params['warmup_steps']:,}")
+        warmup_pct = talker_params.get('warmup_percentage', 0) * 100
+        print(f"  Warmup steps: {talker_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
         
         if not dry_run:
             update_config_file(
@@ -714,19 +1194,52 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     if multimodal_tokens > 0:
         config_path = "configs/omni_sft_tiny.json"
         ctx_len = 512  # Default for multimodal
+        model_params = 0
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
                 ctx_len = cfg.get("ctx_len", 512)
+                # Calculate total model size (Thinker + projectors)
+                # Load Thinker config to calculate its size
+                thinker_cfg_path = "configs/thinker_tiny.json"
+                if os.path.exists(thinker_cfg_path):
+                    with open(thinker_cfg_path, 'r') as tf:
+                        thinker_cfg = json.load(tf)
+                        thinker_params = calculate_thinker_params(
+                            vocab_size=thinker_cfg.get("vocab_size", 32000),
+                            n_layers=thinker_cfg.get("n_layers", 4),
+                            d_model=thinker_cfg.get("d_model", 256),
+                            n_heads=thinker_cfg.get("n_heads", 4),
+                            d_ff=thinker_cfg.get("d_ff", 1024),
+                            use_gqa=thinker_cfg.get("use_gqa", False),
+                            kv_groups=thinker_cfg.get("kv_groups", 2),
+                            use_swiglu=thinker_cfg.get("use_swiglu", True)
+                        )
+                        # Add projectors (vision: 128->256, audio: 192->256)
+                        projector_params = (128 * 256 + 256) + (192 * 256 + 256)
+                        model_params = thinker_params + projector_params
         
-        sft_params = calculate_params_from_tokens(multimodal_tokens, batch_size=2, ctx_len=ctx_len, gradient_accumulation=4)
+        # Multimodal training uses smaller batch size and more gradient accumulation
+        # Adjust based on model size (SFT is typically larger due to full model)
+        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+            model_params, base_batch_size=2, base_grad_accum=4, ctx_len=ctx_len
+        )
+        sft_params = calculate_params_from_tokens(multimodal_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
         sft_params["num_samples"] = max(text_samples, image_samples, audio_samples)  # Keep for reference
+        sft_params["model_params"] = model_params  # Keep for reference
+        sft_params["batch_size"] = batch_size  # Store for config update
+        sft_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
         
+        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+        effective_batch = sft_params.get('effective_batch_size', batch_size * grad_accum)
+        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
         print(f"  Tokens (max across modalities): {sft_params['num_tokens']:,} (~{sft_params['num_tokens']/1_000_000:.1f}M tokens)")
+        print(f"  Tokens/step: {sft_params.get('tokens_per_step', effective_batch * ctx_len):,}")
         print(f"  Steps/epoch: {sft_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {sft_params['recommended_epochs']}")
         print(f"  Max steps: {sft_params['max_steps']:,}")
-        print(f"  Warmup steps: {sft_params['warmup_steps']:,}")
+        warmup_pct = sft_params.get('warmup_percentage', 0) * 100
+        print(f"  Warmup steps: {sft_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
         
         if not dry_run:
             update_config_file(
@@ -761,19 +1274,46 @@ def analyze_and_update_all_configs(data_dir: str = "data", configs_dir: str = "c
     if ocr_tokens > 0:
         config_path = "configs/ocr_tiny.json"
         ctx_len = 128  # Default for OCR (short text sequences)
+        model_params = 0
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
                 ctx_len = cfg.get("ctx_len", 128)
+                # Calculate model size
+                model_params = calculate_ocr_params(
+                    img_size=cfg.get("img_size", 224),
+                    patch=cfg.get("patch", 16),
+                    vision_d_model=cfg.get("vision_d_model", 128),
+                    vision_layers=cfg.get("vision_layers", 4),
+                    vision_heads=cfg.get("vision_heads", 2),
+                    vision_d_ff=cfg.get("vision_d_ff", 512),
+                    decoder_d_model=cfg.get("decoder_d_model", 256),
+                    decoder_layers=cfg.get("decoder_layers", 4),
+                    decoder_heads=cfg.get("decoder_heads", 4),
+                    decoder_d_ff=cfg.get("decoder_d_ff", 1024),
+                    vocab_size=cfg.get("vocab_size", 128)
+                )
         
-        ocr_params = calculate_params_from_tokens(ocr_tokens, batch_size=4, ctx_len=ctx_len, gradient_accumulation=2)
+        # Adjust batch size and gradient accumulation based on model size
+        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+            model_params, base_batch_size=4, base_grad_accum=2, ctx_len=ctx_len
+        )
+        ocr_params = calculate_params_from_tokens(ocr_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
         ocr_params["num_samples"] = ocr_samples  # Keep for reference
+        ocr_params["model_params"] = model_params  # Keep for reference
+        ocr_params["batch_size"] = batch_size  # Store for config update
+        ocr_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
         
+        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+        effective_batch = ocr_params.get('effective_batch_size', batch_size * grad_accum)
+        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
         print(f"  Tokens: {ocr_params['num_tokens']:,} (~{ocr_params['num_tokens']/1_000_000:.1f}M tokens)")
+        print(f"  Tokens/step: {ocr_params.get('tokens_per_step', effective_batch * ctx_len):,}")
         print(f"  Steps/epoch: {ocr_params['steps_per_epoch']:,}")
         print(f"  Recommended epochs: {ocr_params['recommended_epochs']}")
         print(f"  Max steps: {ocr_params['max_steps']:,}")
-        print(f"  Warmup steps: {ocr_params['warmup_steps']:,}")
+        warmup_pct = ocr_params.get('warmup_percentage', 0) * 100
+        print(f"  Warmup steps: {ocr_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
         
         if not dry_run:
             update_config_file(
@@ -809,18 +1349,6 @@ def main():
         description="Update training configs based on actual dataset sizes"
     )
     parser.add_argument(
-        "--data-dir",
-        type=str,
-        default="data",
-        help="Directory containing datasets (default: data)"
-    )
-    parser.add_argument(
-        "--configs-dir",
-        type=str,
-        default="configs",
-        help="Directory containing config files (default: configs)"
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be changed without modifying files"
@@ -828,8 +1356,6 @@ def main():
     args = parser.parse_args()
     
     analyze_and_update_all_configs(
-        data_dir=args.data_dir,
-        configs_dir=args.configs_dir,
         dry_run=args.dry_run
     )
 

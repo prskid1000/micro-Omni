@@ -10,13 +10,11 @@ Supports:
 import os
 import json
 import argparse
-import subprocess
 import requests
 from pathlib import Path
 from tqdm import tqdm
 import tarfile
 import csv
-import shutil
 
 # State file to track progress
 STATE_FILE = "data/.audio_download_state.json"
@@ -69,34 +67,6 @@ def load_checkpoint(dataset_name):
         with open(checkpoint_file, 'r') as f:
             return json.load(f)
     return None
-
-def get_directory_size(path):
-    """Calculate total size of a directory recursively in bytes"""
-    if not os.path.exists(path):
-        return 0
-    total_size = 0
-    try:
-        for dirpath, dirnames, filenames in os.walk(path):
-            for filename in filenames:
-                filepath = os.path.join(dirpath, filename)
-                if os.path.exists(filepath):
-                    total_size += os.path.getsize(filepath)
-    except (OSError, PermissionError):
-        pass
-    return total_size
-
-def get_audio_dataset_size(ds_name):
-    """Get actual disk size of audio dataset folder"""
-    # Map dataset names to their actual data folders
-    folder_map = {
-        "librispeech": "data/audio/librispeech",
-        "ljspeech": "data/audio/ljspeech",
-    }
-    
-    folder_path = folder_map.get(ds_name)
-    if folder_path and os.path.exists(folder_path):
-        return get_directory_size(folder_path)
-    return 0
 
 def download_file(url, output_path, resume=True):
     """Download file with resume support"""

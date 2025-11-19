@@ -1,6 +1,6 @@
 
 import sentencepiece as spm
-import os, io, json
+import os
 
 class BPETokenizer:
     def __init__(self, model_path):

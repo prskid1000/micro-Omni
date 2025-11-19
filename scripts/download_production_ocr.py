@@ -15,7 +15,6 @@ This script focuses on publicly available OCR datasets.
 import os
 import json
 import argparse
-import subprocess
 import requests
 from pathlib import Path
 from tqdm import tqdm

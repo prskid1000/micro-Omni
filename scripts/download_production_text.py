@@ -10,14 +10,10 @@ Supports:
 import os
 import json
 import argparse
-import subprocess
-import sys
 import requests
 from pathlib import Path
 from tqdm import tqdm
 import bz2
-import gzip
-import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 

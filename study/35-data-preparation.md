@@ -713,17 +713,23 @@ python scripts/update_configs_from_data.py --dry-run
 
 **What this does:**
 - ✅ Counts tokens in your production/synthetic datasets (using BPE tokenizer)
-- ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps` based on token counts
+- ✅ Calculates model size from config files (using mathematical formulas)
+- ✅ Automatically adjusts `batch_size` and `gradient_accumulation_steps` based on model size
+- ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps` based on token counts and model size
+- ✅ Uses research-based formulas for training parameter calculation
 - ✅ Adjusts validation and checkpoint frequencies
 - ✅ Updates data paths to production files automatically
-- ✅ Applies best practices based on token count (more accurate than samples)
+- ✅ Applies best practices based on token count and model size (more accurate than samples)
 
 **Why it matters:**
 - Large datasets (>100M tokens) need fewer epochs (1-3)
 - Small datasets (<10M tokens) need more epochs (5-10)
 - The script automatically counts tokens using the BPE tokenizer
-- Proper warmup steps prevent training instability
+- Model size affects memory requirements - larger models need smaller batch sizes
+- Gradient accumulation maintains effective batch size while reducing memory usage
+- Proper warmup steps (4% of total) prevent training instability
 - Correct max_steps ensures complete training without waste
+- Research-based formulas ensure optimal training configuration
 
 **Example output:**
 ```
@@ -734,12 +740,22 @@ python scripts/update_configs_from_data.py --dry-run
   Average tokens per sample: 80.0
   
 [Stage A] Text-only Training (thinker_tiny.json)
+  Model size: 25,650,000 params (25.65M)
+  Batch size: 8 (gradient accumulation: 1, effective: 8)
   Tokens: 200,000,000 (~200.0M tokens)
+  Tokens/step: 4,096
   Steps/epoch: 48,828
   Recommended epochs: 2
   Max steps: 97,656
-  Warmup steps: 4,882
+  Warmup steps: 3,906 (4.0% of total)
 ```
+
+**Key features:**
+- Shows model size in parameters (calculated from config)
+- Displays effective batch size (batch_size × gradient_accumulation)
+- Shows tokens processed per step
+- Shows warmup percentage (typically 4% based on research)
+- Automatically adjusts batch size for larger models to fit in memory
 
 See [Chapter 34: Configuration Files](34-configuration-files.md) for more details.
 

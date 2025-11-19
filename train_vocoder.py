@@ -15,7 +15,6 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 import torchaudio
-import numpy as np
 from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator
 from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, cleanup_old_checkpoints
 from tqdm import tqdm
