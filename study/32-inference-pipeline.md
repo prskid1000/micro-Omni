@@ -77,7 +77,8 @@ audio = model.generate_speech("Hello world, how are you?")
 ✅ **Autoregressive** text generation  
 ✅ **KV caching** dramatically speeds up generation  
 ✅ **Multimodal** via embedding concatenation  
-✅ **Flexible** - text, speech, or both outputs
+✅ **Flexible** - text, speech, or both outputs  
+✅ **Smart checkpoint loading** - automatically uses step checkpoints if final checkpoints aren't available
 
 ---
 

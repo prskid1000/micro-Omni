@@ -16,8 +16,7 @@
 │   ├── talker.py             # Speech generator (2.24M params)
 │   ├── codec.py              # RVQ + Griffin-Lim vocoder
 │   ├── tokenizer.py          # BPE tokenizer wrapper
-│   ├── utils.py              # RMSNorm, RoPE, helpers
-│   └── training_utils.py     # Training helpers (checkpoint loading, resuming, validation)
+│   └── utils.py              # All utilities (RMSNorm, RoPE, training helpers, datasets, checkpoint loading)
 │
 ├── configs/                   # JSON configurations
 │   ├── thinker_tiny.json     # Thinker config
@@ -258,7 +257,12 @@ infer_chat.py
 ├── vision_encoder.py
 ├── talker.py
 ├── codec.py
-└── tokenizer.py
+├── tokenizer.py
+└── utils.py (find_checkpoint)
+
+train_*.py, sft_omni.py
+├── utils.py (training utilities, datasets, checkpoint management)
+└── (model modules)
 ```
 
 ---
@@ -282,13 +286,19 @@ See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for det
 
 ## 🔄 Common Training Utilities
 
-All training scripts share common utilities from `omni/training_utils.py`:
+All training scripts share common utilities from `omni/utils.py`:
 
 ### Checkpoint Management
 - **`load_checkpoint()`**: Automatically finds and loads the latest checkpoint
   - Handles model, optimizer, scheduler, and scaler state dicts
   - Returns step number and checkpoint path
   - Supports legacy checkpoint formats
+
+- **`find_checkpoint()`**: Smart checkpoint finder for inference/export
+  - First tries standard checkpoint (e.g., `thinker.pt`)
+  - If not found, automatically searches for latest step checkpoint (e.g., `thinker_step_*.pt`)
+  - Returns the checkpoint path and loaded data
+  - Used by `infer_chat.py` and `export.py` to handle interrupted training gracefully
 
 ### Resuming Training
 - **`setup_resume_data_loading()`**: Configures dataset `skip_samples` for resuming

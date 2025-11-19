@@ -4,7 +4,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.training_utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset
 from tqdm import tqdm
 
 def collate_fn(batch):

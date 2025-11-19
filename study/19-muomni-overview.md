@@ -312,8 +312,7 @@ Strategies:
 │   ├── talker.py             # Speech generator
 │   ├── codec.py              # RVQ + vocoder
 │   ├── tokenizer.py          # BPE tokenizer
-│   ├── utils.py              # RMSNorm, RoPE, etc.
-│   └── training_utils.py     # Training helpers
+│   └── utils.py              # All utilities (RMSNorm, RoPE, training helpers, datasets, checkpoint loading)
 │
 ├── configs/                   # JSON configs
 │   ├── thinker_tiny.json

@@ -11,7 +11,7 @@ from tqdm import tqdm
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.training_utils import (
+from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, MixDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,

@@ -65,6 +65,8 @@ python export.py \
 - `--configs_dir`: Directory containing config JSON files (default: `configs`)
 - `--skip_component_configs`: Skip copying individual component configs (minimal export, only main config.json)
 
+**Note:** The export script automatically uses step checkpoints if standard checkpoints are not found. For example, if `thinker.pt` doesn't exist, it will automatically find and use the latest `thinker_step_*.pt` checkpoint.
+
 ### What Gets Merged
 
 The script collects weights from all components and prefixes them:

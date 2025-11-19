@@ -12,6 +12,7 @@ from omni.codec import RVQ, GriffinLimVocoder, NeuralVocoder, HiFiGANVocoder
 from omni.talker import TalkerTiny
 from omni.tokenizer import BPETokenizer
 from omni.ocr_model import OCRModel
+from omni.utils import find_checkpoint
 
 def extract_video_frames(video_path, num_frames=4):
     """Extract evenly spaced frames from video"""
@@ -361,17 +362,33 @@ def main():
         num_experts=thinker_cfg.get("num_experts", 8),
         num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2)
     ).to(device)
-    tpath = os.path.join(args.ckpt_dir, "thinker.pt")
-    if not os.path.exists(tpath):
-        # Try thinker checkpoint directory
-        if "thinker_ckpt" in main_cfg:
-            tpath = os.path.join(main_cfg["thinker_ckpt"], "thinker.pt")
-        elif "thinker" in args.ckpt_dir:
-            tpath = os.path.join("checkpoints/thinker_tiny", "thinker.pt")
-    if os.path.exists(tpath):
-        think.load_state_dict(torch.load(tpath, map_location=device))
-        print("Loaded Thinker model")
-    else:
+    # Try to find thinker checkpoint
+    thinker_ckpt_dir = args.ckpt_dir
+    if "thinker_ckpt" in main_cfg:
+        thinker_ckpt_dir = main_cfg["thinker_ckpt"]
+    elif "thinker" not in args.ckpt_dir:
+        thinker_ckpt_dir = "checkpoints/thinker_tiny"
+    
+    tpath, thinker_ckpt = find_checkpoint(thinker_ckpt_dir, "thinker.pt", "thinker_step_", device)
+    thinker_loaded = False
+    if thinker_ckpt is not None:
+        # Handle different checkpoint formats
+        if isinstance(thinker_ckpt, dict):
+            if "model" in thinker_ckpt:
+                think.load_state_dict(thinker_ckpt["model"])
+                thinker_loaded = True
+            elif "thinker" in thinker_ckpt:
+                think.load_state_dict(thinker_ckpt["thinker"])
+                thinker_loaded = True
+            else:
+                think.load_state_dict(thinker_ckpt)
+                thinker_loaded = True
+        else:
+            think.load_state_dict(thinker_ckpt)
+            thinker_loaded = True
+        if thinker_loaded:
+            print("Loaded Thinker model")
+    if not thinker_loaded:
         print("Warning: Thinker checkpoint not found, using untrained model")
     think.eval()  # Set to evaluation mode
 
@@ -385,11 +402,19 @@ def main():
         vision_cfg.get("d_ff", 512),
         vision_cfg.get("dropout", 0.1)
     ).to(device)
-    apath = os.path.join(args.ckpt_dir, "vision.pt")
-    if not os.path.exists(apath) and "vision_ckpt" in main_cfg:
-        apath = os.path.join(main_cfg["vision_ckpt"], "vision.pt")
-    if os.path.exists(apath):
-        vis.load_state_dict(torch.load(apath, map_location=device)["vit"])
+    # Try to find vision checkpoint
+    vision_ckpt_dir = args.ckpt_dir
+    if "vision_ckpt" in main_cfg:
+        vision_ckpt_dir = main_cfg["vision_ckpt"]
+    
+    vpath, vision_ckpt = find_checkpoint(vision_ckpt_dir, "vision.pt", "vision_step_", device)
+    if vision_ckpt is not None:
+        if isinstance(vision_ckpt, dict) and "vit" in vision_ckpt:
+            vis.load_state_dict(vision_ckpt["vit"])
+        elif isinstance(vision_ckpt, dict) and "model" in vision_ckpt:
+            vis.load_state_dict(vision_ckpt["model"])
+        else:
+            vis.load_state_dict(vision_ckpt)
         print("Loaded Vision encoder")
     else:
         print("Warning: Vision checkpoint not found, using untrained model")
@@ -405,11 +430,19 @@ def main():
         audio_cfg.get("dropout", 0.1),
         downsample_factor=downsample_factor
     ).to(device)
-    apath = os.path.join(args.ckpt_dir, "audio_enc.pt")
-    if not os.path.exists(apath) and "audio_ckpt" in main_cfg:
-        apath = os.path.join(main_cfg["audio_ckpt"], "audio_enc.pt")
-    if os.path.exists(apath):
-        aud.load_state_dict(torch.load(apath, map_location=device)["enc"])
+    # Try to find audio encoder checkpoint
+    audio_ckpt_dir = args.ckpt_dir
+    if "audio_ckpt" in main_cfg:
+        audio_ckpt_dir = main_cfg["audio_ckpt"]
+    
+    apath, audio_ckpt = find_checkpoint(audio_ckpt_dir, "audio_enc.pt", "audio_enc_step_", device)
+    if audio_ckpt is not None:
+        if isinstance(audio_ckpt, dict) and "enc" in audio_ckpt:
+            aud.load_state_dict(audio_ckpt["enc"])
+        elif isinstance(audio_ckpt, dict) and "model" in audio_ckpt:
+            aud.load_state_dict(audio_ckpt["model"])
+        else:
+            aud.load_state_dict(audio_ckpt)
         print("Loaded Audio encoder")
     else:
         print("Warning: Audio encoder checkpoint not found, using untrained model")
@@ -431,34 +464,41 @@ def main():
         use_swiglu=talker_cfg.get("use_swiglu", True),
         rope_theta=talker_cfg.get("rope_theta", 10000.0)
     ).to(device)
-    tpath = os.path.join(args.ckpt_dir, "talker.pt")
-    if not os.path.exists(tpath) and "talker_ckpt" in main_cfg:
-        tpath = os.path.join(main_cfg["talker_ckpt"], "talker.pt")
-    if os.path.exists(tpath):
-        sd = torch.load(tpath, map_location=device)
-        rvq.load_state_dict(sd["rvq"]); talker.load_state_dict(sd["talker"])
+    # Try to find talker checkpoint
+    talker_ckpt_dir = args.ckpt_dir
+    if "talker_ckpt" in main_cfg:
+        talker_ckpt_dir = main_cfg["talker_ckpt"]
+    
+    tpath, talker_ckpt = find_checkpoint(talker_ckpt_dir, "talker.pt", "talker_step_", device)
+    if talker_ckpt is not None:
+        if isinstance(talker_ckpt, dict):
+            if "rvq" in talker_ckpt:
+                rvq.load_state_dict(talker_ckpt["rvq"])
+            if "talker" in talker_ckpt:
+                talker.load_state_dict(talker_ckpt["talker"])
         print("Loaded Talker model")
     else:
         print("Warning: Talker checkpoint not found, using untrained model")
     
     # Load projectors if omni checkpoint exists
     proj_a, proj_v = None, None
-    omni_path = os.path.join(args.ckpt_dir, "omni.pt")
-    if os.path.exists(omni_path):
-        omni_ckpt = torch.load(omni_path, map_location=device)
-        if "proj_a" in omni_ckpt and "proj_v" in omni_ckpt:
-            audio_dim = audio_cfg.get("d_model", 192)
-            vision_dim = vision_cfg.get("d_model", 128)
-            thinker_d_model = thinker_cfg.get("d_model", 256)
-            proj_a = torch.nn.Linear(audio_dim, thinker_d_model).to(device)
-            proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
-            proj_a.load_state_dict(omni_ckpt["proj_a"])
-            proj_v.load_state_dict(omni_ckpt["proj_v"])
-            print("Loaded multimodal projectors from omni checkpoint")
-        # Also try to load thinker from omni checkpoint if not already loaded
-        if "thinker" in omni_ckpt and not os.path.exists(tpath):
-            think.load_state_dict(omni_ckpt["thinker"])
-            print("Loaded Thinker from omni checkpoint")
+    omni_path, omni_ckpt = find_checkpoint(args.ckpt_dir, "omni.pt", "omni_step_", device)
+    if omni_ckpt is not None:
+        if isinstance(omni_ckpt, dict):
+            if "proj_a" in omni_ckpt and "proj_v" in omni_ckpt:
+                audio_dim = audio_cfg.get("d_model", 192)
+                vision_dim = vision_cfg.get("d_model", 128)
+                thinker_d_model = thinker_cfg.get("d_model", 256)
+                proj_a = torch.nn.Linear(audio_dim, thinker_d_model).to(device)
+                proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
+                proj_a.load_state_dict(omni_ckpt["proj_a"])
+                proj_v.load_state_dict(omni_ckpt["proj_v"])
+                print("Loaded multimodal projectors from omni checkpoint")
+            # Also try to load thinker from omni checkpoint if not already loaded
+            if "thinker" in omni_ckpt and not thinker_loaded:
+                think.load_state_dict(omni_ckpt["thinker"])
+                thinker_loaded = True
+                print("Loaded Thinker from omni checkpoint")
     else:
         print("Warning: omni.pt not found, multimodal features will not be used")
     
@@ -509,14 +549,17 @@ def main():
             ).to(device)
             
             # Try to load OCR checkpoint
-            ocr_path = os.path.join(args.ckpt_dir, "ocr.pt")
-            if not os.path.exists(ocr_path):
-                ocr_path = "checkpoints/ocr_tiny/ocr.pt"
+            ocr_ckpt_dir = args.ckpt_dir
+            if not os.path.exists(os.path.join(ocr_ckpt_dir, "ocr.pt")):
+                ocr_ckpt_dir = "checkpoints/ocr_tiny"
             
-            if os.path.exists(ocr_path):
-                ocr_checkpoint = torch.load(ocr_path, map_location=device)
-                if "model" in ocr_checkpoint:
-                    ocr_model.load_state_dict(ocr_checkpoint["model"])
+            ocr_path, ocr_checkpoint = find_checkpoint(ocr_ckpt_dir, "ocr.pt", "ocr_step_", device)
+            if ocr_checkpoint is not None:
+                if isinstance(ocr_checkpoint, dict):
+                    if "model" in ocr_checkpoint:
+                        ocr_model.load_state_dict(ocr_checkpoint["model"])
+                    else:
+                        ocr_model.load_state_dict(ocr_checkpoint)
                     print("Loaded OCR model")
                     if "char_to_idx" in ocr_checkpoint:
                         ocr_char_to_idx = ocr_checkpoint["char_to_idx"]

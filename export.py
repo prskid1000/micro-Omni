@@ -20,6 +20,7 @@ import shutil
 import torch
 from safetensors.torch import save_file
 from pathlib import Path
+from omni.utils import find_checkpoint
 
 
 def load_checkpoint(path, device="cpu"):
@@ -64,21 +65,21 @@ def merge_model_components(
     # Try from omni checkpoint first, then thinker checkpoint
     thinker_loaded = False
     if omni_ckpt_dir:
-        omni_path = os.path.join(omni_ckpt_dir, "omni.pt")
-        omni_ckpt = load_checkpoint(omni_path)
-        if omni_ckpt and "thinker" in omni_ckpt:
+        omni_path, omni_ckpt = find_checkpoint(omni_ckpt_dir, "omni.pt", "omni_step_", device="cpu")
+        if omni_ckpt and isinstance(omni_ckpt, dict) and "thinker" in omni_ckpt:
             for key, value in omni_ckpt["thinker"].items():
                 merged_state[f"thinker.{key}"] = value
             thinker_loaded = True
             print(f"  ✓ Loaded Thinker from {omni_path}")
     
     if not thinker_loaded and thinker_ckpt_dir:
-        thinker_path = os.path.join(thinker_ckpt_dir, "thinker.pt")
-        thinker_ckpt = load_checkpoint(thinker_path)
+        thinker_path, thinker_ckpt = find_checkpoint(thinker_ckpt_dir, "thinker.pt", "thinker_step_", device="cpu")
         if thinker_ckpt:
             # Handle both dict format and direct state_dict
             if isinstance(thinker_ckpt, dict) and "model" in thinker_ckpt:
                 thinker_state = thinker_ckpt["model"]
+            elif isinstance(thinker_ckpt, dict) and "thinker" in thinker_ckpt:
+                thinker_state = thinker_ckpt["thinker"]
             elif isinstance(thinker_ckpt, dict):
                 thinker_state = thinker_ckpt
             else:
@@ -94,8 +95,7 @@ def merge_model_components(
     
     # 2. Load Audio Encoder
     if audio_ckpt_dir:
-        audio_path = os.path.join(audio_ckpt_dir, "audio_enc.pt")
-        audio_ckpt = load_checkpoint(audio_path)
+        audio_path, audio_ckpt = find_checkpoint(audio_ckpt_dir, "audio_enc.pt", "audio_enc_step_", device="cpu")
         if audio_ckpt:
             if isinstance(audio_ckpt, dict) and "enc" in audio_ckpt:
                 audio_state = audio_ckpt["enc"]
@@ -108,14 +108,13 @@ def merge_model_components(
                 merged_state[f"audio_encoder.{key}"] = value
             print(f"  ✓ Loaded Audio Encoder from {audio_path}")
         else:
-            print(f"  ⚠ Warning: Audio encoder checkpoint not found at {audio_path}")
+            print(f"  ⚠ Warning: Audio encoder checkpoint not found")
     else:
         print("  ⚠ Warning: Audio encoder checkpoint directory not provided")
     
     # 3. Load Vision Encoder
     if vision_ckpt_dir:
-        vision_path = os.path.join(vision_ckpt_dir, "vision.pt")
-        vision_ckpt = load_checkpoint(vision_path)
+        vision_path, vision_ckpt = find_checkpoint(vision_ckpt_dir, "vision.pt", "vision_step_", device="cpu")
         if vision_ckpt:
             if isinstance(vision_ckpt, dict) and "vit" in vision_ckpt:
                 vision_state = vision_ckpt["vit"]
@@ -128,36 +127,34 @@ def merge_model_components(
                 merged_state[f"vision_encoder.{key}"] = value
             print(f"  ✓ Loaded Vision Encoder from {vision_path}")
         else:
-            print(f"  ⚠ Warning: Vision encoder checkpoint not found at {vision_path}")
+            print(f"  ⚠ Warning: Vision encoder checkpoint not found")
     else:
         print("  ⚠ Warning: Vision encoder checkpoint directory not provided")
     
     # 4. Load Talker + RVQ
     if talker_ckpt_dir:
-        talker_path = os.path.join(talker_ckpt_dir, "talker.pt")
-        talker_ckpt = load_checkpoint(talker_path)
+        talker_path, talker_ckpt = find_checkpoint(talker_ckpt_dir, "talker.pt", "talker_step_", device="cpu")
         if talker_ckpt:
             # Load RVQ
-            if "rvq" in talker_ckpt:
+            if isinstance(talker_ckpt, dict) and "rvq" in talker_ckpt:
                 for key, value in talker_ckpt["rvq"].items():
                     merged_state[f"rvq.{key}"] = value
                 print(f"  ✓ Loaded RVQ from {talker_path}")
             
             # Load Talker
-            if "talker" in talker_ckpt:
+            if isinstance(talker_ckpt, dict) and "talker" in talker_ckpt:
                 for key, value in talker_ckpt["talker"].items():
                     merged_state[f"talker.{key}"] = value
                 print(f"  ✓ Loaded Talker from {talker_path}")
         else:
-            print(f"  ⚠ Warning: Talker checkpoint not found at {talker_path}")
+            print(f"  ⚠ Warning: Talker checkpoint not found")
     else:
         print("  ⚠ Warning: Talker checkpoint directory not provided")
     
     # 5. Load Multimodal Projectors (from omni checkpoint)
     if omni_ckpt_dir:
-        omni_path = os.path.join(omni_ckpt_dir, "omni.pt")
-        omni_ckpt = load_checkpoint(omni_path)
-        if omni_ckpt:
+        omni_path, omni_ckpt = find_checkpoint(omni_ckpt_dir, "omni.pt", "omni_step_", device="cpu")
+        if omni_ckpt and isinstance(omni_ckpt, dict):
             if "proj_a" in omni_ckpt:
                 for key, value in omni_ckpt["proj_a"].items():
                     merged_state[f"proj_a.{key}"] = value
@@ -168,15 +165,16 @@ def merge_model_components(
                     merged_state[f"proj_v.{key}"] = value
                 print(f"  ✓ Loaded Vision Projector from {omni_path}")
         else:
-            print(f"  ⚠ Warning: Omni checkpoint not found at {omni_path}")
+            print(f"  ⚠ Warning: Omni checkpoint not found")
     
     # 6. Load OCR (optional)
     if ocr_ckpt_dir:
-        ocr_path = os.path.join(ocr_ckpt_dir, "ocr.pt")
-        ocr_ckpt = load_checkpoint(ocr_path)
+        ocr_path, ocr_ckpt = find_checkpoint(ocr_ckpt_dir, "ocr.pt", "ocr_step_", device="cpu")
         if ocr_ckpt:
-            if "model" in ocr_ckpt:
+            if isinstance(ocr_ckpt, dict) and "model" in ocr_ckpt:
                 ocr_state = ocr_ckpt["model"]
+            elif isinstance(ocr_ckpt, dict):
+                ocr_state = ocr_ckpt
             else:
                 ocr_state = ocr_ckpt
             
@@ -184,7 +182,7 @@ def merge_model_components(
                 merged_state[f"ocr.{key}"] = value
             print(f"  ✓ Loaded OCR model from {ocr_path}")
         else:
-            print(f"  ⚠ Warning: OCR checkpoint not found at {ocr_path}")
+            print(f"  ⚠ Warning: OCR checkpoint not found")
     
     # Save to safetensors
     if not merged_state:

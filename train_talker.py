@@ -5,7 +5,7 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.codec import RVQ
 from omni.talker import TalkerTiny
-from omni.training_utils import (
+from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, cleanup_old_checkpoints, TTSDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
