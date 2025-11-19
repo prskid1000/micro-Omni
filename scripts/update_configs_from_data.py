@@ -869,7 +869,80 @@ def analyze_and_update_all_configs(dry_run: bool = False):
     print("Calculating Training Parameters")
     print("="*60)
     
-    # Helper function to calculate params from tokens
+    # Helper function to calculate params from samples (for vision/audio training)
+    def calculate_params_from_samples(num_samples: int, batch_size: int, gradient_accumulation: int = 1, val_split: float = 0.1):
+        """
+        Calculate training parameters from sample count.
+        
+        Used for vision and audio training where steps are based on samples, not tokens.
+        - Vision training: Contrastive learning (image-caption pairs) - steps = samples / batch_size
+        - Audio training: CTC loss (audio-transcription pairs) - steps = samples / batch_size
+        
+        Based on research formulas:
+        - Effective Batch Size (EBS) = Micro Batch Size (MBS) × Gradient Accumulation (GA)
+        - Steps per epoch = Training Samples / Effective Batch Size
+        - Total steps = Steps per epoch × Number of epochs
+        
+        Args:
+            num_samples: Total number of training samples
+            batch_size: Micro batch size (per device)
+            gradient_accumulation: Gradient accumulation steps
+            val_split: Validation split ratio (default 0.1 = 10%)
+        
+        Returns:
+            Dictionary with calculated training parameters
+        """
+        # Effective batch size formula: EBS = MBS × GA × DP
+        effective_batch = batch_size * gradient_accumulation
+        
+        # Training samples (excluding validation)
+        train_samples = int(num_samples * (1 - val_split))
+        
+        # Steps per epoch
+        # Formula: steps_per_epoch = training_samples / effective_batch_size
+        steps_per_epoch = max(1, train_samples // effective_batch)
+        
+        # Epoch recommendations based on sample count
+        # Research: larger datasets need fewer epochs, smaller datasets need more
+        if num_samples >= 1_000_000:  # >1M samples
+            min_epochs, max_epochs, recommended_epochs = 1, 3, 2
+        elif num_samples >= 500_000:  # 500K-1M samples
+            min_epochs, max_epochs, recommended_epochs = 2, 4, 3
+        elif num_samples >= 100_000:  # 100K-500K samples
+            min_epochs, max_epochs, recommended_epochs = 3, 6, 4
+        else:  # <100K samples
+            min_epochs, max_epochs, recommended_epochs = 5, 10, 7
+        
+        # Total training steps
+        max_steps = steps_per_epoch * recommended_epochs
+        
+        # Warmup steps calculation (3-5% of total steps)
+        warmup_percentage = 0.04  # 4%
+        warmup_steps = max(100, int(max_steps * warmup_percentage))
+        warmup_steps = min(warmup_steps, 10000)  # Cap at 10K
+        
+        # Validation frequency
+        val_freq = max(100, min(1000, steps_per_epoch // 10))
+        
+        # Checkpoint frequency
+        checkpoint_freq = max(1000, min(10000, steps_per_epoch))
+        
+        return {
+            "num_samples": num_samples,
+            "train_samples": train_samples,
+            "effective_batch_size": effective_batch,
+            "steps_per_epoch": steps_per_epoch,
+            "min_epochs": min_epochs,
+            "max_epochs": max_epochs,
+            "recommended_epochs": recommended_epochs,
+            "max_steps": max_steps,
+            "warmup_steps": warmup_steps,
+            "warmup_percentage": warmup_steps / max_steps if max_steps > 0 else 0,
+            "val_freq": val_freq,
+            "checkpoint_freq": checkpoint_freq,
+        }
+    
+    # Helper function to calculate params from tokens (for text training)
     def calculate_params_from_tokens(num_tokens: int, batch_size: int, ctx_len: int, gradient_accumulation: int = 1, val_split: float = 0.1):
         """
         Calculate training parameters from token count.
@@ -1034,10 +1107,13 @@ def analyze_and_update_all_configs(dry_run: bool = False):
                 )
         
         # Adjust batch size and gradient accumulation based on model size
+        # Note: Audio training uses samples, not tokens, for step calculation
         batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
-            model_params, base_batch_size=4, base_grad_accum=1, ctx_len=ctx_len
+            model_params, base_batch_size=4, base_grad_accum=1, ctx_len=256  # Use default ctx_len for memory estimation
         )
-        audio_params = calculate_params_from_tokens(audio_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
+        # Audio training: steps = samples / batch_size (not tokens / (batch_size * ctx_len))
+        audio_params = calculate_params_from_samples(audio_samples, batch_size=batch_size, gradient_accumulation=grad_accum)
+        audio_params["num_tokens"] = audio_tokens  # Keep token count for reference
         audio_params["num_samples"] = audio_samples  # Keep for reference
         audio_params["model_params"] = model_params  # Keep for reference
         audio_params["batch_size"] = batch_size  # Store for config update
@@ -1046,9 +1122,8 @@ def analyze_and_update_all_configs(dry_run: bool = False):
         print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
         effective_batch = audio_params.get('effective_batch_size', batch_size * grad_accum)
         print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
-        print(f"  Tokens: {audio_params['num_tokens']:,} (~{audio_params['num_tokens']/1_000_000:.1f}M tokens)")
-        print(f"  Tokens/step: {audio_params.get('tokens_per_step', effective_batch * ctx_len):,}")
-        print(f"  Steps/epoch: {audio_params['steps_per_epoch']:,}")
+        print(f"  Samples: {audio_params['num_samples']:,} (transcription tokens: {audio_params.get('num_tokens', 0):,})")
+        print(f"  Steps/epoch: {audio_params['steps_per_epoch']:,} (based on samples, not tokens)")
         print(f"  Recommended epochs: {audio_params['recommended_epochs']}")
         print(f"  Max steps: {audio_params['max_steps']:,}")
         warmup_pct = audio_params.get('warmup_percentage', 0) * 100
@@ -1085,10 +1160,13 @@ def analyze_and_update_all_configs(dry_run: bool = False):
                 )
         
         # Adjust batch size and gradient accumulation based on model size
+        # Note: Vision training uses samples, not tokens, for step calculation
         batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
-            model_params, base_batch_size=8, base_grad_accum=1, ctx_len=ctx_len
+            model_params, base_batch_size=8, base_grad_accum=1, ctx_len=224  # Use default ctx_len for memory estimation
         )
-        vision_params = calculate_params_from_tokens(image_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
+        # Vision training: steps = samples / batch_size (not tokens / (batch_size * ctx_len))
+        vision_params = calculate_params_from_samples(image_samples, batch_size=batch_size, gradient_accumulation=grad_accum)
+        vision_params["num_tokens"] = image_tokens  # Keep token count for reference
         vision_params["num_samples"] = image_samples  # Keep for reference
         vision_params["model_params"] = model_params  # Keep for reference
         vision_params["batch_size"] = batch_size  # Store for config update
@@ -1097,9 +1175,8 @@ def analyze_and_update_all_configs(dry_run: bool = False):
         print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
         effective_batch = vision_params.get('effective_batch_size', batch_size * grad_accum)
         print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
-        print(f"  Tokens: {vision_params['num_tokens']:,} (~{vision_params['num_tokens']/1_000_000:.1f}M tokens)")
-        print(f"  Tokens/step: {vision_params.get('tokens_per_step', effective_batch * ctx_len):,}")
-        print(f"  Steps/epoch: {vision_params['steps_per_epoch']:,}")
+        print(f"  Samples: {vision_params['num_samples']:,} (caption tokens: {vision_params.get('num_tokens', 0):,})")
+        print(f"  Steps/epoch: {vision_params['steps_per_epoch']:,} (based on samples, not tokens)")
         print(f"  Recommended epochs: {vision_params['recommended_epochs']}")
         print(f"  Max steps: {vision_params['max_steps']:,}")
         warmup_pct = vision_params.get('warmup_percentage', 0) * 100
@@ -1158,10 +1235,13 @@ def analyze_and_update_all_configs(dry_run: bool = False):
                 )
         
         # Adjust batch size and gradient accumulation based on model size
+        # Note: Talker training uses samples, not tokens, for step calculation
         batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
-            model_params, base_batch_size=4, base_grad_accum=1, ctx_len=ctx_len
+            model_params, base_batch_size=4, base_grad_accum=1, ctx_len=256  # Use default ctx_len for memory estimation
         )
-        talker_params = calculate_params_from_tokens(tts_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
+        # Talker training: steps = samples / batch_size (not tokens / (batch_size * ctx_len))
+        talker_params = calculate_params_from_samples(tts_samples, batch_size=batch_size, gradient_accumulation=grad_accum)
+        talker_params["num_tokens"] = tts_tokens  # Keep token count for reference
         talker_params["num_samples"] = tts_samples  # Keep for reference
         talker_params["model_params"] = model_params  # Keep for reference
         talker_params["batch_size"] = batch_size  # Store for config update
@@ -1170,9 +1250,8 @@ def analyze_and_update_all_configs(dry_run: bool = False):
         print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
         effective_batch = talker_params.get('effective_batch_size', batch_size * grad_accum)
         print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
-        print(f"  Tokens: {talker_params['num_tokens']:,} (~{talker_params['num_tokens']/1_000_000:.1f}M tokens)")
-        print(f"  Tokens/step: {talker_params.get('tokens_per_step', effective_batch * ctx_len):,}")
-        print(f"  Steps/epoch: {talker_params['steps_per_epoch']:,}")
+        print(f"  Samples: {talker_params['num_samples']:,} (transcription tokens: {talker_params.get('num_tokens', 0):,})")
+        print(f"  Steps/epoch: {talker_params['steps_per_epoch']:,} (based on samples, not tokens)")
         print(f"  Recommended epochs: {talker_params['recommended_epochs']}")
         print(f"  Max steps: {talker_params['max_steps']:,}")
         warmup_pct = talker_params.get('warmup_percentage', 0) * 100
@@ -1295,10 +1374,13 @@ def analyze_and_update_all_configs(dry_run: bool = False):
                 )
         
         # Adjust batch size and gradient accumulation based on model size
+        # Note: OCR training uses samples, not tokens, for step calculation
         batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
-            model_params, base_batch_size=4, base_grad_accum=2, ctx_len=ctx_len
+            model_params, base_batch_size=4, base_grad_accum=2, ctx_len=128  # Use default ctx_len for memory estimation
         )
-        ocr_params = calculate_params_from_tokens(ocr_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
+        # OCR training: steps = samples / batch_size (not tokens / (batch_size * ctx_len))
+        ocr_params = calculate_params_from_samples(ocr_samples, batch_size=batch_size, gradient_accumulation=grad_accum)
+        ocr_params["num_tokens"] = ocr_tokens  # Keep token count for reference
         ocr_params["num_samples"] = ocr_samples  # Keep for reference
         ocr_params["model_params"] = model_params  # Keep for reference
         ocr_params["batch_size"] = batch_size  # Store for config update
@@ -1307,9 +1389,8 @@ def analyze_and_update_all_configs(dry_run: bool = False):
         print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
         effective_batch = ocr_params.get('effective_batch_size', batch_size * grad_accum)
         print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
-        print(f"  Tokens: {ocr_params['num_tokens']:,} (~{ocr_params['num_tokens']/1_000_000:.1f}M tokens)")
-        print(f"  Tokens/step: {ocr_params.get('tokens_per_step', effective_batch * ctx_len):,}")
-        print(f"  Steps/epoch: {ocr_params['steps_per_epoch']:,}")
+        print(f"  Samples: {ocr_params['num_samples']:,} (text tokens: {ocr_params.get('num_tokens', 0):,})")
+        print(f"  Steps/epoch: {ocr_params['steps_per_epoch']:,} (based on samples, not tokens)")
         print(f"  Recommended epochs: {ocr_params['recommended_epochs']}")
         print(f"  Max steps: {ocr_params['max_steps']:,}")
         warmup_pct = ocr_params.get('warmup_percentage', 0) * 100

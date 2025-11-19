@@ -712,19 +712,24 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What this does:**
-- ✅ Counts tokens in your production/synthetic datasets (using BPE tokenizer)
+- ✅ Counts tokens in your production/synthetic datasets (using BPE tokenizer) for reference
+- ✅ Counts samples for vision/audio/talker/OCR training (these use sample-based step calculation)
 - ✅ Calculates model size from config files (using mathematical formulas)
 - ✅ Automatically adjusts `batch_size` and `gradient_accumulation_steps` based on model size
-- ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps` based on token counts and model size
+- ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps` based on:
+  - **Text/Multimodal SFT:** Token counts (steps = tokens / (batch_size × ctx_len))
+  - **Vision/Audio/Talker/OCR:** Sample counts (steps = samples / batch_size)
 - ✅ Uses research-based formulas for training parameter calculation
 - ✅ Adjusts validation and checkpoint frequencies
 - ✅ Updates data paths to production files automatically
-- ✅ Applies best practices based on token count and model size (more accurate than samples)
+- ✅ Applies best practices based on dataset size and model architecture
 
 **Why it matters:**
-- Large datasets (>100M tokens) need fewer epochs (1-3)
-- Small datasets (<10M tokens) need more epochs (5-10)
-- The script automatically counts tokens using the BPE tokenizer
+- **Text training:** Uses tokens because each sample is tokenized to `ctx_len` tokens
+- **Vision training:** Uses samples because it's contrastive learning (image-caption pairs)
+- **Audio training:** Uses samples because it's CTC loss (audio-transcription pairs)
+- **Talker/OCR training:** Uses samples because they process fixed-size inputs per sample
+- **Multimodal SFT:** Uses tokens because it's text-based training
 - Model size affects memory requirements - larger models need smaller batch sizes
 - Gradient accumulation maintains effective batch size while reducing memory usage
 - Proper warmup steps (4% of total) prevent training instability
@@ -748,14 +753,34 @@ python scripts/update_configs_from_data.py --dry-run
   Recommended epochs: 2
   Max steps: 97,656
   Warmup steps: 3,906 (4.0% of total)
+
+[Stage B] Audio Encoder Training (audio_enc_tiny.json)
+  Model size: 1,200,000 params (1.20M)
+  Batch size: 4 (gradient accumulation: 1, effective: 4)
+  Samples: 2,000,000 (transcription tokens: 15,000,000)
+  Steps/epoch: 500,000 (based on samples, not tokens)
+  Recommended epochs: 2
+  Max steps: 1,000,000
+  Warmup steps: 40,000 (4.0% of total)
+
+[Stage C] Vision Encoder Training (vision_tiny.json)
+  Model size: 800,000 params (0.80M)
+  Batch size: 8 (gradient accumulation: 1, effective: 8)
+  Samples: 1,000,000 (caption tokens: 8,000,000)
+  Steps/epoch: 125,000 (based on samples, not tokens)
+  Recommended epochs: 2
+  Max steps: 250,000
+  Warmup steps: 10,000 (4.0% of total)
 ```
 
 **Key features:**
 - Shows model size in parameters (calculated from config)
 - Displays effective batch size (batch_size × gradient_accumulation)
-- Shows tokens processed per step
+- **Text/Multimodal SFT:** Shows tokens processed per step
+- **Vision/Audio/Talker/OCR:** Shows samples and notes that steps are based on samples, not tokens
 - Shows warmup percentage (typically 4% based on research)
 - Automatically adjusts batch size for larger models to fit in memory
+- Clarifies that token counts are for reference only (vision/audio/talker/OCR use samples for step calculation)
 
 See [Chapter 34: Configuration Files](34-configuration-files.md) for more details.
 

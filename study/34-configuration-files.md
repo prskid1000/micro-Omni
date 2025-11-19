@@ -78,8 +78,10 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What gets updated:**
-- `max_steps`: Calculated from token count, batch size, and context length using research-based formulas
-- `max_epochs`: Based on token count (1-3 for very large, 5-10 for small)
+- `max_steps`: Calculated using research-based formulas:
+  - **Text/Multimodal SFT:** From token count, batch size, and context length
+  - **Vision/Audio/Talker/OCR:** From sample count and batch size
+- `max_epochs`: Based on dataset size (1-3 for very large, 5-10 for small)
 - `warmup_steps`: 4% of total steps (research-based, typically 3-5%, capped at 10K)
 - `batch_size`: Automatically adjusted based on model size (larger models = smaller batch sizes)
 - `gradient_accumulation_steps`: Automatically adjusted to maintain effective batch size
@@ -87,18 +89,48 @@ python scripts/update_configs_from_data.py --dry-run
 - `checkpoint_freq`: Every 5000-10000 steps or 1 per epoch
 - Data paths: Automatically updated to production files if they exist
 
-**Token count recommendations:**
-- **Very large (>100M tokens):** 1-3 epochs
-- **Large (50M-100M tokens):** 2-4 epochs
-- **Medium (10M-50M tokens):** 3-6 epochs
-- **Small (<10M tokens):** 5-10 epochs
+**Training step calculation methods:**
+- **Text training (`train_text.py`):** Uses **tokens** for step calculation
+  - Each sample is tokenized to `ctx_len` tokens
+  - Steps = tokens / (batch_size × ctx_len)
+  - Token count recommendations:
+    - **Very large (>100M tokens):** 1-3 epochs
+    - **Large (50M-100M tokens):** 2-4 epochs
+    - **Medium (10M-50M tokens):** 3-6 epochs
+    - **Small (<10M tokens):** 5-10 epochs
+- **Vision training (`train_vision.py`):** Uses **samples** for step calculation
+  - Contrastive learning (image-caption pairs)
+  - Steps = samples / batch_size
+  - Sample count recommendations:
+    - **Very large (>1M samples):** 1-3 epochs
+    - **Large (500K-1M samples):** 2-4 epochs
+    - **Medium (100K-500K samples):** 3-6 epochs
+    - **Small (<100K samples):** 5-10 epochs
+- **Audio training (`train_audio_enc.py`):** Uses **samples** for step calculation
+  - CTC loss (audio-transcription pairs)
+  - Steps = samples / batch_size
+  - Same sample count recommendations as vision
+- **Talker training (`train_talker.py`):** Uses **samples** for step calculation
+  - TTS generation (text-audio pairs)
+  - Steps = samples / batch_size
+  - Same sample count recommendations as vision
+- **OCR training (`train_ocr.py`):** Uses **samples** for step calculation
+  - Image-text pairs
+  - Steps = samples / batch_size
+  - Same sample count recommendations as vision
+- **Multimodal SFT (`sft_omni.py`):** Uses **tokens** for step calculation
+  - Text-based training with multimodal embeddings
+  - Steps = tokens / (batch_size × ctx_len)
+  - Same token count recommendations as text
 
-**Note:** The script counts actual tokens using the BPE tokenizer:
-- **Text:** Tokens from text corpus
-- **Images:** Tokens from captions
-- **Audio:** Tokens from transcriptions (ASR/TTS)
-- **OCR:** Tokens from extracted text
+**Token counting (for reference):**
+- The script counts tokens using the BPE tokenizer for reference:
+  - **Text:** Tokens from text corpus
+  - **Images:** Tokens from captions (not used for step calculation, only reference)
+  - **Audio:** Tokens from transcriptions (not used for step calculation, only reference)
+  - **OCR:** Tokens from extracted text (not used for step calculation, only reference)
 - If no tokenizer exists, one will be created automatically from the data
+- **Important:** For vision/audio/talker/OCR, token counts are shown for reference only. Step calculation uses sample counts.
 
 **Files checked:**
 - Text: `data/text/production_corpus.txt` or `data/text/tiny_corpus.txt`
@@ -107,16 +139,6 @@ python scripts/update_configs_from_data.py --dry-run
 - TTS: `data/audio/production_tts.csv` or `data/audio/tts.csv`
 - OCR: `data/ocr/production_ocr.csv` or `data/ocr/ocr_train.csv`
 - Vocoder: Uses same audio data as TTS/ASR (no separate check)
-
-**Token counting:**
-- All training parameters are calculated based on **token counts**, not sample counts
-- The script uses the BPE tokenizer to count actual tokens in:
-  - Text files (line-by-line)
-  - Image captions (from JSON manifest)
-  - Audio transcriptions (from CSV files)
-  - OCR text (from CSV files)
-- If no tokenizer exists, one is automatically created from the text data
-- Token counts are more accurate than sample counts for determining training duration
 
 **Model size integration:**
 - The script calculates model size from config files using mathematical formulas
@@ -130,10 +152,14 @@ python scripts/update_configs_from_data.py --dry-run
 
 **Research-based formulas:**
 - **Effective Batch Size:** `EBS = Micro Batch Size × Gradient Accumulation × Data Parallel`
-- **Tokens per step:** `tokens_per_step = EBS × context_length`
-- **Steps per epoch:** `steps_per_epoch = training_tokens / tokens_per_step`
-- **Total steps:** `max_steps = steps_per_epoch × recommended_epochs`
-- **Warmup steps:** 4% of total steps (based on research showing 3-5% is optimal)
+- **Text/Multimodal SFT:**
+  - **Tokens per step:** `tokens_per_step = EBS × context_length`
+  - **Steps per epoch:** `steps_per_epoch = training_tokens / tokens_per_step`
+- **Vision/Audio/Talker/OCR:**
+  - **Steps per epoch:** `steps_per_epoch = training_samples / EBS`
+- **All training types:**
+  - **Total steps:** `max_steps = steps_per_epoch × recommended_epochs`
+  - **Warmup steps:** 4% of total steps (based on research showing 3-5% is optimal)
 
 **Note:** The script only checks production and synthetic files, ignoring intermediate dataset files.
 

@@ -393,10 +393,13 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What it does:**
-- ✅ Counts tokens in production/synthetic datasets (using BPE tokenizer)
+- ✅ Counts tokens in production/synthetic datasets (using BPE tokenizer) for reference
+- ✅ Counts samples for vision/audio/talker/OCR training (these use sample-based step calculation)
 - ✅ Calculates model size from config files (using mathematical formulas)
 - ✅ Automatically adjusts `batch_size` and `gradient_accumulation_steps` based on model size
-- ✅ Calculates appropriate `max_steps`, `max_epochs`, `warmup_steps` using research-based formulas
+- ✅ Calculates appropriate `max_steps`, `max_epochs`, `warmup_steps` using research-based formulas:
+  - **Text/Multimodal SFT:** Based on token counts (steps = tokens / (batch_size × ctx_len))
+  - **Vision/Audio/Talker/OCR:** Based on sample counts (steps = samples / batch_size)
 - ✅ Adjusts `val_freq` and `checkpoint_freq` based on dataset size
 - ✅ Updates data paths to production files if they exist
 - ✅ Uses best practices: 1-3 epochs for large datasets, 5-10 for small
