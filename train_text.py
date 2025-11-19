@@ -1,6 +1,5 @@
 
 import argparse, json, torch, os
-import tempfile
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
@@ -47,45 +46,6 @@ class TextDataset(Dataset):
         y = x.clone(); y[:-1]=x[1:]; y[-1]=0
         return x, y
 
-def stream_text_file(text_path: str, chunk_size_mb: int = 100) -> str:
-    """
-    Stream entire text file in chunks to a temporary file (memory efficient).
-    Processes the entire corpus without loading it all into memory.
-    Returns path to temporary file with all data.
-    """
-    temp_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt')
-    temp_path = temp_file.name
-    temp_file.close()
-    
-    lines_read = 0
-    
-    try:
-        with open(text_path, 'rb') as infile, open(temp_path, 'w', encoding='utf-8') as outfile:
-            # Read file in chunks to avoid loading entire file into memory
-            while True:
-                line_bytes = infile.readline()
-                if not line_bytes:
-                    break
-                
-                try:
-                    line = line_bytes.decode('utf-8')
-                    if line.strip():
-                        outfile.write(line)
-                        lines_read += 1
-                        
-                        # Progress indicator for large files
-                        if lines_read % 100000 == 0:
-                            print(f"  Streaming corpus: {lines_read:,} lines processed...")
-                except UnicodeDecodeError:
-                    pass  # Skip invalid UTF-8 lines
-    except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        raise
-    
-    print(f"  Streamed entire corpus: {lines_read:,} lines")
-    return temp_path
-
 def main(cfg):
     # Set random seed for reproducibility
     seed = cfg.get("seed", 42)
@@ -95,17 +55,11 @@ def main(cfg):
     os.makedirs(cfg["save_dir"], exist_ok=True)
     spm_model = os.path.join(cfg["save_dir"], "tokenizer.model")
     if not os.path.exists(spm_model):
-        print(f"Creating tokenizer from {cfg['train_text']} (streaming entire corpus in chunks)...")
-        # Stream entire corpus in chunks instead of loading entire file
-        temp_streamed = None
-        try:
-            temp_streamed = stream_text_file(cfg["train_text"], chunk_size_mb=100)
-            print(f"  Training tokenizer on entire corpus...")
-            BPETokenizer.train_new(temp_streamed, spm_model, vocab_size=cfg["vocab_size"])
-            print(f"✓ Tokenizer created: {spm_model}")
-        finally:
-            if temp_streamed and os.path.exists(temp_streamed):
-                os.remove(temp_streamed)
+        print(f"Creating tokenizer from {cfg['train_text']}...")
+        # SentencePiece can handle large files directly - no temp file needed
+        print(f"  Training tokenizer on entire corpus...")
+        BPETokenizer.train_new(cfg["train_text"], spm_model, vocab_size=cfg["vocab_size"])
+        print(f"✓ Tokenizer created: {spm_model}")
     tok = BPETokenizer(spm_model)
     ds = TextDataset(cfg["train_text"], tok, cfg["ctx_len"])
     dl = DataLoader(ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))

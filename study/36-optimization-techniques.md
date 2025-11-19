@@ -186,21 +186,22 @@ self.item_lengths = []  # 8 bytes per length
 - ✅ Robust fallback for malformed JSON files
 - ✅ Maintains same training speed (minimal I/O overhead)
 
-### 2. Chunked Tokenizer Training
+### 2. Efficient Tokenizer Training
 
-**What:** Stream entire corpus in chunks for tokenizer training  
-**Benefit:** Train on full dataset without loading entire file into memory
+**What:** Train tokenizers on entire dataset without loading into memory  
+**Benefit:** Train on full dataset without memory limits
 
 **Implementation:**
-- Tokenizer training streams corpus line-by-line to temporary file
-- Processes entire dataset (not just samples) in memory-efficient chunks
-- SentencePiece trains on streamed file (handles large files efficiently)
-- Temporary files cleaned up after training
+- **Plain text files:** SentencePiece reads files directly (no temp files needed)
+- **CSV/JSON files:** Extract text to temp file in `data/.temp/` (only when needed)
+- Processes entire dataset (not just samples) efficiently
+- Temporary files auto-cleaned after training
 
 **Memory Savings:**
 - **Before:** Loaded entire corpus into memory (could be GB for large datasets)
-- **After:** Streams in chunks (~100MB at a time), processes entire dataset
+- **After:** SentencePiece handles large files directly, no unnecessary copying
 - **Result:** Can train tokenizers on datasets of any size without OOM
+- **Temp files:** Only used for CSV/JSON text extraction, stored in `data/.temp/`
 
 ### 3. Resumable Preprocessing
 
@@ -208,7 +209,8 @@ self.item_lengths = []  # 8 bytes per length
 **Benefit:** No need to restart from beginning if process is stopped
 
 **Resumable Operations:**
-- ✅ **Tokenizer training:** Streaming phase is resumable (training must restart if interrupted)
+- ✅ **Tokenizer training:** SentencePiece handles large files directly (no streaming needed for plain text)
+- ✅ **CSV/JSON extraction:** Temp files created in `data/.temp/` (only when needed)
 - ✅ **Vocabulary building:** Saves progress every 10K items (vision, OCR)
 - ✅ **Token counting:** Saves progress every 10K samples (text, CSV, images)
 - ✅ **Training loops:** Already resumable via checkpoints

@@ -51,48 +51,8 @@ def count_text_samples(text_path: str) -> int:
         print(f"Warning: Could not count text samples from {text_path}: {e}")
     return count
 
-def stream_text_file(text_path: str, chunk_size_mb: int = 100) -> str:
-    """
-    Stream entire text file in chunks to a temporary file (memory efficient).
-    Processes the entire corpus without loading it all into memory.
-    Returns path to temporary file with all data.
-    """
-    import tempfile
-    temp_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt')
-    temp_path = temp_file.name
-    temp_file.close()
-    
-    lines_read = 0
-    
-    try:
-        with open(text_path, 'rb') as infile, open(temp_path, 'w', encoding='utf-8') as outfile:
-            # Read file in chunks to avoid loading entire file into memory
-            while True:
-                line_bytes = infile.readline()
-                if not line_bytes:
-                    break
-                
-                try:
-                    line = line_bytes.decode('utf-8')
-                    if line.strip():
-                        outfile.write(line)
-                        lines_read += 1
-                        
-                        # Progress indicator for large files
-                        if lines_read % 100000 == 0:
-                            print(f"  Streaming corpus: {lines_read:,} lines processed...")
-                except UnicodeDecodeError:
-                    pass  # Skip invalid UTF-8 lines
-    except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        raise
-    
-    print(f"  Streamed entire corpus: {lines_read:,} lines")
-    return temp_path
-
 def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None) -> BPETokenizer:
-    """Get existing tokenizer or create one from text data (streams entire corpus in chunks)"""
+    """Get existing tokenizer or create one from text data (SentencePiece handles large files efficiently)"""
     # Try to find existing tokenizer
     tokenizer_candidates = [
         tokenizer_path,  # Explicitly provided
@@ -108,20 +68,14 @@ def get_or_create_tokenizer(text_path: str, tokenizer_path: Optional[str] = None
     if not os.path.exists(text_path):
         raise FileNotFoundError(f"Cannot create tokenizer: text file not found: {text_path}")
     
-    print(f"  No tokenizer found. Creating tokenizer from {text_path} (streaming entire corpus in chunks)...")
+    print(f"  No tokenizer found. Creating tokenizer from {text_path}...")
     os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
     tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
     
-    # Stream entire corpus in chunks instead of loading entire file
-    temp_streamed = None
-    try:
-        temp_streamed = stream_text_file(text_path, chunk_size_mb=100)
-        print(f"  Training tokenizer on entire corpus...")
-        BPETokenizer.train_new(temp_streamed, tokenizer_model, vocab_size=32000)
-        print(f"  ✓ Tokenizer created: {tokenizer_model}")
-    finally:
-        if temp_streamed and os.path.exists(temp_streamed):
-            os.remove(temp_streamed)
+    # SentencePiece can handle large files directly - no temp file needed for plain text
+    print(f"  Training tokenizer on entire corpus...")
+    BPETokenizer.train_new(text_path, tokenizer_model, vocab_size=32000)
+    print(f"  ✓ Tokenizer created: {tokenizer_model}")
     
     return BPETokenizer(tokenizer_model)
 
@@ -227,8 +181,10 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
         if not tokenizer:
             # Create tokenizer from CSV text (stream through file)
             print(f"  Creating tokenizer from CSV text...")
-            # Use proper tempfile for security and cleanup
-            temp_text_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt')
+            # Use proper tempfile for security and cleanup (in project temp directory)
+            temp_dir = "data/.temp"
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_text_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt', dir=temp_dir)
             temp_text = temp_text_file.name
             temp_text_file.close()
             
@@ -277,19 +233,12 @@ def count_csv_tokens(csv_path: str, text_column: str = 'text', tokenizer_path: O
                 
                 temp_text_created = True
                 
-                # Stream the temp file in chunks for tokenizer training
-                temp_streamed = None
-                try:
-                    print(f"  Streaming {rows_written:,} rows for tokenizer training...")
-                    temp_streamed = stream_text_file(temp_text, chunk_size_mb=100)
-                    os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
-                    tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
-                    print(f"  Training tokenizer on entire dataset...")
-                    BPETokenizer.train_new(temp_streamed, tokenizer_model, vocab_size=32000)
-                    tokenizer = BPETokenizer(tokenizer_model)
-                finally:
-                    if temp_streamed and os.path.exists(temp_streamed):
-                        os.remove(temp_streamed)
+                # Train tokenizer directly on extracted text file (SentencePiece handles large files)
+                os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
+                tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
+                print(f"  Training tokenizer on {rows_written:,} rows...")
+                BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
+                tokenizer = BPETokenizer(tokenizer_model)
             finally:
                 # Clean up temp text file
                 if temp_text_created and os.path.exists(temp_text):
@@ -539,8 +488,10 @@ def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None)
         if not tokenizer:
             # Create tokenizer from image captions (stream through file, entire dataset)
             print(f"  Creating tokenizer from image captions (streaming entire dataset in chunks)...")
-            # Use proper tempfile for security and cleanup
-            temp_text_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt')
+            # Use proper tempfile for security and cleanup (in project temp directory)
+            temp_dir = "data/.temp"
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_text_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt', dir=temp_dir)
             temp_text = temp_text_file.name
             temp_text_file.close()
             
@@ -560,19 +511,12 @@ def count_image_tokens(manifest_path: str, tokenizer_path: Optional[str] = None)
                 
                 temp_text_created = True
                 
-                # Stream the temp file in chunks for tokenizer training
-                temp_streamed = None
-                try:
-                    print(f"  Streaming {captions_written:,} captions for tokenizer training...")
-                    temp_streamed = stream_text_file(temp_text, chunk_size_mb=100)
-                    os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
-                    tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
-                    print(f"  Training tokenizer on entire dataset...")
-                    BPETokenizer.train_new(temp_streamed, tokenizer_model, vocab_size=32000)
-                    tokenizer = BPETokenizer(tokenizer_model)
-                finally:
-                    if temp_streamed and os.path.exists(temp_streamed):
-                        os.remove(temp_streamed)
+                # Train tokenizer directly on extracted captions file (SentencePiece handles large files)
+                os.makedirs("checkpoints/thinker_tiny", exist_ok=True)
+                tokenizer_model = "checkpoints/thinker_tiny/tokenizer.model"
+                print(f"  Training tokenizer on {captions_written:,} captions...")
+                BPETokenizer.train_new(temp_text, tokenizer_model, vocab_size=32000)
+                tokenizer = BPETokenizer(tokenizer_model)
             finally:
                 # Clean up temp text file
                 if temp_text_created and os.path.exists(temp_text):
