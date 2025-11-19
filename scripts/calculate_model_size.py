@@ -285,6 +285,54 @@ def calculate_codec_params(codebooks, codebook_size, dim):
     params += codebooks * codebook_size * dim
     return params
 
+def calculate_vocoder_params(n_mels=128, upsample_initial_channel=512, 
+                            upsample_rates=[8, 8, 2, 2], 
+                            resblock_kernel_sizes=[3, 7, 11]):
+    """
+    Calculate HiFi-GAN vocoder parameters (Generator only).
+    
+    Based on actual implementation in omni/codec.py:
+    - Generator: Conv1d layers, ConvTranspose1d layers, ResBlocks
+    - Discriminators (MPD + MSD) are separate and not included here
+    
+    Architecture:
+    - conv_pre: Conv1d(n_mels, upsample_initial_channel, 7)
+    - Upsampling layers: ConvTranspose1d with channel reduction
+    - MRF blocks: ResBlocks with multiple kernel sizes
+    - conv_post: Conv1d(ch, 1, 7)
+    """
+    params = 0
+    
+    # Initial convolution: Conv1d(n_mels, upsample_initial_channel, 7, padding=3)
+    # Conv1d: (in_ch × out_ch × kernel) + bias
+    params += n_mels * upsample_initial_channel * 7 + upsample_initial_channel
+    
+    # Upsampling layers (ConvTranspose1d)
+    num_upsamples = len(upsample_rates)
+    for i in range(num_upsamples):
+        in_ch = upsample_initial_channel // (2 ** i)
+        out_ch = upsample_initial_channel // (2 ** (i + 1))
+        kernel = upsample_rates[i] * 2  # Approximate kernel size
+        # ConvTranspose1d: (in_ch × out_ch × kernel) + bias
+        params += in_ch * out_ch * kernel + out_ch
+    
+    # Multi-receptive field fusion (MRF) blocks
+    # Each ResBlock has 2 Conv1d layers with dilations
+    num_kernels = len(resblock_kernel_sizes)
+    for i in range(num_upsamples):
+        ch = upsample_initial_channel // (2 ** (i + 1))
+        for j in range(num_kernels):
+            kernel = resblock_kernel_sizes[j]
+            # ResBlock: 2 Conv1d layers (ch -> ch) with dilations
+            # Approximate: 2 × (ch × ch × kernel) + 2 × ch (bias)
+            params += 2 * (ch * ch * kernel) + 2 * ch
+    
+    # Final convolution: Conv1d(ch, 1, 7, padding=3)
+    final_ch = upsample_initial_channel // (2 ** num_upsamples)
+    params += final_ch * 1 * 7 + 1
+    
+    return params
+
 def calculate_ocr_params(img_size, patch, vision_d_model, vision_layers, vision_heads, vision_d_ff,
                         decoder_d_model, decoder_layers, decoder_heads, decoder_d_ff, vocab_size):
     """

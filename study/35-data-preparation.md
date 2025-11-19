@@ -707,26 +707,45 @@ You can also download specific categories using `--dataset <category>`.
 **Important:** After downloading datasets, update training parameters based on actual data size:
 
 ```bash
-# Automatically update all config files based on dataset sizes
+# Automatically update all config files based on dataset sizes (default)
 python scripts/update_configs_from_data.py
 
 # Preview changes first (recommended)
 python scripts/update_configs_from_data.py --dry-run
+
+# Update only specific configs
+python scripts/update_configs_from_data.py --config thinker vision
+
+# Update multiple specific configs
+python scripts/update_configs_from_data.py --config audio_enc talker vocoder
+
+# Dry run for specific configs
+python scripts/update_configs_from_data.py --dry-run --config omni_sft
 ```
+
+**Supported config names:**
+- `thinker` - Text-only training (thinker_tiny.json)
+- `audio_enc` - Audio encoder training (audio_enc_tiny.json)
+- `vision` - Vision encoder training (vision_tiny.json)
+- `talker` - Talker training (talker_tiny.json)
+- `omni_sft` - Multimodal SFT training (omni_sft_tiny.json)
+- `ocr` - OCR training (ocr_tiny.json)
+- `vocoder` - Vocoder training (vocoder_tiny.json)
 
 **What this does:**
 - ✅ Counts tokens in your production/synthetic datasets (using BPE tokenizer) for reference
-- ✅ Counts samples for vision/audio/talker/OCR training (these use sample-based step calculation)
+- ✅ Counts samples for vision/audio/talker/vocoder/OCR training (these use sample-based step calculation)
 - ✅ Calculates model size from config files (using mathematical formulas)
 - ✅ Automatically adjusts `batch_size` and `gradient_accumulation_steps` based on model size
 - ✅ Calculates optimal `max_steps`, `max_epochs`, `warmup_steps` based on:
   - **Text/Multimodal SFT:** Token counts (steps = tokens / (batch_size × ctx_len))
-  - **Vision/Audio/Talker/OCR:** Sample counts (steps = samples / batch_size)
+  - **Vision/Audio/Talker/Vocoder/OCR:** Sample counts (steps = samples / batch_size)
 - ✅ Uses research-based formulas for training parameter calculation
 - ✅ Adjusts validation and checkpoint frequencies
 - ✅ Updates data paths to production files automatically
 - ✅ Applies best practices based on dataset size and model architecture
 - ✅ **Uses offset index caching** - builds and caches file offset indices for fast token counting
+- ✅ **Selective updates** - Use `--config` to update only specific configs (e.g., `--config thinker vision`)
 
 **Performance Note:** The first run may take time to build offset indices for large files. Subsequent runs will use cached indices and be much faster. Cache files (`.line_offsets.pkl`, `.row_offsets.pkl`, `.json_offsets.pkl`) are automatically created and validated.
 
@@ -734,7 +753,7 @@ python scripts/update_configs_from_data.py --dry-run
 - **Text training:** Uses tokens because each sample is tokenized to `ctx_len` tokens
 - **Vision training:** Uses samples because it's contrastive learning (image-caption pairs)
 - **Audio training:** Uses samples because it's CTC loss (audio-transcription pairs)
-- **Talker/OCR training:** Uses samples because they process fixed-size inputs per sample
+- **Talker/Vocoder/OCR training:** Uses samples because they process fixed-size inputs per sample
 - **Multimodal SFT:** Uses tokens because it's text-based training
 - Model size affects memory requirements - larger models need smaller batch sizes
 - Gradient accumulation maintains effective batch size while reducing memory usage
@@ -783,10 +802,11 @@ python scripts/update_configs_from_data.py --dry-run
 - Shows model size in parameters (calculated from config)
 - Displays effective batch size (batch_size × gradient_accumulation)
 - **Text/Multimodal SFT:** Shows tokens processed per step
-- **Vision/Audio/Talker/OCR:** Shows samples and notes that steps are based on samples, not tokens
+- **Vision/Audio/Talker/Vocoder/OCR:** Shows samples and notes that steps are based on samples, not tokens
 - Shows warmup percentage (typically 4% based on research)
 - Automatically adjusts batch size for larger models to fit in memory
-- Clarifies that token counts are for reference only (vision/audio/talker/OCR use samples for step calculation)
+- Clarifies that token counts are for reference only (vision/audio/talker/vocoder/OCR use samples for step calculation)
+- **Selective updates:** Update only the configs you need using `--config` option
 
 See [Chapter 34: Configuration Files](34-configuration-files.md) for more details.
 

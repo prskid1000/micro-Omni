@@ -6,9 +6,9 @@
   "ctx_len": 512,
   "lr": 5e-05,
   "wd": 0.01,
-  "warmup_steps": 2000,
-  "max_steps": 1800000,
-  "batch_size": 2,
+  "warmup_steps": 10000,
+  "max_steps": 1936100,
+  "batch_size": 4,
   "gradient_accumulation_steps": 4,
   "use_amp": true,
   "use_flash": true,
@@ -19,7 +19,7 @@
   "max_epochs": 2,
   "val_split": 0.1,
   "val_freq": 1000,
-  "checkpoint_freq": 5000,
+  "checkpoint_freq": 10000,
   "max_grad_norm": 1.0,
   "seed": 42,
   "thinker": {
@@ -39,10 +39,10 @@
   },
   "prompt": "You are an omni assistant.",
   "sft_mix": {
-    "text_path": "data/text/dialogstudio.txt",
-    "image_manifest": "data/images/annotations.json",
+    "text_path": "data/text/production_corpus.txt",
+    "image_manifest": "data/images/production_annotations.json",
     "image_root": "data/images",
-    "asr_csv": "data/audio/asr.csv"
+    "asr_csv": "data/audio/production_asr.csv"
   },
   "save_dir": "checkpoints/omni_sft_tiny"
 }

@@ -25,7 +25,8 @@ from calculate_model_size import (
     calculate_audio_encoder_params,
     calculate_vision_encoder_params,
     calculate_talker_params,
-    calculate_ocr_params
+    calculate_ocr_params,
+    calculate_vocoder_params
 )
 
 # Best practices for training duration based on dataset size
@@ -1022,8 +1023,38 @@ def update_config_file(
     print(f"✓ Updated {config_path}")
     return True
 
-def analyze_and_update_all_configs(dry_run: bool = False):
-    """Analyze all datasets and update all config files"""
+def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Optional[List[str]] = None):
+    """
+    Analyze all datasets and update config files.
+    
+    Args:
+        dry_run: If True, show what would be changed without modifying files
+        configs_to_update: List of config names to update. If None, update all.
+                         Valid names: 'thinker', 'audio_enc', 'vision', 'talker', 
+                                     'omni_sft', 'ocr', 'vocoder'
+    """
+    # Map config names to their identifiers
+    config_map = {
+        'thinker': 'thinker',
+        'audio_enc': 'audio_enc',
+        'vision': 'vision',
+        'talker': 'talker',
+        'omni_sft': 'omni_sft',
+        'ocr': 'ocr',
+        'vocoder': 'vocoder'
+    }
+    
+    # If specific configs requested, validate them
+    if configs_to_update:
+        invalid = [c for c in configs_to_update if c not in config_map]
+        if invalid:
+            print(f"Error: Invalid config names: {invalid}")
+            print(f"Valid config names: {', '.join(config_map.keys())}")
+            return
+        print(f"Updating selected configs: {', '.join(configs_to_update)}")
+    else:
+        print("Updating all configs")
+    
     print("="*60)
     print("Analyzing Datasets and Updating Configs")
     print("="*60)
@@ -1284,7 +1315,9 @@ def analyze_and_update_all_configs(dry_run: bool = False):
     
     # Stage A: Text-only (thinker_tiny.json)
     print("\n[Stage A] Text-only Training (thinker_tiny.json)")
-    if text_tokens > 0:
+    if configs_to_update and 'thinker' not in configs_to_update:
+        print("  ⏭ Skipping (not in selected configs)")
+    elif text_tokens > 0:
         # Load config to get ctx_len and model config
         config_path = "configs/thinker_tiny.json"
         ctx_len = 512  # Default
@@ -1338,7 +1371,9 @@ def analyze_and_update_all_configs(dry_run: bool = False):
     
     # Stage B: Audio encoder (audio_enc_tiny.json)
     print("\n[Stage B] Audio Encoder Training (audio_enc_tiny.json)")
-    if audio_tokens > 0:
+    if configs_to_update and 'audio_enc' not in configs_to_update:
+        print("  ⏭ Skipping (not in selected configs)")
+    elif audio_tokens > 0:
         # Audio encoder processes transcription tokens
         # Use ctx_len from config or default
         config_path = "configs/audio_enc_tiny.json"
@@ -1391,7 +1426,9 @@ def analyze_and_update_all_configs(dry_run: bool = False):
     
     # Stage C: Vision encoder (vision_tiny.json)
     print("\n[Stage C] Vision Encoder Training (vision_tiny.json)")
-    if image_tokens > 0:
+    if configs_to_update and 'vision' not in configs_to_update:
+        print("  ⏭ Skipping (not in selected configs)")
+    elif image_tokens > 0:
         # Vision encoder processes caption tokens
         config_path = "configs/vision_tiny.json"
         ctx_len = 128  # Default for captions (shorter sequences)
@@ -1443,28 +1480,35 @@ def analyze_and_update_all_configs(dry_run: bool = False):
         print("  ⚠ No image data found, skipping...")
     
     # Stage D: Talker (talker_tiny.json) - uses TTS data
-    print("\n[Stage D] Talker Training (talker_tiny.json)")
-    # Only check production and synthetic TTS files
-    tts_files = [
-        "data/audio/production_tts.csv",  # Production file
-        "data/audio/tts.csv",             # Synthetic file from make_synthetic_datasets.py
-    ]
+    # Note: TTS data is also used by vocoder, so we load it if either talker or vocoder is selected
+    needs_tts_data = (not configs_to_update or 'talker' in configs_to_update or 'vocoder' in configs_to_update)
+    
+    # Load TTS data if needed (for talker or vocoder)
     tts_samples = 0
     tts_tokens = 0
     tts_csv = None
-    for ttf in tts_files:
-        if os.path.exists(ttf):
-            count = count_audio_samples(ttf)
-            if count > tts_samples:
-                tts_samples = count
-                tts_csv = ttf
+    if needs_tts_data:
+        # Only check production and synthetic TTS files
+        tts_files = [
+            "data/audio/production_tts.csv",  # Production file
+            "data/audio/tts.csv",             # Synthetic file from make_synthetic_datasets.py
+        ]
+        for ttf in tts_files:
+            if os.path.exists(ttf):
+                count = count_audio_samples(ttf)
+                if count > tts_samples:
+                    tts_samples = count
+                    tts_csv = ttf
+        
+        # Count tokens from TTS transcriptions
+        if tts_csv:
+            print(f"  Counting tokens from TTS transcriptions...")
+            tts_tokens = count_audio_tokens(tts_csv)
     
-    # Count tokens from TTS transcriptions
-    if tts_csv:
-        print(f"  Counting tokens from TTS transcriptions...")
-        tts_tokens = count_audio_tokens(tts_csv)
-    
-    if tts_tokens > 0:
+    print("\n[Stage D] Talker Training (talker_tiny.json)")
+    if configs_to_update and 'talker' not in configs_to_update:
+        print("  ⏭ Skipping (not in selected configs)")
+    elif tts_tokens > 0:
         config_path = "configs/talker_tiny.json"
         ctx_len = 256  # Default for TTS
         model_params = 0
@@ -1519,89 +1563,100 @@ def analyze_and_update_all_configs(dry_run: bool = False):
     
     # Stage E: Multimodal SFT (omni_sft_tiny.json)
     print("\n[Stage E] Multimodal SFT Training (omni_sft_tiny.json)")
-    # Use the maximum of all token counts for multimodal training
-    multimodal_tokens = max(text_tokens, image_tokens, audio_tokens)
-    if multimodal_tokens > 0:
-        config_path = "configs/omni_sft_tiny.json"
-        ctx_len = 512  # Default for multimodal
-        model_params = 0
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                cfg = json.load(f)
-                ctx_len = cfg.get("ctx_len", 512)
-                # Calculate total model size (Thinker + projectors)
-                # Load Thinker config to calculate its size
-                thinker_cfg_path = "configs/thinker_tiny.json"
-                if os.path.exists(thinker_cfg_path):
-                    with open(thinker_cfg_path, 'r') as tf:
-                        thinker_cfg = json.load(tf)
-                        thinker_params = calculate_thinker_params(
-                            vocab_size=thinker_cfg.get("vocab_size", 32000),
-                            n_layers=thinker_cfg.get("n_layers", 4),
-                            d_model=thinker_cfg.get("d_model", 256),
-                            n_heads=thinker_cfg.get("n_heads", 4),
-                            d_ff=thinker_cfg.get("d_ff", 1024),
-                            use_gqa=thinker_cfg.get("use_gqa", False),
-                            kv_groups=thinker_cfg.get("kv_groups", 2),
-                            use_swiglu=thinker_cfg.get("use_swiglu", True)
-                        )
-                        # Add projectors (vision: 128->256, audio: 192->256)
-                        projector_params = (128 * 256 + 256) + (192 * 256 + 256)
-                        model_params = thinker_params + projector_params
-        
-        # Multimodal training uses smaller batch size and more gradient accumulation
-        # Adjust based on model size (SFT is typically larger due to full model)
-        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
-            model_params, base_batch_size=2, base_grad_accum=4, ctx_len=ctx_len
-        )
-        sft_params = calculate_params_from_tokens(multimodal_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
-        sft_params["num_samples"] = max(text_samples, image_samples, audio_samples)  # Keep for reference
-        sft_params["model_params"] = model_params  # Keep for reference
-        sft_params["batch_size"] = batch_size  # Store for config update
-        sft_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
-        
-        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
-        effective_batch = sft_params.get('effective_batch_size', batch_size * grad_accum)
-        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
-        print(f"  Tokens (max across modalities): {sft_params['num_tokens']:,} (~{sft_params['num_tokens']/1_000_000:.1f}M tokens)")
-        print(f"  Tokens/step: {sft_params.get('tokens_per_step', effective_batch * ctx_len):,}")
-        print(f"  Steps/epoch: {sft_params['steps_per_epoch']:,}")
-        print(f"  Recommended epochs: {sft_params['recommended_epochs']}")
-        print(f"  Max steps: {sft_params['max_steps']:,}")
-        warmup_pct = sft_params.get('warmup_percentage', 0) * 100
-        print(f"  Warmup steps: {sft_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
-        
-        if not dry_run:
-            update_config_file(
-                config_path,
-                sft_params,
-                preserve_keys=["sft_mix"]  # Preserve data paths
-            )
+    if configs_to_update and 'omni_sft' not in configs_to_update:
+        print("  ⏭ Skipping (not in selected configs)")
     else:
-        print("  ⚠ No multimodal data found, skipping...")
+        # Use the maximum of all token counts for multimodal training
+        multimodal_tokens = max(text_tokens, image_tokens, audio_tokens)
+        if multimodal_tokens > 0:
+            config_path = "configs/omni_sft_tiny.json"
+            ctx_len = 512  # Default for multimodal
+            model_params = 0
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                    ctx_len = cfg.get("ctx_len", 512)
+                    # Calculate total model size (Thinker + projectors)
+                    # Load Thinker config to calculate its size
+                    thinker_cfg_path = "configs/thinker_tiny.json"
+                    if os.path.exists(thinker_cfg_path):
+                        with open(thinker_cfg_path, 'r') as tf:
+                            thinker_cfg = json.load(tf)
+                            thinker_params = calculate_thinker_params(
+                                vocab_size=thinker_cfg.get("vocab_size", 32000),
+                                n_layers=thinker_cfg.get("n_layers", 4),
+                                d_model=thinker_cfg.get("d_model", 256),
+                                n_heads=thinker_cfg.get("n_heads", 4),
+                                d_ff=thinker_cfg.get("d_ff", 1024),
+                                use_gqa=thinker_cfg.get("use_gqa", False),
+                                kv_groups=thinker_cfg.get("kv_groups", 2),
+                                use_swiglu=thinker_cfg.get("use_swiglu", True)
+                            )
+                            # Add projectors (vision: 128->256, audio: 192->256)
+                            projector_params = (128 * 256 + 256) + (192 * 256 + 256)
+                            model_params = thinker_params + projector_params
+            
+            # Multimodal training uses smaller batch size and more gradient accumulation
+            # Adjust based on model size (SFT is typically larger due to full model)
+            batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+                model_params, base_batch_size=2, base_grad_accum=4, ctx_len=ctx_len
+            )
+            sft_params = calculate_params_from_tokens(multimodal_tokens, batch_size=batch_size, ctx_len=ctx_len, gradient_accumulation=grad_accum)
+            sft_params["num_samples"] = max(text_samples, image_samples, audio_samples)  # Keep for reference
+            sft_params["model_params"] = model_params  # Keep for reference
+            sft_params["batch_size"] = batch_size  # Store for config update
+            sft_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
+            
+            print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+            effective_batch = sft_params.get('effective_batch_size', batch_size * grad_accum)
+            print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
+            print(f"  Tokens (max across modalities): {sft_params['num_tokens']:,} (~{sft_params['num_tokens']/1_000_000:.1f}M tokens)")
+            print(f"  Tokens/step: {sft_params.get('tokens_per_step', effective_batch * ctx_len):,}")
+            print(f"  Steps/epoch: {sft_params['steps_per_epoch']:,}")
+            print(f"  Recommended epochs: {sft_params['recommended_epochs']}")
+            print(f"  Max steps: {sft_params['max_steps']:,}")
+            warmup_pct = sft_params.get('warmup_percentage', 0) * 100
+            print(f"  Warmup steps: {sft_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
+            
+            if not dry_run:
+                update_config_file(
+                    config_path,
+                    sft_params,
+                    preserve_keys=["sft_mix"]  # Preserve data paths
+                )
+        else:
+            print("  ⚠ No multimodal data found, skipping...")
     
     # OCR Training (ocr_tiny.json)
     print("\n[OCR] OCR Training (ocr_tiny.json)")
-    ocr_files = [
-        "data/ocr/production_ocr.csv",  # Production file
-        "data/ocr/ocr_train.csv",        # Synthetic file from make_synthetic_datasets.py
-    ]
-    ocr_samples = 0
-    ocr_tokens = 0
-    ocr_csv = None
-    for ocrf in ocr_files:
-        if os.path.exists(ocrf):
-            count = count_audio_samples(ocrf)  # OCR uses same CSV format as audio
-            if count > ocr_samples:
-                ocr_samples = count
-                ocr_csv = ocrf
+    if configs_to_update and 'ocr' not in configs_to_update:
+        print("  ⏭ Skipping (not in selected configs)")
+        ocr_samples = 0
+        ocr_tokens = 0
+        ocr_csv = None
+    else:
+        ocr_files = [
+            "data/ocr/production_ocr.csv",  # Production file
+            "data/ocr/ocr_train.csv",        # Synthetic file from make_synthetic_datasets.py
+        ]
+        ocr_samples = 0
+        ocr_tokens = 0
+        ocr_csv = None
+        for ocrf in ocr_files:
+            if os.path.exists(ocrf):
+                count = count_audio_samples(ocrf)  # OCR uses same CSV format as audio
+                if count > ocr_samples:
+                    ocr_samples = count
+                    ocr_csv = ocrf
+        
+        # Count tokens from OCR text
+        if ocr_csv:
+            print(f"  Counting tokens from OCR text...")
+            ocr_tokens = count_ocr_tokens(ocr_csv)
     
-    # Count tokens from OCR text
-    if ocr_csv:
-        print(f"  Counting tokens from OCR text...")
-        ocr_tokens = count_ocr_tokens(ocr_csv)
-    
-    if ocr_tokens > 0:
+    if configs_to_update and 'ocr' not in configs_to_update:
+        pass  # Already skipped above
+    elif ocr_tokens > 0:
         config_path = "configs/ocr_tiny.json"
         ctx_len = 128  # Default for OCR (short text sequences)
         model_params = 0
@@ -1657,6 +1712,58 @@ def analyze_and_update_all_configs(dry_run: bool = False):
     else:
         print("  ⚠ No OCR data found, skipping...")
     
+    # Vocoder Training (vocoder_tiny.json) - uses TTS data
+    print("\n[Vocoder] Vocoder Training (vocoder_tiny.json)")
+    if configs_to_update and 'vocoder' not in configs_to_update:
+        print("  ⏭ Skipping (not in selected configs)")
+    # Vocoder uses same TTS data as talker
+    elif tts_tokens > 0:
+        config_path = "configs/vocoder_tiny.json"
+        model_params = 0
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                # Calculate model size (Generator only, discriminators are separate)
+                model_params = calculate_vocoder_params(
+                    n_mels=cfg.get("n_mels", 128),
+                    upsample_initial_channel=512,  # Default from HiFi-GAN
+                    upsample_rates=[8, 8, 2, 2],  # Default from HiFi-GAN
+                    resblock_kernel_sizes=[3, 7, 11]  # Default from HiFi-GAN
+                )
+        
+        # Adjust batch size and gradient accumulation based on model size
+        # Note: Vocoder training uses samples, not tokens, for step calculation
+        # Vocoder is memory-intensive due to audio waveforms, so use smaller batch
+        batch_size, grad_accum = get_optimal_batch_size_and_grad_accum(
+            model_params, base_batch_size=2, base_grad_accum=4, ctx_len=256  # Use default ctx_len for memory estimation
+        )
+        # Vocoder training: steps = samples / batch_size (not tokens / (batch_size * ctx_len))
+        vocoder_params = calculate_params_from_samples(tts_samples, batch_size=batch_size, gradient_accumulation=grad_accum)
+        vocoder_params["num_tokens"] = tts_tokens  # Keep token count for reference
+        vocoder_params["num_samples"] = tts_samples  # Keep for reference
+        vocoder_params["model_params"] = model_params  # Keep for reference
+        vocoder_params["batch_size"] = batch_size  # Store for config update
+        vocoder_params["gradient_accumulation_steps"] = grad_accum  # Store for config update
+        
+        print(f"  Model size: {model_params:,} params ({format_model_size(model_params)})")
+        effective_batch = vocoder_params.get('effective_batch_size', batch_size * grad_accum)
+        print(f"  Batch size: {batch_size} (gradient accumulation: {grad_accum}, effective: {effective_batch})")
+        print(f"  Samples: {vocoder_params['num_samples']:,} (from TTS data)")
+        print(f"  Steps/epoch: {vocoder_params['steps_per_epoch']:,} (based on samples, not tokens)")
+        print(f"  Recommended epochs: {vocoder_params['recommended_epochs']}")
+        print(f"  Max steps: {vocoder_params['max_steps']:,}")
+        warmup_pct = vocoder_params.get('warmup_percentage', 0) * 100
+        print(f"  Warmup steps: {vocoder_params['warmup_steps']:,} ({warmup_pct:.1f}% of total)")
+        
+        if not dry_run:
+            update_config_file(
+                config_path,
+                vocoder_params,
+                preserve_keys=["train_csv"]  # Preserve data path
+            )
+    else:
+        print("  ⚠ No TTS data found, skipping...")
+    
     print("\n" + "="*60)
     if dry_run:
         print("DRY RUN: No files were modified")
@@ -1678,17 +1785,49 @@ def analyze_and_update_all_configs(dry_run: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Update training configs based on actual dataset sizes"
+        description="Update training configs based on actual dataset sizes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Update all configs (default)
+  python scripts/update_configs_from_data.py
+  
+  # Update only thinker and vision configs
+  python scripts/update_configs_from_data.py --config thinker vision
+  
+  # Dry run for specific configs
+  python scripts/update_configs_from_data.py --dry-run --config audio_enc talker
+  
+  # Update only vocoder
+  python scripts/update_configs_from_data.py --config vocoder
+
+Valid config names:
+  thinker      - Text-only training (thinker_tiny.json)
+  audio_enc    - Audio encoder training (audio_enc_tiny.json)
+  vision       - Vision encoder training (vision_tiny.json)
+  talker       - Talker training (talker_tiny.json)
+  omni_sft     - Multimodal SFT training (omni_sft_tiny.json)
+  ocr          - OCR training (ocr_tiny.json)
+  vocoder      - Vocoder training (vocoder_tiny.json)
+        """
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be changed without modifying files"
     )
+    parser.add_argument(
+        "--config",
+        nargs="+",
+        choices=['thinker', 'audio_enc', 'vision', 'talker', 'omni_sft', 'ocr', 'vocoder'],
+        metavar="CONFIG",
+        help="Specific config(s) to update. Can specify multiple. If not specified, all configs are updated."
+    )
     args = parser.parse_args()
     
     analyze_and_update_all_configs(
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
+        configs_to_update=args.config
     )
 
 if __name__ == "__main__":

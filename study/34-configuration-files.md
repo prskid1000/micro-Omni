@@ -70,12 +70,30 @@ configs/
 **Recommended:** After downloading datasets, automatically update training parameters:
 
 ```bash
-# Update all configs based on actual dataset sizes
+# Update all configs based on actual dataset sizes (default)
 python scripts/update_configs_from_data.py
 
 # Preview changes without modifying files
 python scripts/update_configs_from_data.py --dry-run
+
+# Update only specific configs
+python scripts/update_configs_from_data.py --config thinker vision
+
+# Update multiple specific configs
+python scripts/update_configs_from_data.py --config audio_enc talker vocoder
+
+# Dry run for specific configs
+python scripts/update_configs_from_data.py --dry-run --config omni_sft
 ```
+
+**Supported config names:**
+- `thinker` - Text-only training (thinker_tiny.json)
+- `audio_enc` - Audio encoder training (audio_enc_tiny.json)
+- `vision` - Vision encoder training (vision_tiny.json)
+- `talker` - Talker training (talker_tiny.json)
+- `omni_sft` - Multimodal SFT training (omni_sft_tiny.json)
+- `ocr` - OCR training (ocr_tiny.json)
+- `vocoder` - Vocoder training (vocoder_tiny.json)
 
 **What gets updated:**
 - `max_steps`: Calculated using research-based formulas:
@@ -114,6 +132,10 @@ python scripts/update_configs_from_data.py --dry-run
   - TTS generation (text-audio pairs)
   - Steps = samples / batch_size
   - Same sample count recommendations as vision
+- **Vocoder training (`train_vocoder.py`):** Uses **samples** for step calculation
+  - Mel-to-audio generation (mel spectrogram-audio pairs)
+  - Steps = samples / batch_size
+  - Same sample count recommendations as vision
 - **OCR training (`train_ocr.py`):** Uses **samples** for step calculation
   - Image-text pairs
   - Steps = samples / batch_size
@@ -145,7 +167,13 @@ python scripts/update_configs_from_data.py --dry-run
 - Audio: `data/audio/production_asr.csv` or `data/audio/asr.csv`
 - TTS: `data/audio/production_tts.csv` or `data/audio/tts.csv`
 - OCR: `data/ocr/production_ocr.csv` or `data/ocr/ocr_train.csv`
-- Vocoder: Uses same audio data as TTS/ASR (no separate check)
+- Vocoder: Uses same audio data as TTS/ASR (`data/audio/production_tts.csv` or `production_asr.csv`)
+
+**Selective updates:**
+- Use `--config` to update only specific configs (e.g., `--config thinker vision`)
+- When updating specific configs, only those configs are processed (others are skipped)
+- TTS data is automatically loaded if either `talker` or `vocoder` is selected
+- All configs are updated by default if `--config` is not specified
 
 **Model size integration:**
 - The script calculates model size from config files using mathematical formulas
