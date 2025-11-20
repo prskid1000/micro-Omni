@@ -216,8 +216,8 @@ def main(cfg):
             if "scaler" in checkpoint and scaler is not None:
                 scaler.load_state_dict(checkpoint["scaler"])
             if "char_to_idx" in checkpoint:
-                ds.char_to_idx = checkpoint["char_to_idx"]
-                ds.idx_to_char = checkpoint["idx_to_char"]
+                train_ds.char_to_idx = checkpoint["char_to_idx"]
+                train_ds.idx_to_char = checkpoint["idx_to_char"]
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 4)
@@ -438,7 +438,7 @@ def main(cfg):
                 }, final_path)
                 
                 logger.info(f"Saved checkpoint: {checkpoint_path}")
-                cleanup_old_checkpoints(cfg["save_dir"], "ocr_step_", keep_last=3)
+                cleanup_old_checkpoints(cfg["save_dir"], "ocr_step_", keep_last_n=3)
             
             if step >= max_steps:
                 logger.info(f"Reached max_steps ({max_steps}), stopping training")
@@ -451,8 +451,8 @@ def main(cfg):
     final_path = os.path.join(cfg["save_dir"], "ocr.pt")
     torch.save({
         "model": model.state_dict(),
-        "char_to_idx": ds.char_to_idx,
-        "idx_to_char": ds.idx_to_char,
+        "char_to_idx": train_ds.char_to_idx,
+        "idx_to_char": train_ds.idx_to_char,
         "config": cfg
     }, final_path)
     logger.info(f"Training complete! Final model saved to: {final_path}")
