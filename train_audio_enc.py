@@ -1,5 +1,6 @@
 
 import argparse, json, os, torch
+from functools import partial
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
@@ -94,13 +95,8 @@ def main(cfg):
     if use_compile:
         print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
     
-    # Create collate function with fixed max length
-    def make_collate_fn(max_len):
-        def collate(batch):
-            return collate_mel_text_fn(batch, max_mel_length=max_len)
-        return collate
-    
-    collate_fn_with_max = make_collate_fn(max_mel_length)
+    # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
+    collate_fn_with_max = partial(collate_mel_text_fn, max_mel_length=max_mel_length)
     
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation

@@ -20,7 +20,7 @@
   "use_amp": true,
   "use_flash": true,
   "use_compile": true,
-  "num_workers": 2,
+  "num_workers": 0,
   "drop_last": true,
   "print_freq": 100,
   "max_epochs": 7,

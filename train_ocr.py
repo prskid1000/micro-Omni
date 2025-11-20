@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import torch
+from functools import partial
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
@@ -159,13 +160,8 @@ def main(cfg):
     if use_compile:
         print(f"Using fixed max_text_length={max_text_length} for CUDA graphs compatibility")
     
-    # Create collate function with fixed max length
-    def make_collate_fn(max_len):
-        def collate(batch):
-            return collate_ocr_fn(batch, max_text_length=max_len)
-        return collate
-    
-    collate_fn_with_max = make_collate_fn(max_text_length)
+    # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
+    collate_fn_with_max = partial(collate_ocr_fn, max_text_length=max_text_length)
     
     # Approximate sizes for logging (will count if needed)
     try:

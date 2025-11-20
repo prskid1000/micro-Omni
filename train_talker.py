@@ -1,5 +1,6 @@
 
 import argparse, json, os, torch
+from functools import partial
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
@@ -23,6 +24,8 @@ def main(cfg):
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("n_mels", 128)
     frame_ms = cfg.get("frame_ms", 80)
+    
+    print("Using TTSDataset (streaming, lower memory, sequential I/O)")
     
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
@@ -98,13 +101,8 @@ def main(cfg):
     if use_compile:
         print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
     
-    # Create collate function with fixed max length
-    def make_collate_fn(max_len):
-        def collate(batch):
-            return collate_mel_fn(batch, max_mel_length=max_len)
-        return collate
-    
-    collate_fn_with_max = make_collate_fn(max_mel_length)
+    # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
+    collate_fn_with_max = partial(collate_mel_fn, max_mel_length=max_mel_length)
     
     # Approximate sizes for logging (will count if needed)
     try:
