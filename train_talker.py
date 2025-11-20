@@ -349,7 +349,7 @@ def main(cfg):
                         for val_mel in val_dl:
                             val_mel = val_mel.to(device)
                             if use_amp:
-                                with autocast():
+                                with autocast(device_type='cuda'):
                                     # Batch encode all frames at once (optimized)
                                     val_idxs = rvq.encode(val_mel)  # (B,T,2)
                                     val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
@@ -407,7 +407,7 @@ def main(cfg):
                 for val_mel in val_dl:
                     val_mel = val_mel.to(device)
                     if use_amp:
-                        with autocast():
+                        with autocast(device_type='cuda'):
                             # Batch encode all frames at once (optimized)
                             val_idxs = rvq.encode(val_mel)  # (B,T,2)
                             val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0

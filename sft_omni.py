@@ -477,7 +477,7 @@ def main(cfg):
             # Forward pass with mixed precision
             try:
                 if use_amp:
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         logits = think(embeddings=batch_emb)  # (B, T, vocab)
                         # Calculate loss (mask out padding)
                         loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
@@ -741,7 +741,7 @@ def main(cfg):
                 val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
                 try:
                     if use_amp:
-                        with autocast():
+                        with autocast(device_type='cuda'):
                             val_logits = think(embeddings=val_emb)
                             val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                     else:
