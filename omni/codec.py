@@ -328,15 +328,25 @@ class HiFiGANVocoder(nn.Module):
         Returns:
             audio: (B, T_audio) or (T_audio,) audio waveform
         """
+        # Store original input info before any modifications
+        original_dim = mel.dim()
+        original_shape = mel.shape
+        
         # Handle input shape
         if mel.dim() == 2:
             mel = mel.unsqueeze(0)  # (n_mels, T) -> (1, n_mels, T)
         if mel.dim() == 3 and mel.shape[1] != self.n_mels:
             mel = mel.transpose(1, 2)  # (B, T, n_mels) -> (B, n_mels, T)
         
-        # Ensure mel is in correct range (normalized to [-1, 1] or [0, 1])
-        if mel.max() > 1.0:
-            mel = mel / (mel.max() + 1e-8) * 2.0 - 1.0  # Normalize to [-1, 1]
+        # Normalize mel to [0, 1] range for consistent training
+        # Dataset provides mel in [0, 1], but handle other ranges too
+        mel_min, mel_max = mel.min(), mel.max()
+        if mel_max > mel_min + 1e-6:
+            # Normalize to [0, 1] range
+            mel = (mel - mel_min) / (mel_max - mel_min + 1e-8)
+        else:
+            # If no variation, set to small positive value to avoid division issues
+            mel = torch.clamp(mel, min=0.0, max=1.0)
         
         # Generator forward pass
         x = self.conv_pre(mel)
@@ -356,15 +366,14 @@ class HiFiGANVocoder(nn.Module):
         
         x = torch.nn.functional.leaky_relu(x)
         x = self.conv_post(x)  # (B, 1, T_audio)
-        x = self.activation_post(x)
+        x = self.activation_post(x)  # Tanh activation: outputs in [-1, 1] range
         
         # Remove channel dimension (conv_post outputs (B, 1, T))
         x = x.squeeze(1)  # (B, 1, T_audio) -> (B, T_audio)
         
         # Ensure output is always 2D (B, T) for batch processing
         # Only remove batch dimension if input was originally 2D (single sample, no batch)
-        original_was_2d = mel.dim() == 2
-        if original_was_2d:
+        if original_dim == 2:
             x = x.squeeze(0)  # (1, T_audio) -> (T_audio,)
         
         return x

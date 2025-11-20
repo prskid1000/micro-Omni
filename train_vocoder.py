@@ -466,12 +466,16 @@ def main(cfg):
                 n_fft=n_fft,
                 hop_length=hop_length,
                 win_length=n_fft,
-                n_mels=n_mels,
-                fmin=0.0,
-                fmax=sr / 2.0
+                n_mels=n_mels
             ).to(device)
-            mel_fake = melspec(audio_fake.unsqueeze(1))[0].T  # (T_mel, n_mels)
-            mel_real = mel[:, :mel_fake.shape[0], :]  # Match length
+            # MelSpectrogram outputs (B, 1, n_mels, T_mel) when given (B, 1, T_audio)
+            mel_fake_batch = melspec(audio_fake.unsqueeze(1))  # (B, 1, n_mels, T_mel)
+            # Remove channel dimension and transpose to match mel_real format: (B, T_mel, n_mels)
+            mel_fake = mel_fake_batch.squeeze(1).transpose(1, 2)  # (B, T_mel, n_mels)
+            # Match length with mel_real
+            min_mel_len = min(mel.shape[1], mel_fake.shape[1])
+            mel_real = mel[:, :min_mel_len, :]  # (B, T_mel, n_mels)
+            mel_fake = mel_fake[:, :min_mel_len, :]  # (B, T_mel, n_mels)
             
             if use_amp:
                 with autocast(device_type='cuda'):
