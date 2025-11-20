@@ -116,6 +116,12 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 - If you want higher quality speech output
 - Griffin-Lim works fine for basic TTS, but HiFi-GAN is better
 
+**Implementation Notes:**
+- ✅ Generator correctly handles tensor dimensions (outputs `(B, T_audio)` for batches)
+- ✅ Audio loading automatically falls back to `torchaudio.load()` if torchcodec unavailable
+- ✅ Discriminator inputs properly shaped as `(B, 1, T)` automatically
+- ✅ All shape handling verified and working correctly
+
 ### Optional: OCR Training
 
 ```bash

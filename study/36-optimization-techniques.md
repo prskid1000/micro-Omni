@@ -168,6 +168,11 @@ model = torch.quantization.quantize_dynamic(
 | **VocoderDataset** | `train_vocoder.py` | CSV row streaming | No pre-loading |
 | **MixDataset** | `sft_omni.py` | All three types streaming | Combined savings |
 
+**Audio Loading:**
+- ✅ **Automatic fallback:** `load_audio()` function automatically falls back to `torchaudio.load()` if torchcodec unavailable
+- ✅ **No dependencies required:** Works with or without torchcodec package
+- ✅ **Error handling:** Gracefully handles missing audio files (skips with continue)
+
 **Implementation Details:**
 
 **Text Files:**

@@ -72,6 +72,61 @@ This prevents batches from being skipped unnecessarily when gradients are modera
 - ✅ **Token counting:** Streams line-by-line with resume support
 - ✅ **Datasets:** All use streaming `IterableDataset` (no cache files, minimal memory)
 
+### 5. Vocoder Training Issues
+
+**Symptoms:** Shape errors, audio loading failures, discriminator errors
+
+**Common Issues & Solutions:**
+
+**A. Shape Mismatch Errors:**
+```
+ValueError: too many values to unpack (expected 3)
+```
+**Cause:** Generator output shape incorrect  
+**Solution:** ✅ **Fixed** - Generator now correctly outputs `(B, T_audio)` for batches  
+**Note:** The generator properly handles dimension squeezing from `(B, 1, T_audio)` → `(B, T_audio)`
+
+**B. Audio Loading Failures:**
+```
+ImportError: TorchCodec is required for load_with_torchcodec
+```
+**Cause:** torchcodec not installed, but code tried to use it  
+**Solution:** ✅ **Fixed** - `load_audio()` now properly falls back to `torchaudio.load()` when torchcodec unavailable  
+**Note:** Audio loading works with or without torchcodec - automatic fallback implemented
+
+**C. Discriminator Input Shape Errors:**
+```
+ValueError: too many values to unpack (expected 3)
+```
+**Cause:** Audio tensor not in correct shape `(B, 1, T)` for discriminator  
+**Solution:** Ensure audio is properly unsqueezed: `audio.unsqueeze(1)` before passing to discriminator  
+**Note:** Training code handles this automatically - generator outputs `(B, T)`, then `unsqueeze(1)` creates `(B, 1, T)`
+
+**D. Dataset Loading Issues:**
+**Symptoms:** No samples loaded, empty batches  
+**Solutions:**
+- Check CSV file exists and has correct format (`wav` column required)
+- Verify audio files exist at paths specified in CSV
+- Ensure `shuffle_buffer_size` is appropriate (0 for immediate samples, >0 for shuffling)
+- Check train/val split settings (`val_split`, `_val_mode`)
+
+**Testing Dataset:**
+```python
+# Test dataset loading
+from omni.utils import VocoderDataset
+dataset = VocoderDataset(
+    csv_path="data/audio/production_tts.csv",
+    sr=16000, n_mels=128, n_fft=1024, hop_length=256,
+    cfg={"max_audio_length": 8192},
+    shuffle_buffer_size=0,  # 0 for immediate samples
+    seed=42
+)
+# Test loading a sample
+for mel, audio in dataset:
+    print(f"Mel: {mel.shape}, Audio: {audio.shape}")
+    break
+```
+
 **Checkpoint Files:**
 - Vocabulary: `{save_dir}/vocab_build_checkpoint.json`
 - Token counting: `{file_path}.token_count_checkpoint.json`

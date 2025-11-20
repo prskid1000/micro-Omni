@@ -342,6 +342,11 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 - `lr_g`, `lr_d`: Separate learning rates for generator and discriminators
 - `lambda_mel`, `lambda_fm`, `lambda_adv`: Loss weights for training
 
+**Implementation Notes:**
+- ✅ Generator correctly outputs `(B, T_audio)` shape for batch processing
+- ✅ Audio loading works with or without torchcodec (automatic fallback)
+- ✅ All tensor shapes verified and working correctly
+
 **Memory Optimization (12GB VRAM):**
 - `batch_size`: 2 (reduce to 1 if OOM)
 - `max_audio_length`: 8192 (~0.5s, reduce to 4096 if OOM)

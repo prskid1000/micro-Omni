@@ -14,7 +14,7 @@
 │   ├── audio_encoder.py      # AuT-Tiny (2.05M params)
 │   ├── vision_encoder.py     # ViT-Tiny (914K params)
 │   ├── talker.py             # Speech generator (2.24M params)
-│   ├── codec.py              # RVQ + Griffin-Lim vocoder
+│   ├── codec.py              # RVQ + Griffin-Lim vocoder + HiFi-GAN neural vocoder
 │   ├── tokenizer.py          # BPE tokenizer wrapper
 │   └── utils.py              # All utilities (RMSNorm, RoPE, training helpers, datasets, checkpoint loading)
 │
@@ -163,8 +163,10 @@ class GriffinLimVocoder:
 #### `train_vocoder.py`
 - **Optional**: HiFi-GAN vocoder training
 - **Data**: Audio files (TTS/ASR CSV)
-- **Loss**: Adversarial
+- **Loss**: Adversarial (LSGAN) + Feature Matching + Mel Loss
 - **Output**: `checkpoints/vocoder_tiny/`
+- **Architecture**: Generator (MRF blocks) + Multi-Period Discriminator + Multi-Scale Discriminator
+- **Note**: Generator correctly handles tensor dimensions, audio loading has automatic fallback
 
 #### `train_ocr.py`
 - **Optional**: OCR model training

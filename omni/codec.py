@@ -355,14 +355,19 @@ class HiFiGANVocoder(nn.Module):
             x = xs / self.num_kernels
         
         x = torch.nn.functional.leaky_relu(x)
-        x = self.conv_post(x)
+        x = self.conv_post(x)  # (B, 1, T_audio)
         x = self.activation_post(x)
         
-        # Remove batch dimension if input was 2D
-        if mel.dim() == 2 or (mel.dim() == 3 and mel.shape[0] == 1):
-            x = x.squeeze(0)
+        # Remove channel dimension (conv_post outputs (B, 1, T))
+        x = x.squeeze(1)  # (B, 1, T_audio) -> (B, T_audio)
         
-        return x.squeeze(0) if x.dim() > 1 else x
+        # Ensure output is always 2D (B, T) for batch processing
+        # Only remove batch dimension if input was originally 2D (single sample, no batch)
+        original_was_2d = mel.dim() == 2
+        if original_was_2d:
+            x = x.squeeze(0)  # (1, T_audio) -> (T_audio,)
+        
+        return x
     
     def mel_to_audio(self, mel: np.ndarray) -> np.ndarray:
         """

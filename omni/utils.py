@@ -30,7 +30,11 @@ def load_audio(path):
     """
     # Try torchaudio.load_with_torchcodec first (if available in future versions)
     if hasattr(torchaudio, 'load_with_torchcodec'):
-        return torchaudio.load_with_torchcodec(path)
+        try:
+            return torchaudio.load_with_torchcodec(path)
+        except (ImportError, AttributeError, TypeError, RuntimeError):
+            # Fall through to next method if torchcodec is not available
+            pass
     
     # Try torchcodec.decoders.AudioDecoder (recommended API)
     try:
