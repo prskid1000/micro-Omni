@@ -29,6 +29,7 @@
   "checkpoint_freq": 1000,
   "val_freq": 500,
   "seed": 42,
-  "use_compile": false
+  "use_compile": false,
+  "max_text_length": 256
 }
 

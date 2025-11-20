@@ -30,6 +30,7 @@
   "seed": 42,
   "ctc_vocab_size": 98,
   "max_text_len": 64,
+  "max_mel_length": 6000,
   "train_csv": "data/audio/production_asr.csv",
   "save_dir": "checkpoints/audio_enc_tiny"
 }

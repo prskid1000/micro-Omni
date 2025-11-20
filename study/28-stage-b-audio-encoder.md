@@ -357,6 +357,37 @@ audio_encoder.load_state_dict(checkpoint['enc'])
 
 ---
 
+## ⚙️ Configuration
+
+**Key Parameters for CUDA Graphs Compatibility:**
+
+```json
+{
+  "use_compile": true,
+  "max_mel_length": 6000,  // Fixed maximum mel length (frames)
+  "sample_rate": 16000,
+  "frame_hop": 160
+}
+```
+
+**Calculating `max_mel_length`:**
+- Frame rate = sample_rate / hop_length = 16000 / 160 = 100 frames/second
+- For 60 seconds: 60 × 100 = 6000 frames
+- For 20 seconds: 20 × 100 = 2000 frames (default: 2048)
+
+**Why Fixed Length?**
+- CUDA graphs require uniform batch shapes
+- Prevents "tensor size mismatch" errors
+- Enables 10-20% speedup with compilation
+
+**Check Your Dataset:**
+```bash
+# Analyze actual mel lengths
+python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
+```
+
+---
+
 ## 💻 Running Stage B
 
 ```bash

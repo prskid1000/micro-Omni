@@ -50,6 +50,12 @@ python train_audio_enc.py --config configs/audio_enc_tiny.json
 # Output: checkpoints/audio_enc_tiny/audio_enc.pt
 ```
 
+**Configuration Note:**
+- If using `use_compile: true`, ensure `max_mel_length` is set appropriately
+- Default: 2048 frames (~20 seconds)
+- For longer audio: Increase `max_mel_length` (e.g., 6000 for 60 seconds)
+- Check your dataset: `python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv`
+
 ### Stage C: Vision Encoder
 
 ```bash
@@ -69,6 +75,12 @@ python train_talker.py --config configs/talker_tiny.json
 # Target: Intelligible speech
 # Output: checkpoints/talker_tiny/talker.pt + rvq_codec.pt
 ```
+
+**Configuration Note:**
+- If using `use_compile: true`, ensure `max_mel_length` is set appropriately
+- Talker uses different frame rate (12.5 fps with frame_ms=80) than audio encoder (100 fps)
+- For 60 seconds: `max_mel_length: 750` frames
+- Default: 2048 frames (covers ~164 seconds for talker)
 
 ### Stage E: Multimodal SFT
 
@@ -108,6 +120,11 @@ python train_ocr.py --config configs/ocr_tiny.json
 # Output: checkpoints/ocr_tiny/ocr.pt
 # Note: Can be used with --ocr flag in inference
 ```
+
+**Configuration Note:**
+- If using `use_compile: true`, ensure `max_text_length` is set appropriately
+- Default: 256 characters
+- Adjust based on your text lengths (short: 128, long: 512)
 
 **When to train:**
 - If you need text extraction from images

@@ -507,6 +507,8 @@ for batch in dataloader:
     
     # 1. Convert audio to mel
     mel = audio_to_mel(audio)  # (B, T, 128)
+    # Note: All mel spectrograms are padded to max_mel_length
+    # for CUDA graphs compatibility (when use_compile: true)
     
     # 2. Encode mel with RVQ (frozen!)
     codes = rvq.encode(mel)  # (B, T, 2)
@@ -535,6 +537,15 @@ for batch in dataloader:
     total_loss.backward()
     optimizer.step()
 ```
+
+**CUDA Graphs Compatibility:**
+- When using `use_compile: true`, all batches must have uniform shapes
+- Configure `max_mel_length` in config (default: 2048 frames)
+- Note: Talker uses different frame rate (12.5 Hz with frame_ms=80)
+- For 60 seconds: `max_mel_length: 750` frames (60 × 12.5)
+- All mel spectrograms are padded/truncated to this fixed length
+- Prevents "tensor size mismatch" errors with CUDA graphs compilation
+- See Chapter 34 (Configuration Files) for details
 
 **Key Training Details:**
 
@@ -661,6 +672,8 @@ Result: Complete text-to-speech system!
 | **Codebooks** | 2 |
 | **Output** | 2 × 128 logits |
 | **Parameters** | ~10.1M |
+| **max_mel_length** | 2048 frames (default) - for CUDA graphs compatibility |
+| **Frame rate** | 12.5 Hz (with frame_ms=80) |
 
 ## 🔄 Generation Process
 

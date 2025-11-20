@@ -13,14 +13,32 @@ from omni.utils import (
 )
 from tqdm import tqdm
 
-def collate_mel_fn(batch):
-    """Collate function for variable-length mel spectrograms"""
-    # Pad sequences to same length
-    max_len = max(m.shape[0] for m in batch)
+def collate_mel_fn(batch, max_mel_length=None):
+    """
+    Collate function that pads all mel spectrograms to a fixed maximum length.
+    This ensures uniform batch sizes for CUDA graphs compilation.
+    
+    Args:
+        batch: List of mel spectrograms
+        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
+    """
     n_mels = batch[0].shape[1]
+    
+    # Use fixed max length if provided, otherwise use batch max
+    if max_mel_length is not None:
+        max_len = max_mel_length
+    else:
+        max_len = max(m.shape[0] for m in batch)
+    
     padded = []
     for m in batch:
-        pad_len = max_len - m.shape[0]
+        current_len = m.shape[0]
+        if current_len > max_len:
+            # Truncate if longer than max (shouldn't happen with proper config)
+            m = m[:max_len]
+            current_len = max_len
+        
+        pad_len = max_len - current_len
         if pad_len > 0:
             m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
         padded.append(m)
@@ -106,6 +124,20 @@ def main(cfg):
     val_ds._val_split = val_split
     val_ds._val_mode = True  # Validation mode
     
+    # Fixed maximum mel length for uniform batch sizes (required for CUDA graphs)
+    # This ensures all batches have the same shape, preventing CUDA graphs errors
+    max_mel_length = cfg.get("max_mel_length", 2048)  # Default: 2048 frames (~20s at 100Hz)
+    if use_compile:
+        print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
+    
+    # Create collate function with fixed max length
+    def make_collate_fn(max_len):
+        def collate(batch):
+            return collate_mel_fn(batch, max_mel_length=max_len)
+        return collate
+    
+    collate_fn_with_max = make_collate_fn(max_mel_length)
+    
     # Approximate sizes for logging (will count if needed)
     try:
         total_size = train_ds.get_length()
@@ -116,8 +148,8 @@ def main(cfg):
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
     # Use module-level collate function for Windows multiprocessing compatibility
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_mel_fn)
-    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=collate_mel_fn)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn_with_max)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=collate_fn_with_max)
     
     # Initialize logger
     logger = SimpleLogger("Talker")
@@ -159,7 +191,7 @@ def main(cfg):
             "shuffle": True,
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": cfg.get("drop_last", True),
-            "collate_fn": collate_mel_fn
+            "collate_fn": collate_fn_with_max
         }
     )
     if new_train_dl is not None:

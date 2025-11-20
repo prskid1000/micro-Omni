@@ -25,16 +25,33 @@ from omni.utils import (
 from tqdm import tqdm
 
 
-def collate_ocr_fn(batch):
-    """Collate function for OCR dataset"""
+def collate_ocr_fn(batch, max_text_length=None):
+    """
+    Collate function that pads all text sequences to a fixed maximum length.
+    This ensures uniform batch sizes for CUDA graphs compilation.
+    
+    Args:
+        batch: List of (image, text) tuples
+        max_text_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
+    """
     images, texts = zip(*batch)
     images = torch.stack(images)
     
-    # Pad texts to same length
-    max_text_len = max(len(t) for t in texts)
+    # Use fixed max length if provided, otherwise use batch max
+    if max_text_length is not None:
+        max_text_len = max_text_length
+    else:
+        max_text_len = max(len(t) for t in texts)
+    
     padded_texts = []
     for t in texts:
-        pad_len = max_text_len - len(t)
+        current_len = len(t)
+        if current_len > max_text_len:
+            # Truncate if longer than max (shouldn't happen with proper config)
+            t = t[:max_text_len]
+            current_len = max_text_len
+        
+        pad_len = max_text_len - current_len
         if pad_len > 0:
             t = t + [0] * pad_len  # Pad with 0 (blank/PAD token)
         padded_texts.append(t)
@@ -136,6 +153,20 @@ def main(cfg):
     val_ds._val_split = val_split
     val_ds._val_mode = True  # Validation mode
     
+    # Fixed maximum text length for uniform batch sizes (required for CUDA graphs)
+    # This ensures all batches have the same shape, preventing CUDA graphs errors
+    max_text_length = cfg.get("max_text_length", 256)  # Default: 256 characters
+    if use_compile:
+        print(f"Using fixed max_text_length={max_text_length} for CUDA graphs compatibility")
+    
+    # Create collate function with fixed max length
+    def make_collate_fn(max_len):
+        def collate(batch):
+            return collate_ocr_fn(batch, max_text_length=max_len)
+        return collate
+    
+    collate_fn_with_max = make_collate_fn(max_text_length)
+    
     # Approximate sizes for logging (will count if needed)
     try:
         total_size = train_ds.get_length()
@@ -151,7 +182,7 @@ def main(cfg):
         shuffle=False,
         num_workers=cfg.get("num_workers", 2),
         drop_last=True,
-        collate_fn=collate_ocr_fn
+        collate_fn=collate_fn_with_max
     )
     val_dl = DataLoader(
         val_ds,
@@ -159,7 +190,7 @@ def main(cfg):
         shuffle=False,
         num_workers=cfg.get("num_workers", 2),
         drop_last=False,
-        collate_fn=collate_ocr_fn
+        collate_fn=collate_fn_with_max
     )
     
     # Logger
@@ -197,7 +228,7 @@ def main(cfg):
             "shuffle": True,
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": True,
-            "collate_fn": collate_ocr_fn
+            "collate_fn": collate_fn_with_max
         }
     )
     if new_train_dl is not None:

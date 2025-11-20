@@ -205,6 +205,72 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 
 ---
 
+## 🔧 CUDA Graphs Compatibility (Fixed-Length Padding)
+
+**Important:** When using `use_compile: true` with CUDA graphs backend, all batches must have uniform tensor shapes. Variable-length sequences are automatically padded to fixed maximum lengths.
+
+### Audio Training (`train_audio_enc.py`, `train_talker.py`)
+
+```json
+{
+  "use_compile": true,
+  "max_mel_length": 6000  // Fixed maximum mel spectrogram length (frames)
+}
+```
+
+**Calculation:**
+- **Audio Encoder:** Frame rate = 16000 Hz / 160 hop_length = 100 frames/second
+  - 60 seconds = 6000 frames
+  - 20 seconds = 2000 frames (default: 2048)
+- **Talker:** Frame rate = 16000 Hz / 1280 hop_length = 12.5 frames/second (with frame_ms=80)
+  - 60 seconds = 750 frames
+  - 20 seconds = 250 frames (default: 2048)
+
+**Recommendations:**
+- **Short clips (1-10s):** `max_mel_length: 2048` (20.5s for audio encoder, ~164s for talker)
+- **Medium clips (10-30s):** `max_mel_length: 3000-4000`
+- **Long clips (30-60s):** `max_mel_length: 6000` (60s for audio encoder)
+- **Very long clips (>60s):** Increase proportionally or truncate
+
+**Memory Impact:**
+- Each frame: ~128 mel bins × 4 bytes = 512 bytes
+- Per sample: `max_mel_length × 512 bytes`
+- Per batch: `batch_size × max_mel_length × 512 bytes`
+
+**Check your dataset:**
+```bash
+# Analyze actual mel lengths in your dataset
+python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
+```
+
+### OCR Training (`train_ocr.py`)
+
+```json
+{
+  "use_compile": true,
+  "max_text_length": 256  // Fixed maximum text sequence length (characters)
+}
+```
+
+**Recommendations:**
+- **Short text (1-50 chars):** `max_text_length: 128`
+- **Medium text (50-200 chars):** `max_text_length: 256` (default)
+- **Long text (200-500 chars):** `max_text_length: 512`
+- **Very long text (>500 chars):** Increase or truncate
+
+**Why Fixed Length?**
+- CUDA graphs require fixed tensor shapes for optimal performance
+- Variable-length batches cause "tensor size mismatch" errors
+- Fixed padding ensures all batches have identical shapes
+- Enables 10-20% speedup with CUDA graphs compilation
+
+**What Happens:**
+- Sequences shorter than max: Padded with zeros
+- Sequences longer than max: Truncated (shouldn't happen with proper config)
+- All batches: Uniform shape = CUDA graphs compatible
+
+---
+
 ## 💡 Tuning Tips
 
 **For faster training:**
@@ -219,8 +285,14 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 
 **Memory issues:**
 - Decrease `batch_size`
-- Reduce `ctx_len`
+- Reduce `ctx_len` or `max_mel_length` / `max_text_length`
 - Use gradient accumulation
+
+**CUDA graphs compatibility:**
+- Set `max_mel_length` / `max_text_length` based on your dataset
+- Use `scripts/check_mel_lengths.py` to find optimal values
+- Round up to nearest 256 for better memory alignment
+- Consider 99.5th percentile to cover most data without excessive padding
 
 **Automatic tuning:**
 - Use `scripts/update_configs_from_data.py` to automatically set epochs/steps based on your dataset size and model architecture
@@ -300,11 +372,17 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 - `decoder_d_model`, `decoder_layers`, `decoder_heads`: Text decoder architecture
 - `train_csv`: Path to OCR CSV file (format: `image,text`)
 - `image_root`: Root directory for image files
+- `max_text_length`: Fixed maximum text sequence length for CUDA graphs compatibility (default: 256)
 
 **Architecture:**
 - Vision Encoder: ViT-Tiny (processes image patches)
 - Text Decoder: Autoregressive decoder (generates text from visual features)
 - Training: Teacher forcing with cross-entropy loss
+
+**CUDA Graphs Compatibility:**
+- `max_text_length`: Required when `use_compile: true` to ensure uniform batch sizes
+- All text sequences are padded/truncated to this fixed length
+- Prevents "tensor size mismatch" errors with CUDA graphs compilation
 
 ---
 

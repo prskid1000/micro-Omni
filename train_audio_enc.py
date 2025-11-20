@@ -7,13 +7,33 @@ from omni.audio_encoder import AudioEncoderTiny
 from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, cleanup_old_checkpoints, ValidationSkipSamplesContext
 from tqdm import tqdm
 
-def collate_fn(batch):
+def collate_fn(batch, max_mel_length=None):
+    """
+    Collate function that pads all mel spectrograms to a fixed maximum length.
+    This ensures uniform batch sizes for CUDA graphs compilation.
+    
+    Args:
+        batch: List of (mel, text) tuples
+        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
+    """
     mels, texts = zip(*batch)
-    max_len = max(m.shape[0] for m in mels)
     n_mels = mels[0].shape[1]
+    
+    # Use fixed max length if provided, otherwise use batch max
+    if max_mel_length is not None:
+        max_len = max_mel_length
+    else:
+        max_len = max(m.shape[0] for m in mels)
+    
     padded_mels = []
     for m in mels:
-        pad_len = max_len - m.shape[0]
+        current_len = m.shape[0]
+        if current_len > max_len:
+            # Truncate if longer than max (shouldn't happen with proper config)
+            m = m[:max_len]
+            current_len = max_len
+        
+        pad_len = max_len - current_len
         if pad_len > 0:
             m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
         padded_mels.append(m)
@@ -100,6 +120,20 @@ def main(cfg):
     if accumulation_steps > 1:
         print(f"Gradient accumulation: {accumulation_steps} steps")
 
+    # Fixed maximum mel length for uniform batch sizes (required for CUDA graphs)
+    # This ensures all batches have the same shape, preventing CUDA graphs errors
+    max_mel_length = cfg.get("max_mel_length", 2048)  # Default: 2048 frames (~20s at 100Hz)
+    if use_compile:
+        print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
+    
+    # Create collate function with fixed max length
+    def make_collate_fn(max_len):
+        def collate(batch):
+            return collate_fn(batch, max_mel_length=max_len)
+        return collate
+    
+    collate_fn_with_max = make_collate_fn(max_mel_length)
+    
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     
@@ -136,8 +170,8 @@ def main(cfg):
         train_size = val_size = None  # Unknown size
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn)
-    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=collate_fn)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn_with_max)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=collate_fn_with_max)
     
     # Initialize logger
     logger = SimpleLogger("AudioEncoder")
@@ -179,7 +213,7 @@ def main(cfg):
             "shuffle": True,
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": cfg.get("drop_last", True),
-            "collate_fn": collate_fn
+            "collate_fn": collate_fn_with_max
         }
     )
     if new_train_dl is not None:

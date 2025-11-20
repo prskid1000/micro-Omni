@@ -438,6 +438,8 @@ for batch in dataloader:
     
     # 1. Extract mel spectrogram
     mel = audio_to_mel(audio)  # (B, T, 128)
+    # Note: All mel spectrograms are padded to max_mel_length
+    # for CUDA graphs compatibility (when use_compile: true)
     
     # 2. Encode with audio encoder
     embeddings = audio_encoder(mel)  # (B, T/8, 192)
@@ -452,6 +454,13 @@ for batch in dataloader:
     loss.backward()
     optimizer.step()
 ```
+
+**CUDA Graphs Compatibility:**
+- When using `use_compile: true`, all batches must have uniform shapes
+- Configure `max_mel_length` in config (default: 2048 frames = ~20 seconds)
+- All mel spectrograms are padded/truncated to this fixed length
+- Prevents "tensor size mismatch" errors with CUDA graphs compilation
+- See Chapter 34 (Configuration Files) for details
 
 ---
 
@@ -544,6 +553,7 @@ Audio encoder enabled multimodal understanding! ✓
 | **Layers** | 4 |
 | **Heads** | 3 |
 | **Parameters** | ~2.05M |
+| **max_mel_length** | 2048 frames (default, ~20s) - for CUDA graphs compatibility |
 
 ## 🎓 Training
 

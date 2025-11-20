@@ -56,6 +56,46 @@ model.gradient_checkpointing_enable()
 pip install flash-attn
 ```
 
+### 5. CUDA Graphs Compilation
+
+**What:** Compile models with `torch.compile()` using CUDA graphs backend  
+**Benefit:** 10-20% speedup, reduced overhead  
+**Requirement:** Fixed-length padding for variable-length sequences
+
+```json
+{
+  "use_compile": true,
+  "max_mel_length": 6000,    // For audio training (frames)
+  "max_text_length": 256     // For OCR training (characters)
+}
+```
+
+**Why Fixed Length?**
+- CUDA graphs require uniform tensor shapes across batches
+- Variable-length sequences cause "tensor size mismatch" errors
+- Fixed padding ensures all batches have identical shapes
+
+**Implementation:**
+- Audio training: All mel spectrograms padded/truncated to `max_mel_length`
+- OCR training: All text sequences padded/truncated to `max_text_length`
+- Automatic in collate functions when `use_compile: true`
+
+**Memory Trade-off:**
+- Slightly more memory due to padding
+- But enables CUDA graphs optimization (10-20% faster)
+- Worth it for most use cases
+
+**Determining Optimal Values:**
+```bash
+# Check actual lengths in your dataset
+python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
+
+# Recommendations:
+# - Set to 99.5th percentile to cover most data
+# - Round up to nearest 256 for memory alignment
+# - Default: 2048 frames (~20s) for audio, 256 chars for text
+```
+
 ---
 
 ## 🎯 Inference Optimizations

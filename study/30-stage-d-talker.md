@@ -59,9 +59,27 @@ Predict: [67, 103] (next frame)
   
   "data_path": "data/audio/tts/",
   "batch_size": 16, "num_epochs": 25,
-  "learning_rate": 3e-4
+  "learning_rate": 3e-4,
+  
+  "use_compile": true,
+  "max_mel_length": 6000,  // Fixed maximum mel length (frames)
+  "frame_ms": 80
 }
 ```
+
+**Key Parameters for CUDA Graphs Compatibility:**
+
+**Calculating `max_mel_length` for Talker:**
+- Frame rate = sample_rate / hop_length = 16000 / (16000 × 0.08) = 12.5 frames/second
+- For 60 seconds: 60 × 12.5 = 750 frames
+- For 20 seconds: 20 × 12.5 = 250 frames (default: 2048)
+
+**Note:** Talker uses different frame rate than audio encoder due to `frame_ms=80` parameter.
+
+**Why Fixed Length?**
+- CUDA graphs require uniform batch shapes
+- Prevents "tensor size mismatch" errors
+- Enables 10-20% speedup with compilation
 
 ---
 
