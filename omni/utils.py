@@ -1297,12 +1297,9 @@ class VocoderDataset(IterableDataset):
                     skipped += 1
                     continue
                 
-                path = row.get("wav") or row.get("audio")
-                if not path:
-                    continue
-                
                 try:
-                    audio, sr = load_audio(path)
+                    # Use same approach as TTSDataset - direct access to "wav" column
+                    audio, sr = load_audio(row["wav"])
                     if sr != self.sr:
                         audio = torchaudio.transforms.Resample(sr, self.sr)(audio)
                     if audio.shape[0] > 1:

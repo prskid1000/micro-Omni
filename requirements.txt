@@ -4,6 +4,7 @@
 torch
 torchaudio
 torchvision
+torchcodec
 numpy
 scipy
 Pillow
