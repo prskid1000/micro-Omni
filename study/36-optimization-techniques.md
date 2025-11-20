@@ -219,11 +219,13 @@ def __iter__(self):
 - ✅ No cache files needed - simpler and cleaner
 - ✅ True streaming - data processed on-demand
 - ✅ Efficient resuming via `skip_samples` parameter (automatically handled by `setup_resume_data_loading()`)
+- ✅ **Automatic skip_samples reset** - All `IterableDataset` classes automatically reset `skip_samples` to 0 after each iteration completes
 - ✅ Worker sharding for multi-process data loading
 - ✅ Buffer-based shuffling for randomization (controlled by `shuffle_buffer_size` config)
 - ✅ Automatic checkpoint detection and resuming (via `load_checkpoint()`)
 - ✅ Proper validation on full dataset (via `ValidationSkipSamplesContext`)
 - ✅ **Note:** IterableDatasets handle shuffling internally - do not use `shuffle` parameter in DataLoader
+- ✅ **Dataset exhaustion handling** - Gracefully handles datasets smaller than one epoch or total epochs
 
 ### 2. Efficient Tokenizer Training
 

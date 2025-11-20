@@ -194,6 +194,35 @@ python train_text.py --config configs/thinker_tiny.json
 - Training continues through all epochs until `max_steps` is reached
 - Model is saved at the end of each epoch for checkpointing
 - Training only stops when `max_steps` is reached or manually interrupted
+- DataLoader is recreated for each new epoch (IterableDatasets are exhausted after one iteration)
+- `skip_samples` is automatically reset to 0 by the dataset after each iteration completes
+- This ensures each epoch starts from the beginning of the dataset
+
+**Dataset exhaustion handling:**
+The training scripts handle three scenarios gracefully:
+
+1. **Dataset exceeds max_steps:**
+   - Training stops when `max_steps` is reached (checked after each epoch)
+   - All available data is processed up to the step limit
+   - Model is saved at the final checkpoint
+
+2. **Dataset smaller than one epoch:**
+   - Processes all available batches in the epoch
+   - Dataset automatically resets `skip_samples` to 0 after iteration completes
+   - Next epoch starts from the beginning of the dataset
+   - Training continues until `max_steps` is reached
+
+3. **Dataset smaller than total epochs:**
+   - Each epoch processes all available data from the beginning
+   - `skip_samples` automatically resets to 0 after each iteration
+   - Training continues through all epochs until `max_steps` is reached
+   - Useful for small datasets that need multiple passes
+
+**Automatic skip_samples reset:**
+- All `IterableDataset` classes automatically reset `skip_samples` to 0 after the first iteration completes
+- This happens in the dataset's `__iter__` method when the generator is exhausted
+- Ensures subsequent epochs always start from the beginning of the dataset
+- Works correctly even if the dataset is exhausted mid-epoch
 
 **Validation during resume:**
 - Validation always processes the full validation set

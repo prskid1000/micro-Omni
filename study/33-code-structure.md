@@ -330,6 +330,11 @@ All training scripts use consistent gradient handling:
   - Returns `(start_epoch, start_batch_idx)` tuple
   - Used for progress bar initialization and epoch tracking
 
+- **Automatic skip_samples reset**: All `IterableDataset` classes automatically reset `skip_samples` to 0 after each iteration completes
+  - Implemented in the `__iter__` method of each dataset class
+  - Ensures subsequent epochs always start from the beginning
+  - Works correctly even if dataset is exhausted mid-epoch
+
 ### Validation
 - **`ValidationSkipSamplesContext`**: Context manager for validation loops
   - Temporarily resets `skip_samples` to 0 for validation
@@ -340,6 +345,8 @@ All training scripts use consistent gradient handling:
 - ✅ Consistent resuming logic across all training scripts
 - ✅ Automatic checkpoint detection (no `--resume` flag needed)
 - ✅ Proper validation on full dataset regardless of training resumption
+- ✅ Automatic dataset reset for multi-epoch training
+- ✅ Graceful handling of datasets smaller than one epoch or total epochs
 - ✅ Reduced code duplication and easier maintenance
 
 ---

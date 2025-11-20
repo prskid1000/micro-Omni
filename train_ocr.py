@@ -260,6 +260,18 @@ def main(cfg):
     model.train()
     
     for epoch in range(start_epoch, max_epochs):
+        # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
+        # skip_samples is automatically reset to 0 by the dataset after first iteration
+        if epoch > start_epoch:
+            train_dl = DataLoader(
+                train_ds,
+                batch_size=cfg.get("batch_size", 4),
+                shuffle=False,
+                num_workers=cfg.get("num_workers", 2),
+                drop_last=True,
+                collate_fn=collate_fn_with_max
+            )
+        
         # Create progress bar with correct starting position when resuming mid-epoch
         remaining_epochs = max_epochs - epoch - 1
         pbar_desc = f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step}"

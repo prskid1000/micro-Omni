@@ -434,6 +434,14 @@ def main(cfg):
         logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
     for epoch in range(start_epoch, max_epochs):
+        # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
+        # skip_samples is automatically reset to 0 by the dataset after first iteration
+        if epoch > start_epoch:
+            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, 
+                                 num_workers=cfg.get("num_workers", 2), 
+                                 drop_last=cfg.get("drop_last", True), 
+                                 collate_fn=mix_collate_fn)
+        
         logger.epoch_start(epoch)
         think.train()
         proj_a.train()

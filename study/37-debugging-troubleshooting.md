@@ -134,6 +134,13 @@ python train_text.py --config configs/thinker_tiny.json
 - ✅ Recreates DataLoader to ensure workers pick up new skip_samples
 - ✅ Initializes progress bar at correct position
 - ✅ Validation always uses full validation set (skip_samples temporarily reset)
+- ✅ **Automatic skip_samples reset** - Dataset automatically resets `skip_samples` to 0 after each iteration completes
+- ✅ **Dataset exhaustion handling** - Gracefully handles datasets smaller than one epoch or total epochs
+
+**Dataset Exhaustion Scenarios:**
+1. **Dataset exceeds max_steps:** Training stops when `max_steps` is reached
+2. **Dataset smaller than one epoch:** Processes all available batches, resets, next epoch starts from beginning
+3. **Dataset smaller than total epochs:** Each epoch processes all data from beginning, training continues until `max_steps`
 
 **Checkpoint Format:**
 ```python

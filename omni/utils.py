@@ -846,6 +846,11 @@ class TextDataset(IterableDataset):
         if buffer:
             rng.shuffle(buffer)
             yield from buffer
+        
+        # Reset skip_samples to 0 after first iteration (only use for resuming)
+        # This allows subsequent epochs to start from the beginning
+        if self.skip_samples > 0:
+            self.skip_samples = 0
 
 class ASRDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
@@ -915,6 +920,11 @@ class ASRDataset(IterableDataset):
         if buffer:
             rng.shuffle(buffer)
             yield from buffer
+        
+        # Reset skip_samples to 0 after first iteration (only use for resuming)
+        # This allows subsequent epochs to start from the beginning
+        if self.skip_samples > 0:
+            self.skip_samples = 0
 
 class OCRDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
@@ -1012,6 +1022,11 @@ class OCRDataset(IterableDataset):
         if buffer:
             rng.shuffle(buffer)
             yield from buffer
+        
+        # Reset skip_samples to 0 after first iteration (only use for resuming)
+        # This allows subsequent epochs to start from the beginning
+        if self.skip_samples > 0:
+            self.skip_samples = 0
 
 class TTSDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
@@ -1082,6 +1097,11 @@ class TTSDataset(IterableDataset):
         if buffer:
             rng.shuffle(buffer)
             yield from buffer
+        
+        # Reset skip_samples to 0 after first iteration (only use for resuming)
+        # This allows subsequent epochs to start from the beginning
+        if self.skip_samples > 0:
+            self.skip_samples = 0
 
 class ImgCapDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
@@ -1148,6 +1168,11 @@ class ImgCapDataset(IterableDataset):
         if buffer:
             rng.shuffle(buffer)
             yield from buffer
+        
+        # Reset skip_samples to 0 after first iteration (only use for resuming)
+        # This allows subsequent epochs to start from the beginning
+        if self.skip_samples > 0:
+            self.skip_samples = 0
 
 class VocoderDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
@@ -1233,6 +1258,11 @@ class VocoderDataset(IterableDataset):
         if buffer:
             rng.shuffle(buffer)
             yield from buffer
+        
+        # Reset skip_samples to 0 after first iteration (only use for resuming)
+        # This allows subsequent epochs to start from the beginning
+        if self.skip_samples > 0:
+            self.skip_samples = 0
 
 class MixDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
@@ -1333,3 +1363,8 @@ class MixDataset(IterableDataset):
         if buffer:
             rng.shuffle(buffer)
             yield from buffer
+        
+        # Reset skip_samples to 0 after first iteration (only use for resuming)
+        # This allows subsequent epochs to start from the beginning
+        if self.skip_samples > 0:
+            self.skip_samples = 0
