@@ -62,9 +62,16 @@ python train_audio_enc.py --config configs/audio_enc_tiny.json
 python train_vision.py --config configs/vision_tiny.json
 
 # Time: 4-8 hours
-# Target: Accuracy > 70%
+# Target: Low contrastive loss (good vision-language alignment)
 # Output: checkpoints/vision_tiny/vision.pt
 ```
+
+**Configuration Note:**
+- Uses trained tokenizer from Stage A (`thinker_ckpt/tokenizer.model`)
+- Configurable text encoding: `use_thinker_for_text` (default: true)
+  - `true`: Uses frozen Thinker model for contextual embeddings (recommended)
+  - `false`: Uses simple tokenizer + embedding layer (lighter option)
+- If tokenizer not found, trains new one from image captions
 
 ### Stage D: Talker + RVQ
 

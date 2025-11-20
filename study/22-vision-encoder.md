@@ -529,60 +529,78 @@ Total: ~914K parameters
 
 ### Pretraining Strategy
 
-**Supervised Image Classification:**
+**Contrastive Learning (CLIP-style):**
 
 ```
-Goal: Teach vision encoder to understand images
+Goal: Teach vision encoder to align images with text descriptions
 
-Task: Image → Category label
+Task: Image-Caption contrastive learning
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Input: Image of a cat
-Output: Label "cat" (from 1000 ImageNet categories)
+Input: Image + Caption pair
+Example: [Cat photo] + "A cat sitting on a mat"
 
 This forces the encoder to:
 ✅ Learn visual features (edges, textures, shapes)
 ✅ Understand objects and parts
-✅ Capture semantic meaning
-✅ Ignore irrelevant details (background, lighting)
+✅ Align visual concepts with text descriptions
+✅ Capture semantic meaning shared between vision and language
 
 Perfect pretraining for multimodal understanding!
+Uses trained tokenizer from Stage A for consistent text encoding.
 ```
 
 **Training Loop:**
 
 ```python
 for batch in dataloader:
-    images, labels = batch  # (B, 3, 224, 224), (B,)
+    images, captions = batch  # (B, 3, 224, 224), (B,) list of strings
     
-    # 1. Divide into patches
-    patches = patchify(images)  # (B, 196, 768)
+    # 1. Encode images
+    cls_output = vit(images)  # (B, 128) - CLS token
+    img_emb = img_proj(cls_output)  # (B, embed_dim)
+    img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
     
-    # 2. Embed patches
-    patch_embeddings = patch_embed(patches)  # (B, 196, 128)
+    # 2. Encode captions (configurable: Thinker or simple embedding)
+    text_embs = []
+    for caption in captions:
+        token_ids = tokenizer.encode(caption)  # Use trained tokenizer
+        token_ids = [1] + token_ids[:ctx_len-1]  # Add BOS, truncate
+        
+        if use_thinker_for_text:
+            # Option 1: Use Thinker model (frozen) for contextual embeddings
+            token_tensor = torch.tensor(token_ids).unsqueeze(0)  # (1, T)
+            with torch.no_grad():
+                text_emb = think(idx=token_tensor)  # (1, T, thinker_d_model)
+            text_emb = text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
+        else:
+            # Option 2: Use simple token embeddings
+            token_emb = text_embed(torch.tensor(token_ids))  # (T, d_model)
+            text_emb = token_emb.mean(dim=0)  # (d_model,)
+        
+        text_embs.append(text_emb)
+    text_embs = torch.stack(text_embs)  # (B, d_model or thinker_d_model)
+    text_emb = text_proj(text_embs)  # (B, embed_dim)
+    text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
     
-    # 3. Add CLS token + positional embeddings
-    cls_token = self.cls_token.expand(B, 1, 128)
-    x = torch.cat([cls_token, patch_embeddings], dim=1)
-    x = x + self.pos_embed  # (B, 197, 128)
-    
-    # 4. Transformer encoding
-    for block in self.blocks:
-        x = block(x)
-    
-    # 5. Extract CLS for classification
-    cls_output = x[:, 0]  # (B, 128)
-    
-    # 6. Classification head
-    logits = classification_head(cls_output)  # (B, 1000)
-    
-    # 7. Compute loss
+    # 3. Contrastive loss (InfoNCE)
+    logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+    labels = torch.arange(B, device=device)  # Positive pairs on diagonal
     loss = cross_entropy(logits, labels)
     
-    # 8. Backprop and update
+    # 4. Backprop and update
     loss.backward()
     optimizer.step()
 ```
+
+**Key Features:**
+- Uses **trained tokenizer** from Stage A (`thinker_ckpt/tokenizer.model`)
+- If tokenizer not found, trains new one from image captions
+- **Configurable text encoding** via `use_thinker_for_text`:
+  - **`true` (recommended)**: Uses frozen Thinker model for contextual embeddings - better quality, aligned with Stage E
+  - **`false`**: Uses simple tokenizer + embedding layer - lighter, faster, but less contextual
+- **Contrastive learning** aligns image and text embeddings in shared space
+- **InfoNCE loss** encourages matching image-caption pairs to be similar
 
 ---
 
@@ -692,9 +710,10 @@ With vision encoder:
 
 ## 🎓 Training
 
-**Task**: Image classification/understanding  
-**Loss**: Cross-entropy  
-**Data**: Images + captions
+**Task**: Image-Caption contrastive learning (CLIP-style)  
+**Loss**: Contrastive loss (InfoNCE)  
+**Data**: Images + text captions  
+**Text Encoding**: Uses trained tokenizer from Stage A (`thinker_ckpt/tokenizer.model`)
 
 ## 💡 Key Takeaways
 

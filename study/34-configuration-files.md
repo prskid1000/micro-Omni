@@ -350,6 +350,84 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 
 ---
 
+### `configs/vision_tiny.json` (Stage C - Vision Encoder)
+
+```json
+{
+  "save_dir": "checkpoints/vision_tiny",
+  "train_manifest": "data/images/annotations.json",
+  "image_root": "data/images",
+  "img_size": 224,
+  "patch": 16,
+  "d_model": 128,
+  "n_layers": 4,
+  "n_heads": 2,
+  "d_ff": 512,
+  "dropout": 0.1,
+  "embed_dim": 128,
+  "use_thinker_for_text": true,
+  "thinker_ckpt": "checkpoints/thinker_tiny",
+  "ctx_len": 512,
+  "vocab_size": 32000,
+  "thinker": {
+    "vocab_size": 32000,
+    "n_layers": 4,
+    "d_model": 256,
+    "n_heads": 4,
+    "d_ff": 1024,
+    "dropout": 0.1,
+    "rope_theta": 10000,
+    "use_gqa": false,
+    "use_swiglu": true,
+    "use_moe": false
+  },
+  "temperature": 0.07,
+  "batch_size": 8,
+  "lr": 3e-4,
+  "max_steps": 199716,
+  "max_epochs": 3
+}
+```
+
+**Key Parameters:**
+- `train_manifest`: Path to JSON file with image-caption pairs (format: `[{"image": "path", "caption": "text"}, ...]`)
+- `image_root`: Root directory for image files
+- `thinker_ckpt`: Directory containing trained tokenizer from Stage A (`tokenizer.model`) and optionally trained Thinker (`thinker.pt`)
+- `use_thinker_for_text`: Whether to use Thinker model (true) or simple tokenizer+embedding (false) for text encoding
+  - **`true` (recommended)**: Uses frozen Thinker model for contextual text embeddings - better quality, more aligned with Stage E
+  - **`false`**: Uses simple tokenizer + embedding layer - lighter, faster, but less contextual
+- `ctx_len`: Context length for text encoding (matches Thinker's context length)
+- `vocab_size`: Vocabulary size (automatically detected from tokenizer if available)
+- `embed_dim`: Embedding dimension for contrastive learning (default: same as `d_model`)
+- `temperature`: Temperature parameter for contrastive loss (InfoNCE)
+- `thinker`: Thinker model configuration (only used if `use_thinker_for_text: true`)
+
+**Training Method:**
+- **Contrastive Learning (CLIP-style)**: Aligns image embeddings with text caption embeddings
+- Uses trained tokenizer from Stage A for consistent text encoding
+- If tokenizer not found, trains new one from image captions
+- **Loss**: Contrastive loss (InfoNCE) - encourages matching image-caption pairs to be similar
+
+**Text Encoding Options:**
+
+1. **With Thinker (`use_thinker_for_text: true`)** - Recommended:
+   - Captions are tokenized using BPE tokenizer (from `thinker_ckpt/tokenizer.model`)
+   - Token IDs are passed through frozen Thinker model to get contextual embeddings
+   - Average pooling over sequence to get text representation
+   - Projected to `embed_dim` for contrastive learning
+   - **Benefits**: Better contextual understanding, aligned with Stage E processing
+   - **Requires**: Trained Thinker from Stage A (optional, will use untrained if not found)
+
+2. **Without Thinker (`use_thinker_for_text: false`)** - Lighter option:
+   - Captions are tokenized using BPE tokenizer (from `thinker_ckpt/tokenizer.model`)
+   - Token IDs are embedded using learnable embedding layer
+   - Average pooling over sequence to get text representation
+   - Projected to `embed_dim` for contrastive learning
+   - **Benefits**: Lighter, faster, no dependency on Thinker checkpoint
+   - **Trade-off**: Less contextual understanding than Thinker-based encoding
+
+---
+
 ### `configs/ocr_tiny.json` (Optional - OCR Model)
 
 ```json

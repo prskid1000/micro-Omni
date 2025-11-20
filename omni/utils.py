@@ -859,6 +859,10 @@ class ASRDataset(IterableDataset):
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=160, win_length=400, n_mels=n_mels)
         self._num_rows = None
+        # Error handling configuration
+        self.warn_on_errors = cfg.get("warn_on_dataset_errors", False) if cfg else False
+        self._error_counts = {"missing_file": 0, "load_error": 0, "empty_text": 0}
+        self._first_error_logged = False
     
     def get_length(self):
         """Count CSV rows (expensive, cached after first call)"""
@@ -869,6 +873,10 @@ class ASRDataset(IterableDataset):
                 self._num_rows = sum(1 for _ in reader)
         return self._num_rows
     
+    def get_error_stats(self):
+        """Get statistics about skipped files due to errors."""
+        return self._error_counts.copy()
+    
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
         num_workers = worker_info.num_workers if worker_info else 1
@@ -878,6 +886,10 @@ class ASRDataset(IterableDataset):
         
         val_split = getattr(self, '_val_split', None)
         val_mode = getattr(self, '_val_mode', False)
+        
+        # Reset error tracking for this iteration
+        self._error_counts = {"missing_file": 0, "load_error": 0, "empty_text": 0}
+        self._first_error_logged = False
         
         # Distribute skip_samples across workers
         worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
@@ -899,12 +911,39 @@ class ASRDataset(IterableDataset):
                     skipped += 1
                     continue
                 
+                # Get file path and text
+                wav_path = row.get("wav", "").strip()
+                text = row.get("text", "").strip()
+                
+                # Check if file path is provided
+                if not wav_path:
+                    if self.warn_on_errors and not self._first_error_logged:
+                        print(f"Warning: Empty file path in row {idx} (worker {worker_id})")
+                        self._first_error_logged = True
+                    self._error_counts["load_error"] += 1
+                    continue
+                
+                # Check if file exists (faster than trying to load)
+                if not os.path.exists(wav_path):
+                    if self.warn_on_errors and not self._first_error_logged:
+                        print(f"Warning: File not found in row {idx} (worker {worker_id}): {wav_path}")
+                        self._first_error_logged = True
+                    self._error_counts["missing_file"] += 1
+                    continue
+                
+                # Check if text is empty
+                if not text:
+                    if self.warn_on_errors and not self._first_error_logged:
+                        print(f"Warning: Empty text in row {idx} (worker {worker_id}): {wav_path}")
+                        self._first_error_logged = True
+                    self._error_counts["empty_text"] += 1
+                    # Still try to load audio, but text will be empty
+                
                 try:
-                    wav, sr = torchaudio.load(row["wav"])
+                    wav, sr = torchaudio.load(wav_path)
                     if sr != self.sr:
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
                     mel = self.melspec(wav)[0].T
-                    text = row["text"]
                     
                     # Buffer-based shuffling
                     if self.shuffle_buffer_size > 0:
@@ -913,7 +952,12 @@ class ASRDataset(IterableDataset):
                             yield buffer.pop(rng.randint(0, len(buffer) - 1))
                     else:
                         yield mel, text
-                except Exception:
+                except Exception as e:
+                    if self.warn_on_errors and not self._first_error_logged:
+                        print(f"Warning: Error loading audio in row {idx} (worker {worker_id}): {wav_path}")
+                        print(f"  Error: {str(e)}")
+                        self._first_error_logged = True
+                    self._error_counts["load_error"] += 1
                     continue
         
         # Yield remaining buffer items

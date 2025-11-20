@@ -4,12 +4,13 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.vision_encoder import ViTTiny
+from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, cleanup_old_checkpoints, ImgCapDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext
+    ValidationSkipSamplesContext, find_checkpoint
 )
 from tqdm import tqdm
 
@@ -30,27 +31,78 @@ def main(cfg):
     # Project image CLS token to embedding space for contrastive learning
     embed_dim = cfg.get("embed_dim", cfg["d_model"])  # Embedding dimension for contrastive learning
     img_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)
-    text_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)  # For text embeddings
     
-    # Load or train tokenizer from thinker checkpoint if available
+    # Configurable: Use Thinker model or simple tokenizer+embedding for text encoding
+    use_thinker_for_text = cfg.get("use_thinker_for_text", True)
     thinker_ckpt_dir = cfg.get("thinker_ckpt", "checkpoints/thinker_tiny")
-    vocab_size = cfg.get("vocab_size", 32000)
+    thinker_cfg = cfg.get("thinker", {})
     ctx_len = cfg.get("ctx_len", 512)
+    vocab_size = cfg.get("vocab_size", 32000)
     
-    # Ensure thinker checkpoint directory exists
-    os.makedirs(thinker_ckpt_dir, exist_ok=True)
+    think = None
+    text_embed = None
     
+    if use_thinker_for_text:
+        # Use Thinker model for text encoding (frozen) - better contextual embeddings
+        print("Using Thinker model for text encoding (recommended)")
+        text_proj = nn.Linear(cfg.get("thinker_d_model", 256), embed_dim).to(device)
+        
+        # Load Thinker model architecture
+        think = ThinkerLM(
+            thinker_cfg.get("vocab_size", 32000),
+            thinker_cfg.get("n_layers", 4),
+            thinker_cfg.get("d_model", 256),
+            thinker_cfg.get("n_heads", 4),
+            thinker_cfg.get("d_ff", 1024),
+            thinker_cfg.get("dropout", 0.1),
+            thinker_cfg.get("rope_theta", 10000),
+            ctx_len,
+            use_gqa=thinker_cfg.get("use_gqa", False),
+            use_swiglu=thinker_cfg.get("use_swiglu", True),
+            use_moe=thinker_cfg.get("use_moe", False),
+            num_experts=thinker_cfg.get("num_experts", 8),
+            num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2),
+            compile_model=False  # Don't compile Thinker for vision training
+        ).to(device)
+        
+        # Load trained Thinker if available
+        thinker_path, thinker_ckpt = find_checkpoint(thinker_ckpt_dir, "thinker.pt", "thinker_step_", device)
+        if thinker_ckpt is not None:
+            if isinstance(thinker_ckpt, dict):
+                if "model" in thinker_ckpt:
+                    think.load_state_dict(thinker_ckpt["model"])
+                elif "thinker" in thinker_ckpt:
+                    think.load_state_dict(thinker_ckpt["thinker"])
+                else:
+                    think.load_state_dict(thinker_ckpt)
+            else:
+                think.load_state_dict(thinker_ckpt)
+            print(f"✓ Loaded trained Thinker from {thinker_path}")
+        else:
+            print("⚠ Warning: Thinker checkpoint not found, using untrained Thinker")
+        
+        # Freeze Thinker - we only use it for text encoding, not training
+        for param in think.parameters():
+            param.requires_grad = False
+        think.eval()
+        print("✓ Thinker model frozen (used only for text encoding)")
+    else:
+        # Use simple tokenizer + embedding layer (lighter, faster, but less contextual)
+        print("Using tokenizer + embedding layer for text encoding (lighter option)")
+        text_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)
+        # text_embed will be created after tokenizer is loaded
+    
+    # Load or train tokenizer
     tok_model_path = os.path.join(thinker_ckpt_dir, "tokenizer.model")
     if os.path.exists(tok_model_path):
         print(f"Loading tokenizer from {tok_model_path}")
         tok = BPETokenizer(tok_model_path)
-        # Get actual vocab size from tokenizer
         vocab_size = tok.sp.get_piece_size()
         print(f"Tokenizer vocab size: {vocab_size}")
     else:
         # Train tokenizer from captions if not found
         print(f"Tokenizer not found at {tok_model_path}, training new tokenizer from captions...")
-        # Extract captions to temporary file for tokenizer training
+        os.makedirs(thinker_ckpt_dir, exist_ok=True)
         temp_caption_file = os.path.join(cfg["save_dir"], ".temp_captions.txt")
         with open(cfg["train_manifest"], 'r', encoding='utf-8') as f:
             manifest_items = json.load(f)
@@ -60,8 +112,9 @@ def main(cfg):
                 if caption:
                     f.write(caption + "\n")
         print(f"  Training tokenizer on {len(manifest_items):,} captions...")
-        BPETokenizer.train_new(temp_caption_file, tok_model_path, vocab_size=vocab_size)
+        BPETokenizer.train_new(temp_caption_file, tok_model_path, vocab_size=thinker_cfg.get("vocab_size", vocab_size))
         tok = BPETokenizer(tok_model_path)
+        vocab_size = tok.sp.get_piece_size()
         print(f"✓ Tokenizer trained and saved to {tok_model_path}")
         # Clean up temp file
         try:
@@ -69,11 +122,15 @@ def main(cfg):
         except:
             pass
     
-    # Token embedding layer (maps token IDs to embeddings)
-    text_embed = nn.Embedding(vocab_size, cfg["d_model"]).to(device)
+    # Create token embedding layer if not using Thinker
+    if not use_thinker_for_text:
+        text_embed = nn.Embedding(vocab_size, cfg["d_model"]).to(device)
     
-    opt = torch.optim.AdamW(list(vit.parameters())+list(img_proj.parameters())+list(text_proj.parameters())+list(text_embed.parameters()), 
-                           lr=cfg["lr"], weight_decay=cfg["wd"])
+    # Optimizer: include text_embed if using simple mode
+    opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters())
+    if text_embed is not None:
+        opt_params += list(text_embed.parameters())
+    opt = torch.optim.AdamW(opt_params, lr=cfg["lr"], weight_decay=cfg["wd"])
     
     # Contrastive loss (InfoNCE)
     temperature = cfg.get("temperature", 0.07)  # Temperature for contrastive loss
@@ -98,7 +155,7 @@ def main(cfg):
         print(f"Gradient accumulation: {accumulation_steps} steps")
     
     def encode_caption(caption):
-        """Encode caption using tokenizer and token embeddings"""
+        """Encode caption using tokenizer and either Thinker model or simple embedding"""
         # Tokenize caption
         token_ids = tok.encode(caption)
         # Truncate to context length
@@ -107,11 +164,22 @@ def main(cfg):
         token_ids = [1] + token_ids  # BOS=1
         if len(token_ids) == 0:
             token_ids = [1]  # At least BOS token
-        # Convert to tensor and get embeddings
+        # Convert to tensor
         token_tensor = torch.tensor(token_ids, device=device, dtype=torch.long)
-        token_embeds = text_embed(token_tensor)  # (T, d_model)
-        # Average pooling over sequence
-        return token_embeds.mean(dim=0)  # (d_model,)
+        
+        if use_thinker_for_text:
+            # Use Thinker model for contextual embeddings (better quality)
+            token_tensor = token_tensor.unsqueeze(0)  # (1, T)
+            with torch.no_grad():
+                # Use Thinker to get contextual embeddings
+                text_emb = think(idx=token_tensor)  # (1, T, thinker_d_model)
+            # Average pooling over sequence to get single embedding
+            return text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
+        else:
+            # Use simple token embeddings (lighter, faster)
+            token_embeds = text_embed(token_tensor)  # (T, d_model)
+            # Average pooling over sequence to get single embedding
+            return token_embeds.mean(dim=0)  # (d_model,)
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -157,7 +225,7 @@ def main(cfg):
     vit.train()
     img_proj.train()
     text_proj.train()
-    text_embed.train()
+    # Thinker is frozen (eval mode)
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 100)
     checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
@@ -174,7 +242,6 @@ def main(cfg):
             "vit": (vit, vit.load_state_dict),
             "img_proj": (img_proj, img_proj.load_state_dict),
             "text_proj": (text_proj, text_proj.load_state_dict),
-            "text_embed": (text_embed, text_embed.load_state_dict),
             "optimizer": (opt, opt.load_state_dict),
             "scheduler": (scheduler, scheduler.load_state_dict),
             "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
@@ -325,7 +392,6 @@ def main(cfg):
                     grad_norm_vit_before = clip_gradients(vit, max_grad_norm)
                     grad_norm_img_proj_before = clip_gradients(img_proj, max_grad_norm)
                     grad_norm_text_proj_before = clip_gradients(text_proj, max_grad_norm)
-                    grad_norm_text_embed_before = clip_gradients(text_embed, max_grad_norm)
                     
                     # Check for gradient explosion AFTER clipping
                     # Use a higher threshold (10x max_grad_norm) since we've already clipped
@@ -334,10 +400,9 @@ def main(cfg):
                     grad_norm_vit_after, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=explosion_threshold, raise_on_error=False)
                     grad_norm_proj_after, is_exploded_proj = check_gradient_explosion(img_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
                     grad_norm_text_proj_after, is_exploded_text_proj = check_gradient_explosion(text_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    grad_norm_text_embed_after, is_exploded_text_embed = check_gradient_explosion(text_embed, max_grad_norm=explosion_threshold, raise_on_error=False)
                     
-                    if is_exploded_vit or is_exploded_proj or is_exploded_text_proj or is_exploded_text_embed:
-                        logger.error(f"Step {step}: Gradient explosion detected after clipping (vit: {grad_norm_vit_before:.2f}->{grad_norm_vit_after:.2f}, img_proj: {grad_norm_img_proj_before:.2f}->{grad_norm_proj_after:.2f}, text_proj: {grad_norm_text_proj_before:.2f}->{grad_norm_text_proj_after:.2f}, text_embed: {grad_norm_text_embed_before:.2f}->{grad_norm_text_embed_after:.2f}). Skipping this batch.")
+                    if is_exploded_vit or is_exploded_proj or is_exploded_text_proj:
+                        logger.error(f"Step {step}: Gradient explosion detected after clipping (vit: {grad_norm_vit_before:.2f}->{grad_norm_vit_after:.2f}, img_proj: {grad_norm_img_proj_before:.2f}->{grad_norm_proj_after:.2f}, text_proj: {grad_norm_text_proj_before:.2f}->{grad_norm_text_proj_after:.2f}). Skipping this batch.")
                         opt.zero_grad()  # Clear gradients
                         if use_amp:
                             scaler.update()  # Update scaler even though we skipped (unscale was called)
@@ -379,7 +444,6 @@ def main(cfg):
                     "vit": vit.state_dict(),
                     "img_proj": img_proj.state_dict(),
                     "text_proj": text_proj.state_dict(),
-                    "text_embed": text_embed.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                     "step": step
@@ -397,7 +461,7 @@ def main(cfg):
                     vit.eval()
                     img_proj.eval()
                     text_proj.eval()
-                    text_embed.eval()
+                    # Thinker is already in eval mode (frozen)
                     val_loss_sum = 0.0
                     val_count = 0
                     with torch.no_grad():
@@ -449,7 +513,7 @@ def main(cfg):
                     vit.train()
                     img_proj.train()
                     text_proj.train()
-                    text_embed.train()
+                    # Thinker remains in eval mode (frozen)
             
             if step >= cfg["max_steps"]:
                 final_path = os.path.join(cfg["save_dir"], "vision.pt")
@@ -457,7 +521,6 @@ def main(cfg):
                     "vit": vit.state_dict(),
                     "img_proj": img_proj.state_dict(),
                     "text_proj": text_proj.state_dict(),
-                    "text_embed": text_embed.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                     "step": step
@@ -474,7 +537,7 @@ def main(cfg):
             vit.eval()
             img_proj.eval()
             text_proj.eval()
-            text_embed.eval()
+            # Thinker is already in eval mode (frozen)
             val_loss_sum = 0.0
             val_count = 0
             with torch.no_grad():
@@ -524,7 +587,7 @@ def main(cfg):
             vit.train()
             img_proj.train()
             text_proj.train()
-            text_embed.train()
+            # Thinker remains in eval mode (frozen)
         
         # Save at end of epoch (checkpoint for resuming)
         final_path = os.path.join(cfg["save_dir"], "vision.pt")
@@ -532,7 +595,6 @@ def main(cfg):
             "vit": vit.state_dict(),
             "img_proj": img_proj.state_dict(),
             "text_proj": text_proj.state_dict(),
-            "text_embed": text_embed.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
             "step": step

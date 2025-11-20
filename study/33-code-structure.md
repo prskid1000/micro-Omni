@@ -150,7 +150,8 @@ class GriffinLimVocoder:
 #### `train_vision.py`
 - **Stage C**: Vision encoder
 - **Data**: Images + captions
-- **Loss**: Cross-entropy
+- **Loss**: Contrastive (InfoNCE) - vision-language alignment
+- **Text Encoding**: Configurable - Thinker model (frozen) or simple tokenizer+embedding
 - **Output**: `checkpoints/vision_tiny/`
 
 #### `train_talker.py`

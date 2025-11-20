@@ -7,7 +7,7 @@
 ## 🎯 Learning Objectives
 
 - What Stage C trains and why
-- Image classification training
+- Vision-language contrastive learning
 - ViT architecture training specifics
 - Configuration and metrics
 - Expected progress
@@ -16,9 +16,9 @@
 
 ## 💡 Stage C: Teaching Vision Understanding
 
-**Purpose:** Train Vision Encoder to understand images through classification, enabling meaningful visual embeddings for multimodal fusion in Stage E.
+**Purpose:** Train Vision Encoder to understand images through contrastive learning (CLIP-style), enabling meaningful visual embeddings aligned with text for multimodal fusion in Stage E.
 
-**Task:** Image → Category label (forces learning of visual features, objects, spatial relationships)
+**Task:** Image-Caption contrastive learning (forces learning of visual features aligned with text descriptions)
 
 ---
 
@@ -32,26 +32,43 @@
   "d_model": 128, "n_layers": 4,  // Compact ViT
   "n_heads": 2, "d_ff": 512,
   
-  "data_path": "data/images/",
-  "batch_size": 32,  // Images = less memory than audio
-  "num_epochs": 15,
+  "train_manifest": "data/images/annotations.json",
+  "image_root": "data/images",
+  "use_thinker_for_text": true,  // Use Thinker model (true) or simple embedding (false)
+  "thinker_ckpt": "checkpoints/thinker_tiny",  // Uses tokenizer from Stage A
+  "ctx_len": 512,  // Context length for text encoding
+  "vocab_size": 32000,  // Tokenizer vocabulary size
+  "embed_dim": 128,  // Contrastive embedding dimension
+  "temperature": 0.07,  // Contrastive loss temperature
+  
+  "batch_size": 8,
+  "max_epochs": 3,
   "learning_rate": 3e-4
 }
 ```
 
+**Key Configuration Notes:**
+- **`use_thinker_for_text`**: Whether to use Thinker model for text encoding
+  - **`true` (recommended)**: Uses frozen Thinker model - better contextual embeddings, aligned with Stage E
+  - **`false`**: Uses simple tokenizer + embedding - lighter, faster, but less contextual
+- **`thinker_ckpt`**: Directory containing the trained tokenizer from Stage A (`tokenizer.model`) and optionally trained Thinker (`thinker.pt`)
+- **`ctx_len`**: Context length for text encoding (matches Thinker's context length)
+- **`vocab_size`**: Vocabulary size (automatically detected from tokenizer if available)
+- If tokenizer not found, it will be trained from image captions
+
 ### Expected Progress
 
 ```
-Random init → ~5% accuracy (guessing)
-After 5 epochs → ~60% accuracy (learning features)
-After 15 epochs → ~75-85% accuracy (good understanding!)
+Random init → High contrastive loss (random alignment)
+After 1 epoch → Loss decreasing (learning image-text alignment)
+After 3 epochs → Good vision-language alignment (ready for Stage E)
 ```
 
 ### Metrics
 
-- **Loss:** Cross-entropy (standard classification)
-- **Accuracy:** % correct predictions
-- **Target:** >70% accuracy for small models
+- **Loss:** Contrastive loss (InfoNCE) - measures image-text alignment
+- **Validation Loss:** Average contrastive loss on validation set
+- **Target:** Low contrastive loss indicates good vision-language alignment
 
 ---
 

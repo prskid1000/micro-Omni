@@ -161,10 +161,10 @@ This is why μOmni uses 5 stages!
 │ ═════════════════════════════════════════   │
 │ Purpose: Learn visual understanding        │
 │ Model: Vision Encoder (ViT-Tiny)           │
-│ Task: Image classification                 │
-│ Data: Images + labels                      │
-│ Loss: Cross-entropy (classification)       │
-│ Metric: Accuracy                           │
+│ Task: Vision-language contrastive learning │
+│ Data: Images + captions                    │
+│ Loss: Contrastive (InfoNCE)                │
+│ Metric: Contrastive Loss                   │
 │ Time: ~4-8 hours                           │
 │ Output: vision_encoder_checkpoints/        │
 └──────────────────┬──────────────────────────┘
@@ -285,7 +285,7 @@ This progressive approach ensures stable, effective learning!
 |-------|-----------|--------------|-----------|---------------|---------|-----------|--------------|
 | **A** | Thinker | Language Modeling | Text | Cross-Entropy | Perplexity | 8-12h | None |
 | **B** | Audio Encoder | ASR | Audio + Text | CTC | WER | 6-10h | None |
-| **C** | Vision Encoder | Classification | Images + Labels | Cross-Entropy | Accuracy | 4-8h | None |
+| **C** | Vision Encoder | Contrastive Learning | Images + Captions | Contrastive (InfoNCE) | Contrastive Loss | 4-8h | None (uses tokenizer from A) |
 | **D** | RVQ + Talker | Speech Gen | Audio (TTS) | MSE + CE | Recon Error | 10-15h | None (RVQ), Then Talker needs RVQ |
 | **E** | All (Joint) | Multimodal QA | Mixed Modalities | Cross-Entropy | Task Acc | 6-12h | A, B, C, D |
 | **Optional** | OCR | Text Extraction | Images + Text | Cross-Entropy | Character Acc | 4-8h | None |
@@ -819,7 +819,7 @@ Total wall-clock time: ~25 hours instead of 50!
 |-------|-------|------|---------------|------------|
 | **A** | Thinker | Language Modeling | Cross-Entropy | Perplexity |
 | **B** | Audio Encoder | ASR | CTC | WER |
-| **C** | Vision Encoder | Image Understanding | Cross-Entropy | Accuracy |
+| **C** | Vision Encoder | Vision-Language Alignment | Contrastive (InfoNCE) | Contrastive Loss |
 | **D** | Talker + RVQ | Speech Generation | Cross-Entropy + MSE | Reconstruction |
 | **E** | All (Joint) | Multimodal | Cross-Entropy | Mixed Accuracy |
 
