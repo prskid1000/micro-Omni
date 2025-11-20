@@ -1256,7 +1256,7 @@ class VocoderDataset(IterableDataset):
         self.csv_path, self.sr, self.n_mels = csv_path, sr, n_mels
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.max_audio_length = cfg.get("max_audio_length", None) if cfg else None
-        self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=n_fft, hop_length=hop_length, win_length=n_fft, n_mels=n_mels, fmin=0.0, fmax=sr / 2.0)
+        self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=n_fft, hop_length=hop_length, win_length=n_fft, n_mels=n_mels)
         self._num_rows = None
     
     def get_length(self):

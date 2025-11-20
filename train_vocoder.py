@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import torch
+import torchaudio
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
@@ -142,7 +143,7 @@ def main(cfg):
     scaler_g = GradScaler('cuda') if use_amp else None
     scaler_d = GradScaler('cuda') if use_amp else None
     if use_amp:
-        print("✓ Mixed precision training (FP16) enabled - saves ~50% memory")
+        print("✓ Mixed precision training (FP16) enabled")
     
     # Gradient accumulation (important for memory efficiency)
     # Simulates larger batch size without OOM
@@ -152,9 +153,7 @@ def main(cfg):
         print(f"✓ Gradient accumulation: {accumulation_steps} steps (effective batch size: {effective_batch_size})")
     
     # Memory optimizations summary
-    print(f"\n📊 Memory Optimizations for 12GB VRAM:")
-    print(f"  • Batch size: {cfg.get('batch_size', 2)}")
-    print(f"  • Effective batch size: {effective_batch_size} (with gradient accumulation)")
+
     print(f"  • Audio length limit: {cfg.get('max_audio_length', 8192)} samples (~{cfg.get('max_audio_length', 8192)/sr:.2f}s)")
     print(f"  • DataLoader workers: {cfg.get('num_workers', 1)}")
     print(f"  • Mixed precision: {'Enabled' if use_amp else 'Disabled'}")
@@ -212,9 +211,6 @@ def main(cfg):
         num_workers=cfg.get("num_workers", 1),  # Reduced for 12GB VRAM
         drop_last=True,
         collate_fn=collate_mel_audio_fn,
-        pin_memory=True,  # Faster GPU transfer
-        prefetch_factor=2,  # Prefetch batches
-        persistent_workers=True if cfg.get("num_workers", 1) > 0 else False  # Keep workers alive
     )
     val_dl = DataLoader(
         val_ds, 
