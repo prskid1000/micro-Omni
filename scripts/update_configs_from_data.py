@@ -810,99 +810,136 @@ def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Opt
     print("Analyzing Datasets and Updating Configs")
     print("="*60)
     
-    # Analyze text dataset - only production and synthetic files
-    print("\n[1] Analyzing Text Dataset...")
-    text_files = [
-        "data/text/production_corpus.txt",  # Production file
-        "data/text/tiny_corpus.txt",        # Synthetic file from make_synthetic_datasets.py
-    ]
+    # Determine which datasets are needed based on requested configs
+    # Config dependencies:
+    # - thinker: needs text
+    # - audio_enc: needs ASR audio
+    # - vision: needs images
+    # - talker: needs TTS (separate from ASR audio)
+    # - omni_sft: needs text, images, ASR audio (multimodal)
+    # - ocr: needs OCR CSV only (no text, no images, no audio)
+    # - vocoder: needs TTS (separate from ASR audio)
+    needs_text = (not configs_to_update or 
+                  'thinker' in configs_to_update or 
+                  'omni_sft' in configs_to_update)
+    needs_images = (not configs_to_update or 
+                    'vision' in configs_to_update or 
+                    'omni_sft' in configs_to_update)
+    needs_audio = (not configs_to_update or 
+                   'audio_enc' in configs_to_update or 
+                   'omni_sft' in configs_to_update)
+    # TTS data is separate from ASR audio and only needed for talker/vocoder
+    needs_tts_data = (not configs_to_update or 
+                      'talker' in configs_to_update or 
+                      'vocoder' in configs_to_update)
+    
+    # Initialize dataset variables
     text_samples = 0
     text_tokens = 0
     text_path = None
-    for tf in text_files:
-        if os.path.exists(tf):
-            count = count_text_samples(tf)
-            if count > text_samples:
-                text_samples = count
-                text_path = tf
-    
-    # Count tokens (required)
-    if text_path:
-        if skip_text_tokenization and assumed_text_tokens is not None:
-            print(f"  Using assumed token count (skipping tokenization)...")
-            text_tokens = count_text_tokens(text_path, skip_tokenization=True, assumed_token_count=assumed_text_tokens)
-        else:
-            print(f"  Counting tokens (this may take a while for large files)...")
-            text_tokens = count_text_tokens(text_path)
-        avg_tokens_per_sample = text_tokens / text_samples if text_samples > 0 else 0
-        print(f"  Text samples: {text_samples:,} (from {text_path})")
-        if text_tokens >= 1_000_000_000:
-            print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000_000:.1f}B tokens)")
-        else:
-            print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000:.1f}M tokens)")
-        print(f"  Average tokens per sample: {avg_tokens_per_sample:.1f}")
-    else:
-        print(f"  ⚠ No text data found")
-    
-    # Analyze image dataset - only production and synthetic files
-    print("\n[2] Analyzing Image Dataset...")
-    image_files = [
-        "data/images/production_annotations.json",  # Production file
-        "data/images/annotations.json",           # Synthetic file from make_synthetic_datasets.py
-    ]
     image_samples = 0
     image_tokens = 0
     image_manifest = None
-    for imf in image_files:
-        if os.path.exists(imf):
-            count = count_image_samples(imf)
-            if count > image_samples:
-                image_samples = count
-                image_manifest = imf
-    
-    # Count tokens from captions (required)
-    # Note: We count tokens from caption text, not from image pixels.
-    # Training steps are based on caption tokens (used in contrastive learning).
-    if image_manifest:
-        print(f"  Counting tokens from captions (this may take a while for large files)...")
-        image_tokens = count_image_tokens(image_manifest)
-        avg_tokens_per_sample = image_tokens / image_samples if image_samples > 0 else 0
-        print(f"  Image samples: {image_samples:,} (from {image_manifest})")
-        print(f"  Caption tokens: {image_tokens:,} (~{image_tokens/1_000_000:.1f}M tokens)")
-        print(f"  Average tokens per caption: {avg_tokens_per_sample:.1f}")
-        print(f"  Note: Tokens counted from caption text, not image pixels")
-    else:
-        print(f"  ⚠ No image data found")
-    
-    # Analyze audio dataset - only production and synthetic files
-    print("\n[3] Analyzing Audio Dataset...")
-    audio_files = [
-        "data/audio/production_asr.csv",  # Production file
-        "data/audio/asr.csv",             # Synthetic file from make_synthetic_datasets.py
-    ]
     audio_samples = 0
     audio_tokens = 0
     audio_csv = None
-    for af in audio_files:
-        if os.path.exists(af):
-            count = count_audio_samples(af)
-            if count > audio_samples:
-                audio_samples = count
-                audio_csv = af
     
-    # Count tokens from transcriptions (required)
-    # Note: We count tokens from transcription text, not from audio waveforms.
-    # Training steps are based on transcription tokens (used in CTC loss).
-    if audio_csv:
-        print(f"  Counting tokens from transcriptions (this may take a while for large files)...")
-        audio_tokens = count_audio_tokens(audio_csv)
-        avg_tokens_per_sample = audio_tokens / audio_samples if audio_samples > 0 else 0
-        print(f"  Audio samples: {audio_samples:,} (from {audio_csv})")
-        print(f"  Transcription tokens: {audio_tokens:,} (~{audio_tokens/1_000_000:.1f}M tokens)")
-        print(f"  Average tokens per transcription: {avg_tokens_per_sample:.1f}")
-        print(f"  Note: Tokens counted from transcription text, not audio waveforms")
+    # Analyze text dataset - only if needed
+    if needs_text:
+        print("\n[1] Analyzing Text Dataset...")
+        text_files = [
+            "data/text/production_corpus.txt",  # Production file
+            "data/text/tiny_corpus.txt",        # Synthetic file from make_synthetic_datasets.py
+        ]
+        for tf in text_files:
+            if os.path.exists(tf):
+                count = count_text_samples(tf)
+                if count > text_samples:
+                    text_samples = count
+                    text_path = tf
+        
+        # Count tokens (required)
+        if text_path:
+            if skip_text_tokenization and assumed_text_tokens is not None:
+                print(f"  Using assumed token count (skipping tokenization)...")
+                text_tokens = count_text_tokens(text_path, skip_tokenization=True, assumed_token_count=assumed_text_tokens)
+            else:
+                print(f"  Counting tokens (this may take a while for large files)...")
+                text_tokens = count_text_tokens(text_path)
+            avg_tokens_per_sample = text_tokens / text_samples if text_samples > 0 else 0
+            print(f"  Text samples: {text_samples:,} (from {text_path})")
+            if text_tokens >= 1_000_000_000:
+                print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000_000:.1f}B tokens)")
+            else:
+                print(f"  Text tokens: {text_tokens:,} (~{text_tokens/1_000_000:.1f}M tokens)")
+            print(f"  Average tokens per sample: {avg_tokens_per_sample:.1f}")
+        else:
+            print(f"  ⚠ No text data found")
     else:
-        print(f"  ⚠ No audio data found")
+        print("\n[1] Analyzing Text Dataset...")
+        print("  ⏭ Skipping (not needed for requested configs)")
+    
+    # Analyze image dataset - only if needed
+    if needs_images:
+        print("\n[2] Analyzing Image Dataset...")
+        image_files = [
+            "data/images/production_annotations.json",  # Production file
+            "data/images/annotations.json",           # Synthetic file from make_synthetic_datasets.py
+        ]
+        for imf in image_files:
+            if os.path.exists(imf):
+                count = count_image_samples(imf)
+                if count > image_samples:
+                    image_samples = count
+                    image_manifest = imf
+        
+        # Count tokens from captions (required)
+        # Note: We count tokens from caption text, not from image pixels.
+        # Training steps are based on caption tokens (used in contrastive learning).
+        if image_manifest:
+            print(f"  Counting tokens from captions (this may take a while for large files)...")
+            image_tokens = count_image_tokens(image_manifest)
+            avg_tokens_per_sample = image_tokens / image_samples if image_samples > 0 else 0
+            print(f"  Image samples: {image_samples:,} (from {image_manifest})")
+            print(f"  Caption tokens: {image_tokens:,} (~{image_tokens/1_000_000:.1f}M tokens)")
+            print(f"  Average tokens per caption: {avg_tokens_per_sample:.1f}")
+            print(f"  Note: Tokens counted from caption text, not image pixels")
+        else:
+            print(f"  ⚠ No image data found")
+    else:
+        print("\n[2] Analyzing Image Dataset...")
+        print("  ⏭ Skipping (not needed for requested configs)")
+    
+    # Analyze audio dataset - only if needed
+    if needs_audio:
+        print("\n[3] Analyzing Audio Dataset...")
+        audio_files = [
+            "data/audio/production_asr.csv",  # Production file
+            "data/audio/asr.csv",             # Synthetic file from make_synthetic_datasets.py
+        ]
+        for af in audio_files:
+            if os.path.exists(af):
+                count = count_audio_samples(af)
+                if count > audio_samples:
+                    audio_samples = count
+                    audio_csv = af
+        
+        # Count tokens from transcriptions (required)
+        # Note: We count tokens from transcription text, not from audio waveforms.
+        # Training steps are based on transcription tokens (used in CTC loss).
+        if audio_csv:
+            print(f"  Counting tokens from transcriptions (this may take a while for large files)...")
+            audio_tokens = count_audio_tokens(audio_csv)
+            avg_tokens_per_sample = audio_tokens / audio_samples if audio_samples > 0 else 0
+            print(f"  Audio samples: {audio_samples:,} (from {audio_csv})")
+            print(f"  Transcription tokens: {audio_tokens:,} (~{audio_tokens/1_000_000:.1f}M tokens)")
+            print(f"  Average tokens per transcription: {avg_tokens_per_sample:.1f}")
+            print(f"  Note: Tokens counted from transcription text, not audio waveforms")
+        else:
+            print(f"  ⚠ No audio data found")
+    else:
+        print("\n[3] Analyzing Audio Dataset...")
+        print("  ⏭ Skipping (not needed for requested configs)")
     
     # Calculate parameters for each training stage
     print("\n" + "="*60)
@@ -1239,7 +1276,7 @@ def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Opt
     
     # Stage D: Talker (talker_tiny.json) - uses TTS data
     # Note: TTS data is also used by vocoder, so we load it if either talker or vocoder is selected
-    needs_tts_data = (not configs_to_update or 'talker' in configs_to_update or 'vocoder' in configs_to_update)
+    # (needs_tts_data was already calculated above)
     
     # Load TTS data if needed (for talker or vocoder)
     tts_samples = 0
@@ -1530,7 +1567,7 @@ def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Opt
         print("✓ All configs updated successfully!")
     print("="*60)
     
-    # Print summary
+    # Print summary (only for datasets that were analyzed)
     def format_tokens(tokens):
         """Format token count in readable format (B for billions, M for millions)"""
         if tokens >= 1_000_000_000:
@@ -1539,14 +1576,21 @@ def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Opt
             return f"{tokens:,} (~{tokens/1_000_000:.1f}M)"
     
     print("\nSummary:")
-    print(f"  Text tokens: {format_tokens(text_tokens)}")
-    print(f"  Image caption tokens: {format_tokens(image_tokens)}")
-    print(f"  Audio transcription tokens: {format_tokens(audio_tokens)}")
-    if ocr_tokens > 0:
+    if needs_text and text_tokens > 0:
+        print(f"  Text tokens: {format_tokens(text_tokens)}")
+    if needs_images and image_tokens > 0:
+        print(f"  Image caption tokens: {format_tokens(image_tokens)}")
+    if needs_audio and audio_tokens > 0:
+        print(f"  Audio transcription tokens: {format_tokens(audio_tokens)}")
+    if needs_tts_data and tts_tokens > 0:
+        print(f"  TTS tokens: {format_tokens(tts_tokens)}")
+    if (not configs_to_update or 'ocr' in configs_to_update) and ocr_tokens > 0:
         print(f"  OCR tokens: {format_tokens(ocr_tokens)}")
-    multimodal_tokens = max(text_tokens, image_tokens, audio_tokens)
-    if multimodal_tokens > 0:
-        print(f"  Multimodal (max tokens): {format_tokens(multimodal_tokens)}")
+    # Only show multimodal if omni_sft was analyzed
+    if (not configs_to_update or 'omni_sft' in configs_to_update):
+        multimodal_tokens = max(text_tokens, image_tokens, audio_tokens)
+        if multimodal_tokens > 0:
+            print(f"  Multimodal (max tokens): {format_tokens(multimodal_tokens)}")
 
 def main():
     parser = argparse.ArgumentParser(
