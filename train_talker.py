@@ -37,9 +37,6 @@ def main(cfg):
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("n_mels", 128)
     frame_ms = cfg.get("frame_ms", 80)
-    ds = TTSDataset(cfg["tts_csv"], sr=sr, n_mels=n_mels, frame_ms=frame_ms, cfg=cfg)
-    # Use module-level collate function for Windows multiprocessing compatibility
-    dl = DataLoader(ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_mel_fn)
     
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
@@ -82,11 +79,44 @@ def main(cfg):
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
-    total_size = len(ds)
-    val_size = int(total_size * val_split)
-    train_size = total_size - val_size
-    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(seed))
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_mel_fn)
+    
+    train_ds = TTSDataset(
+        cfg["tts_csv"], 
+        sr=sr, 
+        n_mels=n_mels, 
+        frame_ms=frame_ms, 
+        cfg=cfg,
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
+        seed=seed,
+        skip_samples=0
+    )
+    train_ds._val_split = val_split
+    train_ds._val_mode = False  # Training mode
+    
+    val_ds = TTSDataset(
+        cfg["tts_csv"], 
+        sr=sr, 
+        n_mels=n_mels, 
+        frame_ms=frame_ms, 
+        cfg=cfg,
+        shuffle_buffer_size=0,  # No shuffling for validation
+        seed=seed,  # Same seed for consistent hash-based split
+        skip_samples=0
+    )
+    val_ds._val_split = val_split
+    val_ds._val_mode = True  # Validation mode
+    
+    # Approximate sizes for logging (will count if needed)
+    try:
+        total_size = train_ds.get_length()
+        train_size = int(total_size * (1 - val_split))
+        val_size = total_size - train_size
+    except:
+        train_size = val_size = None  # Unknown size
+    
+    # Note: shuffle=False for IterableDataset (shuffling handled internally)
+    # Use module-level collate function for Windows multiprocessing compatibility
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_mel_fn)
     val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=collate_mel_fn)
     
     # Initialize logger

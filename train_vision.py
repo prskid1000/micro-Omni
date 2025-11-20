@@ -20,8 +20,6 @@ def main(cfg):
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(cfg["save_dir"], exist_ok=True)
-    ds = ImgCapDataset(cfg["train_manifest"], cfg["image_root"], cfg["img_size"])
-    dl = DataLoader(ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
@@ -86,11 +84,15 @@ def main(cfg):
         print("Building vocabulary from captions (processing in chunks, resumable)...")
     
     # Build vocabulary incrementally without loading all captions into memory
-    total_captions = len(ds)
+    # Load manifest directly for vocabulary building (since IterableDataset doesn't support indexing)
+    import json
+    with open(cfg["train_manifest"], 'r', encoding='utf-8') as f:
+        manifest_items = json.load(f)
+    total_captions = len(manifest_items)
     checkpoint_freq = 10000  # Save checkpoint every N captions
     
     for i in range(start_idx, total_captions):
-        _, caption = ds[i]
+        caption = manifest_items[i].get("caption", "")
         words = caption.lower().split()
         for word in words:
             word_freq[word] = word_freq.get(word, 0) + 1
@@ -153,11 +155,39 @@ def main(cfg):
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
-    total_size = len(ds)
-    val_size = int(total_size * val_split)
-    train_size = total_size - val_size
-    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(seed))
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    
+    train_ds = ImgCapDataset(
+        cfg["train_manifest"], 
+        cfg["image_root"], 
+        cfg["img_size"],
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
+        seed=seed,
+        skip_samples=0
+    )
+    train_ds._val_split = val_split
+    train_ds._val_mode = False  # Training mode
+    
+    val_ds = ImgCapDataset(
+        cfg["train_manifest"], 
+        cfg["image_root"], 
+        cfg["img_size"],
+        shuffle_buffer_size=0,  # No shuffling for validation
+        seed=seed,  # Same seed for consistent hash-based split
+        skip_samples=0
+    )
+    val_ds._val_split = val_split
+    val_ds._val_mode = True  # Validation mode
+    
+    # Approximate sizes for logging (will count if needed)
+    try:
+        total_size = train_ds.get_length()
+        train_size = int(total_size * (1 - val_split))
+        val_size = total_size - train_size
+    except:
+        train_size = val_size = None  # Unknown size
+    
+    # Note: shuffle=False for IterableDataset (shuffling handled internally)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
     val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False)
     
     # Initialize logger

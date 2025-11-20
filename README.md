@@ -7,9 +7,10 @@ with **small datasets** (each modality well under **5GB**). Includes:
 - **Audio encoder** (AuT-Tiny) for ASR / audio understanding (12.5 Hz rate)
 - **Vision encoder** (ViT-Tiny) for image features
 - **RVQ codec** (2 codebooks) + **Talker** (speech code predictor)
-- **Griffin-Lim** vocoder by default (no heavy TTS training required)
+- **Griffin-Lim** vocoder by default (no training required) + optional **HiFi-GAN** neural vocoder
+- Optional **OCR model** for text extraction from images
 - Training scripts for each stage + an end-to-end **SFT/omni** trainer
-- Simple **inference** CLI for text/chat, image QA, speech chat
+- Simple **inference** CLI for text/chat, image QA, speech chat, OCR
 
 > This is a **reference learning repo**—compact and readable. It trades SOTA quality for simplicity and VRAM thrift.
 
@@ -21,7 +22,8 @@ with **small datasets** (each modality well under **5GB**). Includes:
 - **Talker**: Autoregressive speech code predictor that generates audio from Thinker outputs
 - **Encoders**: Separate encoders for audio (AuT-Tiny) and vision (ViT-Tiny) that project to Thinker's embedding space
 - **Codec**: RVQ (Residual Vector Quantization) for speech representation
-- **Vocoder**: Griffin-Lim for waveform reconstruction (no training required)
+- **Vocoder**: Griffin-Lim (default, no training) or HiFi-GAN (optional, better quality) for waveform reconstruction
+- **OCR Model** (optional): Vision encoder + text decoder for extracting text from images
 
 ### 1. Thinker (Decoder-Only LLM)
 
@@ -195,6 +197,62 @@ Indices (B, 2)
 
 **Note**: This is a classical vocoder - no neural network training required. Quality is lower than neural vocoders but sufficient for prototyping.
 
+### 7. HiFi-GAN Neural Vocoder (Optional)
+
+**Purpose**: High-quality neural vocoder for converting mel spectrograms to waveforms (better quality than Griffin-Lim).
+
+**Components**:
+- **Generator**: U-Net style architecture with transposed convolutions
+- **Multi-Period Discriminator (MPD)**: Multiple discriminators operating at different periodicities
+- **Multi-Scale Discriminator (MSD)**: Multiple discriminators operating at different time scales
+
+**Architecture**:
+```
+Mel Spectrogram (B, T, 128)
+  → Generator (U-Net with transposed convolutions)
+  → Waveform (B, T_samples)
+
+Real/Fake Waveforms
+  → MPD (periodicities: 2, 3, 5, 7, 11)
+  → MSD (scales: raw, avg_pool_2, avg_pool_4)
+  → Discriminator outputs
+```
+
+**Algorithms Used**:
+- **Adversarial Training**: Generator vs. Discriminators (GAN)
+- **Feature Matching Loss**: Matches intermediate discriminator features
+- **Mel Loss**: L1 loss between real and generated mel spectrograms
+- **Multi-Scale Discrimination**: Captures both local and global audio patterns
+
+**Training**: Optional stage that improves TTS quality. Falls back to Griffin-Lim if not trained.
+
+### 8. OCR Model (Optional)
+
+**Purpose**: Extracts text from images (Optical Character Recognition).
+
+**Components**:
+- **Vision Encoder**: ViT-Tiny processes image patches
+- **Text Decoder**: Autoregressive decoder generates character sequences from visual features
+- **Character Vocabulary**: Built from training data (includes PAD, BOS, EOS, UNK tokens)
+
+**Architecture**:
+```
+Image (B, 3, 224, 224)
+  → Vision Encoder (ViT-Tiny)
+  → Visual Features (B, N_patches, d_vision)
+  → Text Decoder (autoregressive)
+  → Character Logits (B, T, vocab_size)
+  → Text Sequence
+```
+
+**Algorithms Used**:
+- **Vision Transformer**: Patch-based image encoding
+- **Autoregressive Generation**: Predicts next character from previous characters
+- **Teacher Forcing**: Uses ground truth characters during training
+- **Cross-Entropy Loss**: Character-level prediction loss (PAD tokens ignored)
+
+**Training**: Optional stage for text extraction from images. Can be integrated with multimodal understanding.
+
 ### Multimodal Fusion
 
 **Projection Layers**:
@@ -313,6 +371,57 @@ The training follows a **staged approach** to fit within 12GB VRAM and enable ef
 
 **Output**: `checkpoints/omni_sft_tiny/omni.pt` (includes Thinker + projectors)
 
+#### Stage F: HiFi-GAN Vocoder Training (Optional)
+**Script**: `train_vocoder.py`
+
+**Process**:
+1. **Data**: Audio files (WAV) - can reuse TTS/ASR datasets
+2. **Preprocessing**:
+   - Audio → Mel spectrogram (128 bins, same parameters as RVQ/Talker)
+   - Pair mel spectrograms with corresponding waveforms
+3. **Objective**: Adversarial training (Generator vs. Discriminators)
+4. **Training**:
+   - **Generator**: Converts mel → waveform
+   - **Discriminators**: MPD (Multi-Period) + MSD (Multi-Scale) distinguish real vs. fake
+   - **Losses**:
+     - Generator: Adversarial loss + Feature matching loss + Mel L1 loss
+     - Discriminator: Adversarial loss (real vs. fake)
+   - **Optimization**: Alternating updates (generator and discriminators)
+5. **Features**:
+   - Mixed precision (FP16) for 12GB VRAM efficiency
+   - Audio length limiting (~0.5s segments)
+   - Automatic fallback to Griffin-Lim if checkpoint unavailable
+
+**Output**: `checkpoints/vocoder_tiny/vocoder.pt` (or `hifigan.pt`)
+
+**Note**: This is optional - Griffin-Lim works without training but HiFi-GAN provides better quality.
+
+#### Stage G: OCR Training (Optional)
+**Script**: `train_ocr.py`
+
+**Process**:
+1. **Data**: Images with text labels (CSV format: `image,text`)
+2. **Preprocessing**:
+   - Images resized to 224×224
+   - Text converted to character-level sequences
+   - Character vocabulary built from dataset
+3. **Objective**: Character-level sequence prediction
+4. **Training**:
+   - Input: Image `(B, 3, 224, 224)`
+   - Vision Encoder: ViT-Tiny extracts visual features
+   - Text Decoder: Autoregressively generates characters
+   - Input: `[BOS] + chars[:T-1]` (teacher forcing)
+   - Target: `chars[1:T] + [EOS]`
+   - Loss: Cross-entropy on character predictions (PAD ignored)
+5. **Features**:
+   - Character vocabulary built dynamically from dataset
+   - Supports variable-length text sequences
+   - Can be integrated with multimodal understanding
+
+**Output**: `checkpoints/ocr_tiny/ocr.pt` (includes character vocabulary mappings)
+
+**Note**: This is optional - enables text extraction from images for richer multimodal understanding.
+
 ### Training Best Practices
 
 All training scripts include:
@@ -327,7 +436,7 @@ All training scripts include:
 
 ### End-to-End Pipeline
 
-The inference system supports **three modes**: text-only, multimodal (image/audio input), and speech output.
+The inference system supports **four modes**: text-only, multimodal (image/audio input), speech output, and OCR (text extraction from images).
 
 #### Mode 1: Text-Only Chat
 
@@ -410,7 +519,28 @@ Generated Text
   3. Incremental: Use KV cache, predict next frame from previous
   4. Continue until max frames or stop condition
 - **RVQ Decoding**: Sum codebook embeddings → project to mel
-- **Vocoding**: Griffin-Lim reconstructs phase from magnitude spectrogram
+- **Vocoding**: Griffin-Lim or HiFi-GAN reconstructs waveform from mel spectrogram
+
+#### Mode 4: OCR (Text Extraction from Images)
+
+**Flow**:
+```
+Image (B, 3, 224, 224)
+  → Vision Encoder (ViT-Tiny)
+  → Visual Features (B, N_patches, d_vision)
+  → Text Decoder (autoregressive)
+  → Character Logits (B, T, vocab_size)
+  → Autoregressive generation
+  → Character IDs
+  → Character Vocabulary Lookup
+  → Extracted Text
+```
+
+**Details**:
+- **Autoregressive Generation**: Predicts one character at a time until EOS
+- **Character Vocabulary**: Built from training data (includes special tokens: PAD, BOS, EOS, UNK)
+- **KV Caching**: Caches attention states for faster generation
+- **Integration**: Can be combined with multimodal understanding for richer image descriptions
 
 ### Complete Multimodal Round-Trip Example
 
@@ -441,9 +571,9 @@ Generated Text
      → Talker (autoregressive)
      → RVQ Codes (1, T_frames, 2)
      → RVQ Decode
-     → Mel Spectrogram
-     → Griffin-Lim
-     → Output.wav
+  → Mel Spectrogram
+  → Vocoder (Griffin-Lim or HiFi-GAN)
+  → Output.wav
 ```
 
 ### Key Inference Optimizations
@@ -545,6 +675,16 @@ python train_talker.py --config configs/talker_tiny.json
 python sft_omni.py --config configs/omni_sft_tiny.json
 ```
 
+### F) HiFi-GAN vocoder (optional, improves TTS quality)
+```
+python train_vocoder.py --config configs/vocoder_tiny.json
+```
+
+### G) OCR model (optional, text extraction from images)
+```
+python train_ocr.py --config configs/ocr_tiny.json
+```
+
 ## Inference
 ### Text chat:
 ```
@@ -556,13 +696,20 @@ python infer_chat.py --ckpt_dir checkpoints/thinker_tiny
 python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image path/to.jpg "describe this"
 ```
 
-### Speech chat (ASR in → Thinker → Talker → Griffin-Lim)
+### Speech chat (ASR in → Thinker → Talker → Vocoder)
 ```
 python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in path/to.wav
 ```
 
+### OCR (text extraction from images)
+```
+python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image path/to.jpg --ocr
+```
+
 ## Notes
-- Default voice uses **Griffin-Lim** (no vocoder training needed).
+- Default voice uses **Griffin-Lim** (no vocoder training needed). For better quality, train HiFi-GAN vocoder (Stage F).
+- **Vocoder Training**: Optional but recommended for production TTS. Falls back to Griffin-Lim if HiFi-GAN checkpoint unavailable.
+- **OCR Training**: Optional for text extraction from images. Can enhance multimodal understanding capabilities.
 - All configs target ~**120–140M** total params across modules and fit a **12GB** GPU with gradient accumulation + checkpointing.
 - Use smaller context (`ctx=1024`) during pretrain; go `2048` for SFT if VRAM allows.
 

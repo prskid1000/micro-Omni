@@ -57,18 +57,10 @@ def main(cfg):
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"OCR CSV not found. Expected: {csv_path}")
     
-    ds = OCRDataset(csv_path, image_root, cfg.get("img_size", 224), cfg=cfg)
-    vocab_size = len(ds.char_to_idx)
+    # Create a temporary dataset to get vocabulary size
+    temp_ds = OCRDataset(csv_path, image_root, cfg.get("img_size", 224), cfg=cfg, shuffle_buffer_size=0, seed=seed)
+    vocab_size = len(temp_ds.char_to_idx)
     print(f"Character vocabulary size: {vocab_size}")
-    
-    dl = DataLoader(
-        ds,
-        batch_size=cfg.get("batch_size", 4),
-        shuffle=True,
-        num_workers=cfg.get("num_workers", 2),
-        drop_last=cfg.get("drop_last", True),
-        collate_fn=collate_ocr_fn
-    )
     
     # Initialize model
     use_compile = cfg.get("use_compile", False)
@@ -119,17 +111,44 @@ def main(cfg):
     
     # Validation split
     val_split = cfg.get("val_split", 0.1)
-    total_size = len(ds)
-    val_size = int(total_size * val_split)
-    train_size = total_size - val_size
-    train_ds, val_ds = torch.utils.data.random_split(
-        ds, [train_size, val_size],
-        generator=torch.Generator().manual_seed(seed)
+    
+    train_ds = OCRDataset(
+        csv_path, 
+        image_root, 
+        cfg.get("img_size", 224), 
+        cfg=cfg,
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
+        seed=seed,
+        skip_samples=0
     )
+    train_ds._val_split = val_split
+    train_ds._val_mode = False  # Training mode
+    
+    val_ds = OCRDataset(
+        csv_path, 
+        image_root, 
+        cfg.get("img_size", 224), 
+        cfg=cfg,
+        shuffle_buffer_size=0,  # No shuffling for validation
+        seed=seed,  # Same seed for consistent hash-based split
+        skip_samples=0
+    )
+    val_ds._val_split = val_split
+    val_ds._val_mode = True  # Validation mode
+    
+    # Approximate sizes for logging (will count if needed)
+    try:
+        total_size = train_ds.get_length()
+        train_size = int(total_size * (1 - val_split))
+        val_size = total_size - train_size
+    except:
+        train_size = val_size = None  # Unknown size
+    
+    # Note: shuffle=False for IterableDataset (shuffling handled internally)
     train_dl = DataLoader(
         train_ds,
         batch_size=cfg.get("batch_size", 4),
-        shuffle=True,
+        shuffle=False,
         num_workers=cfg.get("num_workers", 2),
         drop_last=True,
         collate_fn=collate_ocr_fn

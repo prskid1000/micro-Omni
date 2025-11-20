@@ -44,10 +44,6 @@ def main(cfg):
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(cfg["save_dir"], exist_ok=True)
-    ds = MixDataset(cfg["sft_mix"]["text_path"], cfg["sft_mix"]["image_manifest"], cfg["sft_mix"]["image_root"], cfg["sft_mix"]["asr_csv"], cfg["ctx_len"])
-    print(f"Dataset size: {len(ds)}")
-    dl = DataLoader(ds, batch_size=cfg.get("batch_size", 2), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
-    print(f"DataLoader created, starting training...")
 
     # load components
     # torch.compile() support (optional, PyTorch 2.0+)
@@ -155,12 +151,47 @@ def main(cfg):
     
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
-    total_size = len(ds)
-    val_size = int(total_size * val_split)
-    train_size = total_size - val_size
-    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(seed))
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
+    
+    train_ds = MixDataset(
+        cfg["sft_mix"]["text_path"], 
+        cfg["sft_mix"]["image_manifest"], 
+        cfg["sft_mix"]["image_root"], 
+        cfg["sft_mix"]["asr_csv"], 
+        cfg["ctx_len"],
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
+        seed=seed,
+        skip_samples=0
+    )
+    train_ds._val_split = val_split
+    train_ds._val_mode = False  # Training mode
+    
+    val_ds = MixDataset(
+        cfg["sft_mix"]["text_path"], 
+        cfg["sft_mix"]["image_manifest"], 
+        cfg["sft_mix"]["image_root"], 
+        cfg["sft_mix"]["asr_csv"], 
+        cfg["ctx_len"],
+        shuffle_buffer_size=0,  # No shuffling for validation
+        seed=seed,  # Same seed for consistent hash-based split
+        skip_samples=0
+    )
+    val_ds._val_split = val_split
+    val_ds._val_mode = True  # Validation mode
+    
+    # Approximate sizes for logging (will count if needed)
+    try:
+        total_size = train_ds.get_length()
+        train_size = int(total_size * (1 - val_split))
+        val_size = total_size - train_size
+        print(f"Dataset size: {total_size} (train: {train_size}, val: {val_size})")
+    except:
+        train_size = val_size = None  # Unknown size
+        print(f"Dataset size: unknown")
+    
+    # Note: shuffle=False for IterableDataset (shuffling handled internally)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
     val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=mix_collate_fn)
+    print(f"DataLoader created, starting training...")
     
     print(f"Starting training: max_epochs={max_epochs}, max_steps={cfg['max_steps']}, batch_size={cfg.get('batch_size', 2)}")
     print(f"Train samples: {train_size}, Val samples: {val_size}")

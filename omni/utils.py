@@ -730,6 +730,16 @@ class ASRDataset(IterableDataset):
         self.csv_path, self.sr = csv_path, sr
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=160, win_length=400, n_mels=n_mels)
+        self._num_rows = None
+    
+    def get_length(self):
+        """Count CSV rows (expensive, cached after first call)"""
+        if self._num_rows is None:
+            import csv
+            with open(self.csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                self._num_rows = sum(1 for _ in reader)
+        return self._num_rows
     
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -790,7 +800,16 @@ class OCRDataset(IterableDataset):
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
         self.char_to_idx, self.idx_to_char = {}, {}
+        self._num_rows = None
         self._build_vocab(csv_path)
+    
+    def get_length(self):
+        """Count CSV rows (expensive, cached after first call)"""
+        if self._num_rows is None:
+            with open(self.csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                self._num_rows = sum(1 for _ in reader)
+        return self._num_rows
     
     def _build_vocab(self, csv_path):
         """Build character vocabulary from CSV."""
@@ -880,6 +899,15 @@ class TTSDataset(IterableDataset):
         win_length = min(1024, hop_length * 4)
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=hop_length, win_length=win_length, n_mels=n_mels)
         self.frame = int(sr * 0.08)
+        self._num_rows = None
+    
+    def get_length(self):
+        """Count CSV rows (expensive, cached after first call)"""
+        if self._num_rows is None:
+            with open(self.csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                self._num_rows = sum(1 for _ in reader)
+        return self._num_rows
     
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -938,6 +966,15 @@ class ImgCapDataset(IterableDataset):
         self.manifest_path, self.root = manifest, image_root
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
+        self._num_items = None
+    
+    def get_length(self):
+        """Count JSON manifest items (expensive, cached after first call)"""
+        if self._num_items is None:
+            with open(self.manifest_path, 'r', encoding='utf-8') as f:
+                items = json.load(f)
+                self._num_items = len(items)
+        return self._num_items
     
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -996,6 +1033,15 @@ class VocoderDataset(IterableDataset):
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.max_audio_length = cfg.get("max_audio_length", None) if cfg else None
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=n_fft, hop_length=hop_length, win_length=n_fft, n_mels=n_mels, fmin=0.0, fmax=sr / 2.0)
+        self._num_rows = None
+    
+    def get_length(self):
+        """Count CSV rows (expensive, cached after first call)"""
+        if self._num_rows is None:
+            with open(self.csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                self._num_rows = sum(1 for _ in reader)
+        return self._num_rows
     
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -1071,6 +1117,23 @@ class MixDataset(IterableDataset):
         self.text_path, self.image_manifest_path, self.image_root, self.asr_csv_path, self.ctx = text_path, image_manifest, image_root, asr_csv, ctx
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.tf = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+        self._num_items = None
+    
+    def get_length(self):
+        """Count max of text lines, images, and ASR rows (expensive, cached after first call)"""
+        if self._num_items is None:
+            # Count text lines
+            text_count = sum(1 for _ in open(self.text_path, 'r', encoding='utf-8', errors='ignore'))
+            # Count images
+            with open(self.image_manifest_path, 'r', encoding='utf-8') as f:
+                images = json.load(f)
+                image_count = len(images)
+            # Count ASR rows
+            with open(self.asr_csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                asr_count = sum(1 for _ in reader)
+            self._num_items = max(text_count, image_count, asr_count)
+        return self._num_items
     
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()

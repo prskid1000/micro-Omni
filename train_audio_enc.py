@@ -4,7 +4,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, cleanup_old_checkpoints, ValidationSkipSamplesContext
 from tqdm import tqdm
 
 def collate_fn(batch):
@@ -28,8 +28,6 @@ def main(cfg):
     os.makedirs(cfg["save_dir"], exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("mel_bins", 128)
-    ds = ASRDataset(cfg["train_csv"], sr=sr, n_mels=n_mels, cfg=cfg)
-    dl = DataLoader(ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn)
     downsample_factor = cfg.get("downsample_time", 8)  # 8x for 12.5 Hz (16000/160/8 = 12.5)
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
@@ -104,11 +102,41 @@ def main(cfg):
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
-    total_size = len(ds)
-    val_size = int(total_size * val_split)
-    train_size = total_size - val_size
-    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(seed))
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=True, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn)
+    
+    train_ds = ASRDataset(
+        cfg["train_csv"], 
+        sr=sr, 
+        n_mels=n_mels, 
+        cfg=cfg,
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
+        seed=seed,
+        skip_samples=0  # Will be updated after checkpoint load
+    )
+    train_ds._val_split = val_split
+    train_ds._val_mode = False  # Training mode
+    
+    val_ds = ASRDataset(
+        cfg["train_csv"], 
+        sr=sr, 
+        n_mels=n_mels, 
+        cfg=cfg,
+        shuffle_buffer_size=0,  # No shuffling for validation
+        seed=seed,  # Same seed for consistent hash-based split
+        skip_samples=0  # Don't skip validation samples
+    )
+    val_ds._val_split = val_split
+    val_ds._val_mode = True  # Validation mode
+    
+    # Approximate sizes for logging (will count if needed)
+    try:
+        total_size = train_ds.get_length()
+        train_size = int(total_size * (1 - val_split))
+        val_size = total_size - train_size
+    except:
+        train_size = val_size = None  # Unknown size
+    
+    # Note: shuffle=False for IterableDataset (shuffling handled internally)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn)
     val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=collate_fn)
     
     # Initialize logger

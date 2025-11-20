@@ -14,12 +14,12 @@
   "wd": 0.1,
   "warmup_steps": 2958,
   "max_steps": 73962,
-  "batch_size": 4,
+  "batch_size": 32,
   "gradient_accumulation_steps": 1,
   "use_amp": true,
   "use_flash": true,
   "use_compile": true,
-  "num_workers": 2,
+  "num_workers": 0,
   "drop_last": true,
   "print_freq": 100,
   "max_epochs": 7,
@@ -30,6 +30,6 @@
   "seed": 42,
   "ctc_vocab_size": 98,
   "max_text_len": 64,
-  "train_csv": "data/audio/asr.csv",
+  "train_csv": "data/audio/production_asr.csv",
   "save_dir": "checkpoints/audio_enc_tiny"
 }
