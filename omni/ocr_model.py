@@ -12,7 +12,79 @@ import torch
 from torch import nn
 from typing import Optional, Tuple
 from omni.vision_encoder import ViTTiny
-from omni.utils import RMSNorm
+from omni.utils import RMSNorm, make_positions
+from omni.thinker import Attention, MLP
+import warnings
+
+# Check for Flash Attention support (PyTorch 2.0+)
+HAS_FLASH_ATTENTION = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+if HAS_FLASH_ATTENTION:
+    from torch.nn.functional import scaled_dot_product_attention
+
+
+class OCRDecoderBlock(nn.Module):
+    """
+    Decoder block with self-attention, cross-attention, and feedforward.
+    Follows Thinker's Block pattern with separate norm instances.
+    """
+    def __init__(self, d: int, heads: int, ff: int, rope_theta: float, dropout: float,
+                 use_gqa: bool = False, use_swiglu: bool = True, use_flash: bool = True) -> None:
+        super().__init__()
+        # Separate norm instances for each sub-layer (like Thinker's Block)
+        self.norm1 = RMSNorm(d)  # For self-attention
+        self.norm2 = RMSNorm(d)  # For cross-attention
+        self.norm3 = RMSNorm(d)  # For feedforward
+        
+        # Self-attention with RoPE (causal)
+        self.self_attn = Attention(d, heads, rope_theta=rope_theta, dropout=dropout,
+                                   use_gqa=use_gqa, use_flash=use_flash)
+        
+        # Cross-attention to image features (no RoPE needed for cross-attention)
+        self.cross_attn = nn.MultiheadAttention(d, heads, dropout=dropout, batch_first=True)
+        
+        # Feedforward network
+        if use_swiglu:
+            self.mlp = MLP(d, ff, use_swiglu=True)
+        else:
+            self.mlp = MLP(d, ff, use_swiglu=False)
+        
+        self.drop = nn.Dropout(dropout)
+    
+    def forward(self, x: torch.Tensor, img_features: torch.Tensor,
+                mask: Optional[torch.Tensor] = None,
+                pos: Optional[torch.Tensor] = None,
+                cache: Optional[dict] = None,
+                return_cache: bool = False) -> Tuple[torch.Tensor, Optional[dict]]:
+        """
+        Forward pass through decoder block.
+        
+        Args:
+            x: (B, T, D) text token embeddings
+            img_features: (B, N, D) image features (already projected)
+            mask: Optional causal mask for self-attention
+            pos: Optional position indices for RoPE
+            cache: Optional KV cache for self-attention
+            return_cache: Whether to return updated cache
+        
+        Returns:
+            x: (B, T, D) output
+            cache: Updated cache (if return_cache=True)
+        """
+        # Self-attention (causal) with RoPE
+        attn_out, cache = self.self_attn(self.norm1(x), mask=mask, pos=pos,
+                                         cache=cache, need_cache=return_cache)
+        x = x + self.drop(attn_out)
+        
+        # Cross-attention to image features (no RoPE, no causal mask)
+        residual = x
+        x_norm = self.norm2(x)
+        cross_out, _ = self.cross_attn(x_norm, img_features, img_features)
+        x = residual + self.drop(cross_out)
+        
+        # Feedforward
+        x = x + self.drop(self.mlp(self.norm3(x)))
+        
+        return x, cache
 
 
 class OCRDecoder(nn.Module):
@@ -24,7 +96,7 @@ class OCRDecoder(nn.Module):
                  d_ff: int = 1024, vocab_size: int = 128, dropout: float = 0.1,
                  max_seq_len: int = 256, use_gqa: bool = False, kv_groups: int = 1,
                  use_swiglu: bool = True, rope_theta: float = 10000.0,
-                 compile_model: bool = False) -> None:
+                 use_flash: bool = True, compile_model: bool = False) -> None:
         """
         Initialize OCR decoder.
         
@@ -40,6 +112,7 @@ class OCRDecoder(nn.Module):
             kv_groups: Number of KV groups for GQA
             use_swiglu: Use SwiGLU activation
             rope_theta: RoPE theta parameter
+            use_flash: Use Flash Attention for speedup
             compile_model: Use torch.compile()
         """
         super().__init__()
@@ -50,12 +123,10 @@ class OCRDecoder(nn.Module):
         # Character embedding
         self.char_embed = nn.Embedding(vocab_size, d_model)
         
-        # Positional encoding (RoPE)
-        self.rope_theta = rope_theta
-        
-        # Decoder layers
-        self.layers = nn.ModuleList([
-            self._make_decoder_layer(d_model, n_heads, d_ff, dropout, use_gqa, kv_groups, use_swiglu)
+        # Decoder blocks (each with separate norms)
+        self.blocks = nn.ModuleList([
+            OCRDecoderBlock(d_model, n_heads, d_ff, rope_theta, dropout,
+                           use_gqa=use_gqa, use_swiglu=use_swiglu, use_flash=use_flash)
             for _ in range(n_layers)
         ])
         
@@ -63,79 +134,41 @@ class OCRDecoder(nn.Module):
         self.norm = RMSNorm(d_model)
         self.head = nn.Linear(d_model, vocab_size, bias=False)
         
-        # Cross-attention to image features
-        self.cross_attn_layers = nn.ModuleList([
-            nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
-            for _ in range(n_layers)
-        ])
-        
         # Image feature projection (from vision encoder output)
         self.img_proj = nn.Linear(128, d_model)  # ViT outputs 128-dim, project to d_model
+        
+        # KV cache for autoregressive generation
+        self.kv_cache = None
+        self.use_kv_cache = False
         
         # Compilation support
         self._compiled = False
         if compile_model:
             self._apply_compilation()
     
-    def _make_decoder_layer(self, d_model, n_heads, d_ff, dropout, use_gqa, kv_groups, use_swiglu):
-        """Create a decoder layer with self-attention and cross-attention."""
-        layers = []
-        
-        # Self-attention
-        if use_gqa:
-            # Grouped Query Attention
-            kv_heads = n_heads // kv_groups
-            q_proj = nn.Linear(d_model, d_model)
-            k_proj = nn.Linear(d_model, d_model // kv_groups)
-            v_proj = nn.Linear(d_model, d_model // kv_groups)
-            layers.append(('q_proj', q_proj))
-            layers.append(('k_proj', k_proj))
-            layers.append(('v_proj', v_proj))
-        else:
-            q_proj = nn.Linear(d_model, d_model)
-            k_proj = nn.Linear(d_model, d_model)
-            v_proj = nn.Linear(d_model, d_model)
-            layers.append(('q_proj', q_proj))
-            layers.append(('k_proj', k_proj))
-            layers.append(('v_proj', v_proj))
-        
-        # Feedforward
-        if use_swiglu:
-            gate_proj = nn.Linear(d_model, d_ff)
-            up_proj = nn.Linear(d_model, d_ff)
-            down_proj = nn.Linear(d_ff, d_model)
-            layers.append(('gate_proj', gate_proj))
-            layers.append(('up_proj', up_proj))
-            layers.append(('down_proj', down_proj))
-        else:
-            ffn = nn.Sequential(
-                nn.Linear(d_model, d_ff),
-                nn.GELU(),
-                nn.Dropout(dropout),
-                nn.Linear(d_ff, d_model),
-                nn.Dropout(dropout)
-            )
-            layers.append(('ffn', ffn))
-        
-        return nn.ModuleDict(layers)
-    
     def _apply_compilation(self) -> None:
         """Apply torch.compile() for speedup."""
         if not hasattr(torch, 'compile'):
+            warnings.warn("torch.compile() not available. Requires PyTorch 2.0+. Skipping compilation.")
             return
         try:
-            for i, layer in enumerate(self.layers):
-                self.layers[i] = torch.compile(layer, backend='cudagraphs', mode='default')
+            for i, block in enumerate(self.blocks):
+                self.blocks[i] = torch.compile(block, backend='cudagraphs', mode='default')
             self.head = torch.compile(self.head, backend='cudagraphs', mode='default')
             self._compiled = True
-        except Exception:
-            pass
+            print(f"✓ OCRDecoder compiled successfully with torch.compile()")
+        except Exception as e:
+            warnings.warn(f"Failed to compile OCRDecoder: {e}. Continuing without compilation.")
     
-    def _apply_rope(self, x: torch.Tensor, pos: int) -> torch.Tensor:
-        """Apply Rotary Position Embedding (RoPE)."""
-        # Simplified RoPE - can be enhanced
-        # For now, just return x (positional info from embeddings)
-        return x
+    def reset_kv_cache(self) -> None:
+        """Reset KV cache (call before new generation)"""
+        self.kv_cache = None
+    
+    def enable_kv_cache(self, enable: bool = True) -> None:
+        """Enable/disable KV caching for faster autoregressive generation"""
+        self.use_kv_cache = enable
+        if not enable:
+            self.kv_cache = None
     
     def forward(self, text_ids: torch.Tensor, img_features: torch.Tensor,
                 use_cache: bool = False) -> torch.Tensor:
@@ -158,45 +191,43 @@ class OCRDecoder(nn.Module):
         # Character embeddings
         x = self.char_embed(text_ids)  # (B, T, d_model)
         
-        # Process through decoder layers
-        for i, layer in enumerate(self.layers):
-            # Self-attention (causal)
-            residual = x
-            x = self.norm(x)  # Use shared norm instance
-            
-            # Simplified self-attention (can use proper causal mask)
-            q = layer['q_proj'](x)
-            k = layer['k_proj'](x)
-            v = layer['v_proj'](x)
-            
-            # Causal mask
-            mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
-            attn_out, _ = nn.functional.scaled_dot_product_attention(
-                q, k, v, attn_mask=mask, is_causal=True
-            )
-            x = residual + attn_out
-            
-            # Cross-attention to image features
-            residual = x
-            x = self.norm(x)  # Use shared norm instance
-            cross_out, _ = self.cross_attn_layers[i](x, img_proj, img_proj)
-            x = residual + cross_out
-            
-            # Feedforward
-            residual = x
-            x = self.norm(x)  # Use shared norm instance
-            if 'gate_proj' in layer:
-                # SwiGLU
-                gate = layer['gate_proj'](x)
-                up = layer['up_proj'](x)
-                ffn_out = layer['down_proj'](torch.nn.functional.silu(gate) * up)
-            else:
-                ffn_out = layer['ffn'](x)
-            x = residual + ffn_out
+        # Prepare position indices for RoPE
+        pos = make_positions(T, x.device)
+        
+        # Prepare causal mask for self-attention
+        mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+        
+        # KV caching setup
+        use_kv = use_cache and self.use_kv_cache
+        if use_kv and self.kv_cache is None:
+            self.kv_cache = [None] * len(self.blocks)
+        
+        cache_ready = use_kv and self.kv_cache[0] is not None
+        
+        if use_kv and cache_ready:
+            # Incremental decoding: only process new tokens
+            pos = torch.tensor([self.kv_cache[0]['pos']], device=x.device, dtype=torch.long)
+            for i, block in enumerate(self.blocks):
+                x, new_cache = block(x, img_proj, mask=None, pos=pos,
+                                    cache=self.kv_cache[i], return_cache=True)
+                self.kv_cache[i] = new_cache
+        else:
+            # Full forward pass
+            for i, block in enumerate(self.blocks):
+                x, new_cache = block(x, img_proj, mask=mask, pos=pos,
+                                    cache=None, return_cache=use_kv)
+                if use_kv:
+                    self.kv_cache[i] = new_cache
         
         # Output projection
         x = self.norm(x)
         logits = self.head(x)  # (B, T, vocab_size)
+        
+        # Check for numerical stability
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            nan_count = torch.isnan(logits).sum().item()
+            inf_count = torch.isinf(logits).sum().item()
+            raise RuntimeError(f"Numerical instability in OCRDecoder: NaN={nan_count}, Inf={inf_count}")
         
         return logits
 
@@ -211,7 +242,8 @@ class OCRModel(nn.Module):
                  decoder_d_model: int = 256, decoder_layers: int = 4,
                  decoder_heads: int = 4, decoder_d_ff: int = 1024,
                  vocab_size: int = 128, dropout: float = 0.1,
-                 compile_model: bool = False) -> None:
+                 use_gqa: bool = False, use_swiglu: bool = True,
+                 use_flash: bool = True, compile_model: bool = False) -> None:
         """
         Initialize complete OCR model.
         
@@ -228,6 +260,9 @@ class OCRModel(nn.Module):
             decoder_d_ff: Text decoder FFN dimension
             vocab_size: Character vocabulary size
             dropout: Dropout rate
+            use_gqa: Use Grouped Query Attention in decoder
+            use_swiglu: Use SwiGLU activation in decoder
+            use_flash: Use Flash Attention in decoder
             compile_model: Use torch.compile()
         """
         super().__init__()
@@ -252,6 +287,9 @@ class OCRModel(nn.Module):
             d_ff=decoder_d_ff,
             vocab_size=vocab_size,
             dropout=dropout,
+            use_gqa=use_gqa,
+            use_swiglu=use_swiglu,
+            use_flash=use_flash,
             compile_model=compile_model
         )
     
@@ -277,4 +315,3 @@ class OCRModel(nn.Module):
         logits = self.decoder(text_ids, img_features)  # (B, T, vocab_size)
         
         return logits
-

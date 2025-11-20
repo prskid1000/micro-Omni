@@ -19,6 +19,7 @@ configs/
 ├── vision_tiny.json       # Stage C: Vision encoder
 ├── talker_tiny.json       # Stage D: Speech generation
 ├── vocoder_tiny.json      # Optional: HiFi-GAN neural vocoder
+├── ocr_tiny.json          # Optional: OCR text extraction
 └── omni_sft_tiny.json     # Stage E: Multimodal SFT
 ```
 
@@ -352,6 +353,85 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 - `max_audio_length`: 8192 (~0.5s, reduce to 4096 if OOM)
 - `gradient_accumulation_steps`: 4 (simulates batch_size=8)
 - `use_amp`: true (FP16 saves ~50% memory)
+
+---
+
+### `configs/ocr_tiny.json` (Optional - OCR Model)
+
+```json
+{
+  "save_dir": "checkpoints/ocr_tiny",
+  "train_csv": "data/ocr/production_ocr.csv",
+  "image_root": "data/ocr",
+  "img_size": 224,
+  "patch": 16,
+  "vision_d_model": 128,
+  "vision_layers": 4,
+  "vision_heads": 2,
+  "vision_d_ff": 512,
+  "decoder_d_model": 256,
+  "decoder_layers": 4,
+  "decoder_heads": 4,
+  "decoder_d_ff": 1024,
+  "dropout": 0.1,
+  "use_gqa": false,
+  "use_swiglu": true,
+  "use_flash": true,
+  "rope_theta": 10000.0,
+  "batch_size": 4,
+  "num_workers": 2,
+  "drop_last": true,
+  "lr": 3e-4,
+  "wd": 0.01,
+  "warmup_steps": 500,
+  "max_steps": 10000,
+  "max_epochs": 9999,
+  "gradient_accumulation_steps": 2,
+  "max_grad_norm": 1.0,
+  "use_amp": true,
+  "val_split": 0.1,
+  "print_freq": 50,
+  "checkpoint_freq": 1000,
+  "val_freq": 500,
+  "seed": 42,
+  "shuffle_buffer_size": 10000,
+  "use_compile": false,
+  "max_text_length": 256
+}
+```
+
+**Key Parameters:**
+
+**Vision Encoder:**
+- `img_size`: 224 (input image size, square)
+- `patch`: 16 (patch size, creates 196 patches = 14×14)
+- `vision_d_model`: 128 (vision encoder dimension)
+- `vision_layers`: 4 (number of ViT transformer layers)
+- `vision_heads`: 2 (attention heads in vision encoder)
+- `vision_d_ff`: 512 (feedforward dimension in vision encoder)
+
+**Text Decoder:**
+- `decoder_d_model`: 256 (decoder dimension, matches Thinker)
+- `decoder_layers`: 4 (number of decoder blocks)
+- `decoder_heads`: 4 (attention heads in decoder)
+- `decoder_d_ff`: 1024 (feedforward dimension, 4×d_model)
+- `use_gqa`: false (Grouped Query Attention, optional optimization)
+- `use_swiglu`: true (SwiGLU activation, modern and effective)
+- `use_flash`: true (Flash Attention for 2-4x speedup)
+- `rope_theta`: 10000.0 (RoPE positional encoding parameter)
+
+**Training:**
+- `train_csv`: CSV file with `image,text` columns
+- `image_root`: Root directory for images
+- `max_text_length`: 256 (maximum text sequence length)
+- `vocab_size`: Dynamic (built from dataset characters)
+
+**Architecture Notes:**
+- ✅ ViT encoder extracts visual features from image patches
+- ✅ Transformer decoder with cross-attention to image features
+- ✅ RoPE for relative position encoding in text sequences
+- ✅ Separate norm instances per layer (matches Thinker pattern)
+- ✅ KV caching support for fast autoregressive generation
 
 ---
 

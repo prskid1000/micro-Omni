@@ -95,6 +95,9 @@ def main(cfg):
         decoder_d_ff=cfg.get("decoder_d_ff", 1024),
         vocab_size=vocab_size,
         dropout=cfg.get("dropout", 0.1),
+        use_gqa=cfg.get("use_gqa", False),
+        use_swiglu=cfg.get("use_swiglu", True),
+        use_flash=cfg.get("use_flash", True),
         compile_model=use_compile
     ).to(device)
     

@@ -115,12 +115,13 @@
 
 ---
 
-### **Part 9: Deployment and Export (Chapters 46-47)**
+### **Part 9: Deployment and Export (Chapters 46-48)**
 
 | Chapter | Title | Description |
 |---------|-------|-------------|
 | [46](46-model-export-deployment.md) | Model Export and Deployment | Merging components into safetensors for deployment |
 | [47](47-quick-start-export.md) | Quick Start Export Guide | Fast reference for exporting models |
+| [48](48-ocr-model.md) | OCR Model - Text Extraction | Extracting text from images with ViT + Transformer decoder |
 
 ---
 

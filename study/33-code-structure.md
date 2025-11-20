@@ -170,8 +170,10 @@ class GriffinLimVocoder:
 
 #### `train_ocr.py`
 - **Optional**: OCR model training
-- **Data**: Images + text labels
-- **Loss**: Cross-entropy
+- **Data**: Images + text labels (CSV format)
+- **Architecture**: ViT encoder + Transformer decoder with cross-attention
+- **Features**: RoPE, SwiGLU, Flash Attention, KV caching
+- **Loss**: Cross-entropy (character-level)
 - **Output**: `checkpoints/ocr_tiny/`
 
 #### `sft_omni.py`
