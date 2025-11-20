@@ -155,7 +155,6 @@ def main(cfg):
     # Memory optimizations summary
 
     print(f"  • Audio length limit: {cfg.get('max_audio_length', 8192)} samples (~{cfg.get('max_audio_length', 8192)/sr:.2f}s)")
-    print(f"  • DataLoader workers: {cfg.get('num_workers', 1)}")
     print(f"  • Mixed precision: {'Enabled' if use_amp else 'Disabled'}")
     print()
     
