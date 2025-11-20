@@ -190,7 +190,7 @@ def main(cfg):
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
     train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
-    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=False, collate_fn=mix_collate_fn)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
     print(f"DataLoader created, starting training...")
     
     print(f"Starting training: max_epochs={max_epochs}, max_steps={cfg['max_steps']}, batch_size={cfg.get('batch_size', 2)}")

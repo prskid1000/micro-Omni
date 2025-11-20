@@ -221,7 +221,7 @@ def main(cfg):
         batch_size=cfg.get("batch_size", 4), 
         shuffle=False, 
         num_workers=cfg.get("num_workers", 2), 
-        drop_last=False,
+        drop_last=cfg.get("drop_last", True),
         collate_fn=collate_mel_audio_fn
     )
     
