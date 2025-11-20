@@ -4,40 +4,8 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, cleanup_old_checkpoints, ValidationSkipSamplesContext
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, cleanup_old_checkpoints, ValidationSkipSamplesContext, collate_mel_text_fn
 from tqdm import tqdm
-
-def collate_fn(batch, max_mel_length=None):
-    """
-    Collate function that pads all mel spectrograms to a fixed maximum length.
-    This ensures uniform batch sizes for CUDA graphs compilation.
-    
-    Args:
-        batch: List of (mel, text) tuples
-        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
-    """
-    mels, texts = zip(*batch)
-    n_mels = mels[0].shape[1]
-    
-    # Use fixed max length if provided, otherwise use batch max
-    if max_mel_length is not None:
-        max_len = max_mel_length
-    else:
-        max_len = max(m.shape[0] for m in mels)
-    
-    padded_mels = []
-    for m in mels:
-        current_len = m.shape[0]
-        if current_len > max_len:
-            # Truncate if longer than max (shouldn't happen with proper config)
-            m = m[:max_len]
-            current_len = max_len
-        
-        pad_len = max_len - current_len
-        if pad_len > 0:
-            m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
-        padded_mels.append(m)
-    return torch.stack(padded_mels), list(texts)
 
 def main(cfg):
     # Set random seed for reproducibility
@@ -129,7 +97,7 @@ def main(cfg):
     # Create collate function with fixed max length
     def make_collate_fn(max_len):
         def collate(batch):
-            return collate_fn(batch, max_mel_length=max_len)
+            return collate_mel_text_fn(batch, max_mel_length=max_len)
         return collate
     
     collate_fn_with_max = make_collate_fn(max_mel_length)
@@ -320,12 +288,21 @@ def main(cfg):
                         scaler.update()
                     continue
                 
-                # Check for gradient explosion before clipping (after unscaling if AMP)
+                # Gradient clipping first (already unscaled if using AMP)
+                # Clip gradients to prevent explosion, then check if still too high
                 try:
-                    grad_norm_model, is_exploded_model = check_gradient_explosion(model, max_grad_norm=100.0, raise_on_error=False)
-                    grad_norm_head, is_exploded_head = check_gradient_explosion(head, max_grad_norm=100.0, raise_on_error=False)
+                    grad_norm_model_before = clip_gradients(model, max_grad_norm)
+                    grad_norm_head_before = clip_gradients(head, max_grad_norm)
+                    
+                    # Check for gradient explosion AFTER clipping
+                    # Use a higher threshold (10x max_grad_norm) since we've already clipped
+                    # This allows clipping to fix most cases, only skip if truly exploded
+                    explosion_threshold = max(100.0, max_grad_norm * 10)
+                    grad_norm_model_after, is_exploded_model = check_gradient_explosion(model, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    grad_norm_head_after, is_exploded_head = check_gradient_explosion(head, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    
                     if is_exploded_model or is_exploded_head:
-                        logger.error(f"Step {step}: Gradient explosion detected (model={grad_norm_model:.2f}, head={grad_norm_head:.2f}). Skipping this batch.")
+                        logger.error(f"Step {step}: Gradient explosion detected after clipping (model: {grad_norm_model_before:.2f}->{grad_norm_model_after:.2f}, head: {grad_norm_head_before:.2f}->{grad_norm_head_after:.2f}). Skipping this batch.")
                         opt.zero_grad()  # Clear gradients
                         if use_amp:
                             scaler.update()  # Update scaler even though we skipped (unscale was called)
@@ -337,15 +314,11 @@ def main(cfg):
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
                 
-                # Gradient clipping (already unscaled if using AMP)
+                # Optimizer step (gradients already clipped)
                 if use_amp:
-                    clip_gradients(model, max_grad_norm)
-                    clip_gradients(head, max_grad_norm)
                     scaler.step(opt)
                     scaler.update()
                 else:
-                    clip_gradients(model, max_grad_norm)
-                    clip_gradients(head, max_grad_norm)
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping

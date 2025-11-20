@@ -17,38 +17,9 @@ from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscr
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, cleanup_old_checkpoints, VocoderDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext
+    ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn
 )
 from tqdm import tqdm
-
-
-def collate_mel_audio_fn(batch):
-    """Collate function for mel spectrograms and audio pairs"""
-    mels, audios = zip(*batch)
-    
-    # Pad mel spectrograms
-    max_mel_len = max(m.shape[0] for m in mels)
-    n_mels = mels[0].shape[1]
-    padded_mels = []
-    for m in mels:
-        pad_len = max_mel_len - m.shape[0]
-        if pad_len > 0:
-            m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
-        padded_mels.append(m)
-    
-    # Pad audio waveforms
-    max_audio_len = max(a.shape[0] for a in audios)
-    padded_audios = []
-    for a in audios:
-        pad_len = max_audio_len - a.shape[0]
-        if pad_len > 0:
-            a = torch.cat([a, torch.zeros(pad_len)], dim=0)
-        padded_audios.append(a)
-    
-    return torch.stack(padded_mels), torch.stack(padded_audios)
-
-
-
 
 def discriminator_loss(real_outputs, fake_outputs):
     """Compute discriminator loss (adversarial loss)"""
@@ -391,8 +362,29 @@ def main(cfg):
                 scaler_d.scale(loss_d / accumulation_steps).backward()
                 if (batch_idx + 1) % accumulation_steps == 0:
                     scaler_d.unscale_(opt_d)
-                    clip_gradients(mpd, cfg.get("max_grad_norm", 1.0))
-                    clip_gradients(msd, cfg.get("max_grad_norm", 1.0))
+                    max_grad_norm = cfg.get("max_grad_norm", 1.0)
+                    
+                    # Gradient clipping first, then check if still too high
+                    try:
+                        grad_norm_mpd_before = clip_gradients(mpd, max_grad_norm)
+                        grad_norm_msd_before = clip_gradients(msd, max_grad_norm)
+                        
+                        # Check for gradient explosion AFTER clipping
+                        explosion_threshold = max(100.0, max_grad_norm * 10)
+                        grad_norm_mpd_after, is_exploded_mpd = check_gradient_explosion(mpd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                        grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                        
+                        if is_exploded_mpd or is_exploded_msd:
+                            logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
+                            opt_d.zero_grad()
+                            scaler_d.update()
+                            continue
+                    except RuntimeError as e:
+                        logger.error(f"Step {step}: {e}")
+                        opt_d.zero_grad()
+                        scaler_d.update()
+                        continue
+                    
                     scaler_d.step(opt_d)
                     scaler_d.update()
                     scheduler_d.step()
@@ -424,8 +416,27 @@ def main(cfg):
                 (loss_d / accumulation_steps).backward()
                 
                 if (batch_idx + 1) % accumulation_steps == 0:
-                    clip_gradients(mpd, cfg.get("max_grad_norm", 1.0))
-                    clip_gradients(msd, cfg.get("max_grad_norm", 1.0))
+                    max_grad_norm = cfg.get("max_grad_norm", 1.0)
+                    
+                    # Gradient clipping first, then check if still too high
+                    try:
+                        grad_norm_mpd_before = clip_gradients(mpd, max_grad_norm)
+                        grad_norm_msd_before = clip_gradients(msd, max_grad_norm)
+                        
+                        # Check for gradient explosion AFTER clipping
+                        explosion_threshold = max(100.0, max_grad_norm * 10)
+                        grad_norm_mpd_after, is_exploded_mpd = check_gradient_explosion(mpd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                        grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                        
+                        if is_exploded_mpd or is_exploded_msd:
+                            logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
+                            opt_d.zero_grad()
+                            continue
+                    except RuntimeError as e:
+                        logger.error(f"Step {step}: {e}")
+                        opt_d.zero_grad()
+                        continue
+                    
                     opt_d.step()
                     scheduler_d.step()
                     opt_d.zero_grad()
@@ -504,7 +515,27 @@ def main(cfg):
                 scaler_g.scale(loss_g / accumulation_steps).backward()
                 if (batch_idx + 1) % accumulation_steps == 0:
                     scaler_g.unscale_(opt_g)
-                    clip_gradients(generator, cfg.get("max_grad_norm", 1.0))
+                    max_grad_norm = cfg.get("max_grad_norm", 1.0)
+                    
+                    # Gradient clipping first, then check if still too high
+                    try:
+                        grad_norm_gen_before = clip_gradients(generator, max_grad_norm)
+                        
+                        # Check for gradient explosion AFTER clipping
+                        explosion_threshold = max(100.0, max_grad_norm * 10)
+                        grad_norm_gen_after, is_exploded_gen = check_gradient_explosion(generator, max_grad_norm=explosion_threshold, raise_on_error=False)
+                        
+                        if is_exploded_gen:
+                            logger.error(f"Step {step}: Generator gradient explosion after clipping (norm: {grad_norm_gen_before:.2f}->{grad_norm_gen_after:.2f}). Skipping this batch.")
+                            opt_g.zero_grad()
+                            scaler_g.update()
+                            continue
+                    except RuntimeError as e:
+                        logger.error(f"Step {step}: {e}")
+                        opt_g.zero_grad()
+                        scaler_g.update()
+                        continue
+                    
                     scaler_g.step(opt_g)
                     scaler_g.update()
                     scheduler_g.step()
@@ -556,7 +587,25 @@ def main(cfg):
                 
                 (loss_g / accumulation_steps).backward()
                 if (batch_idx + 1) % accumulation_steps == 0:
-                    clip_gradients(generator, cfg.get("max_grad_norm", 1.0))
+                    max_grad_norm = cfg.get("max_grad_norm", 1.0)
+                    
+                    # Gradient clipping first, then check if still too high
+                    try:
+                        grad_norm_gen_before = clip_gradients(generator, max_grad_norm)
+                        
+                        # Check for gradient explosion AFTER clipping
+                        explosion_threshold = max(100.0, max_grad_norm * 10)
+                        grad_norm_gen_after, is_exploded_gen = check_gradient_explosion(generator, max_grad_norm=explosion_threshold, raise_on_error=False)
+                        
+                        if is_exploded_gen:
+                            logger.error(f"Step {step}: Generator gradient explosion after clipping (norm: {grad_norm_gen_before:.2f}->{grad_norm_gen_after:.2f}). Skipping this batch.")
+                            opt_g.zero_grad()
+                            continue
+                    except RuntimeError as e:
+                        logger.error(f"Step {step}: {e}")
+                        opt_g.zero_grad()
+                        continue
+                    
                     opt_g.step()
                     scheduler_g.step()
                     opt_g.zero_grad()

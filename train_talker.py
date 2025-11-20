@@ -9,41 +9,9 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, cleanup_old_checkpoints, TTSDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext
+    ValidationSkipSamplesContext, collate_mel_fn
 )
 from tqdm import tqdm
-
-def collate_mel_fn(batch, max_mel_length=None):
-    """
-    Collate function that pads all mel spectrograms to a fixed maximum length.
-    This ensures uniform batch sizes for CUDA graphs compilation.
-    
-    Args:
-        batch: List of mel spectrograms
-        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
-    """
-    n_mels = batch[0].shape[1]
-    
-    # Use fixed max length if provided, otherwise use batch max
-    if max_mel_length is not None:
-        max_len = max_mel_length
-    else:
-        max_len = max(m.shape[0] for m in batch)
-    
-    padded = []
-    for m in batch:
-        current_len = m.shape[0]
-        if current_len > max_len:
-            # Truncate if longer than max (shouldn't happen with proper config)
-            m = m[:max_len]
-            current_len = max_len
-        
-        pad_len = max_len - current_len
-        if pad_len > 0:
-            m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
-        padded.append(m)
-    return torch.stack(padded)
-
 
 def main(cfg):
     # Set random seed for reproducibility
@@ -298,12 +266,21 @@ def main(cfg):
                         scaler.update()
                     continue
                 
-                # Check for gradient explosion before clipping (after unscaling if AMP)
+                # Gradient clipping first (already unscaled if using AMP)
+                # Clip gradients to prevent explosion, then check if still too high
                 try:
-                    grad_norm_rvq, is_exploded_rvq = check_gradient_explosion(rvq, max_grad_norm=100.0, raise_on_error=False)
-                    grad_norm_talker, is_exploded_talker = check_gradient_explosion(talker, max_grad_norm=100.0, raise_on_error=False)
+                    grad_norm_rvq_before = clip_gradients(rvq, max_grad_norm)
+                    grad_norm_talker_before = clip_gradients(talker, max_grad_norm)
+                    
+                    # Check for gradient explosion AFTER clipping
+                    # Use a higher threshold (10x max_grad_norm) since we've already clipped
+                    # This allows clipping to fix most cases, only skip if truly exploded
+                    explosion_threshold = max(100.0, max_grad_norm * 10)
+                    grad_norm_rvq_after, is_exploded_rvq = check_gradient_explosion(rvq, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    grad_norm_talker_after, is_exploded_talker = check_gradient_explosion(talker, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    
                     if is_exploded_rvq or is_exploded_talker:
-                        logger.error(f"Step {step}: Gradient explosion detected (rvq={grad_norm_rvq:.2f}, talker={grad_norm_talker:.2f}). Skipping this batch.")
+                        logger.error(f"Step {step}: Gradient explosion detected after clipping (rvq: {grad_norm_rvq_before:.2f}->{grad_norm_rvq_after:.2f}, talker: {grad_norm_talker_before:.2f}->{grad_norm_talker_after:.2f}). Skipping this batch.")
                         opt.zero_grad()  # Clear gradients
                         if use_amp:
                             scaler.update()  # Update scaler even though we skipped (unscale was called)
@@ -315,15 +292,11 @@ def main(cfg):
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
                 
-                # Gradient clipping (already unscaled if using AMP)
+                # Optimizer step (gradients already clipped)
                 if use_amp:
-                    clip_gradients(rvq, max_grad_norm)
-                    clip_gradients(talker, max_grad_norm)
                     scaler.step(opt)
                     scaler.update()
                 else:
-                    clip_gradients(rvq, max_grad_norm)
-                    clip_gradients(talker, max_grad_norm)
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping

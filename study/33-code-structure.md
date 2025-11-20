@@ -288,6 +288,26 @@ See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for det
 
 All training scripts share common utilities from `omni/utils.py`:
 
+### Collate Functions
+All collate functions are centralized in `utils.py` for reuse:
+- **`collate_mel_fn(batch, max_mel_length=None)`** - Used by `train_talker.py`
+  - Pads mel spectrograms to fixed length for CUDA graphs compatibility
+- **`collate_mel_text_fn(batch, max_mel_length=None)`** - Used by `train_audio_enc.py`
+  - Pads mel spectrograms and returns text list for ASR training
+- **`collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None)`** - Used by `train_vocoder.py`
+  - Pads both mel spectrograms and audio waveforms for vocoder training
+
+**Benefits:**
+- ✅ Consistent padding logic across all training scripts
+- ✅ Supports fixed-length padding for CUDA graphs
+- ✅ Easy to maintain and update
+
+### Gradient Handling
+All training scripts use consistent gradient handling:
+- **Clip first, then check** - Gradients are clipped to `max_grad_norm` before checking for explosion
+- **Robust threshold** - Only skips batches if gradients exceed 100.0 after clipping
+- **Automatic recovery** - Most gradient issues are resolved by clipping, allowing training to continue
+
 ### Checkpoint Management
 - **`load_checkpoint()`**: Automatically finds and loads the latest checkpoint
   - Handles model, optimizer, scheduler, and scaler state dicts

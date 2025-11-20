@@ -78,7 +78,11 @@ pip install flash-attn
 **Implementation:**
 - Audio training: All mel spectrograms padded/truncated to `max_mel_length`
 - OCR training: All text sequences padded/truncated to `max_text_length`
-- Automatic in collate functions when `use_compile: true`
+- Collate functions in `omni/utils.py` handle padding automatically:
+  - `collate_mel_fn()` - For mel-only batches (talker training)
+  - `collate_mel_text_fn()` - For mel+text batches (audio encoder training)
+  - `collate_mel_audio_fn()` - For mel+audio batches (vocoder training)
+- All collate functions support `max_mel_length` parameter for fixed-length padding
 
 **Memory Trade-off:**
 - Slightly more memory due to padding

@@ -36,21 +36,29 @@ model.gradient_checkpointing_enable()
 "ctx_len": 256  # Instead of 512
 ```
 
-### 3. NaN Loss
+### 3. NaN Loss / Gradient Explosion
 
 **Causes:**
-- Gradient explosion
+- Gradient explosion (gradients too large)
 - Learning rate too high
 - Numerical instability
 
 **Solutions:**
 ```json
 {
-  "max_grad_norm": 0.5,  // Clip gradients
-  "learning_rate": 1e-4,  // Lower LR
-  "use_fp32": true  // Disable FP16 temporarily
+  "max_grad_norm": 1.0,  // Clip gradients (default: 1.0)
+  "lr": 3e-4,  // Lower learning rate if explosions persist
+  "use_amp": false  // Disable FP16 temporarily if needed
 }
 ```
+
+**How Gradient Handling Works:**
+All training scripts use a robust gradient handling pattern:
+1. **Clip gradients first** - Brings gradients down to `max_grad_norm` (typically 1.0)
+2. **Check after clipping** - Only skips batch if gradients are still extremely high (>100.0) after clipping
+3. **Automatic recovery** - Most gradient explosions are handled by clipping, allowing training to continue
+
+This prevents batches from being skipped unnecessarily when gradients are moderately high (e.g., 50-100), as they get clipped to a safe range and training proceeds normally.
 
 ### 4. Memory Issues During Preprocessing
 

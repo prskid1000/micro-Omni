@@ -353,12 +353,25 @@ def main(cfg):
                         scaler.update()
                     continue
                 
-                # Check for gradient explosion before clipping (after unscaling if AMP)
+                # Gradient clipping first (already unscaled if using AMP)
+                # Clip gradients to prevent explosion, then check if still too high
                 try:
-                    grad_norm_vit, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=100.0, raise_on_error=False)
-                    grad_norm_proj, is_exploded_proj = check_gradient_explosion(img_proj, max_grad_norm=100.0, raise_on_error=False)
-                    if is_exploded_vit or is_exploded_proj:
-                        logger.error(f"Step {step}: Gradient explosion detected (vit={grad_norm_vit:.2f}, proj={grad_norm_proj:.2f}). Skipping this batch.")
+                    grad_norm_vit_before = clip_gradients(vit, max_grad_norm)
+                    grad_norm_img_proj_before = clip_gradients(img_proj, max_grad_norm)
+                    grad_norm_text_proj_before = clip_gradients(text_proj, max_grad_norm)
+                    grad_norm_text_embed_before = clip_gradients(text_embed, max_grad_norm)
+                    
+                    # Check for gradient explosion AFTER clipping
+                    # Use a higher threshold (10x max_grad_norm) since we've already clipped
+                    # This allows clipping to fix most cases, only skip if truly exploded
+                    explosion_threshold = max(100.0, max_grad_norm * 10)
+                    grad_norm_vit_after, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    grad_norm_proj_after, is_exploded_proj = check_gradient_explosion(img_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    grad_norm_text_proj_after, is_exploded_text_proj = check_gradient_explosion(text_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    grad_norm_text_embed_after, is_exploded_text_embed = check_gradient_explosion(text_embed, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    
+                    if is_exploded_vit or is_exploded_proj or is_exploded_text_proj or is_exploded_text_embed:
+                        logger.error(f"Step {step}: Gradient explosion detected after clipping (vit: {grad_norm_vit_before:.2f}->{grad_norm_vit_after:.2f}, img_proj: {grad_norm_img_proj_before:.2f}->{grad_norm_proj_after:.2f}, text_proj: {grad_norm_text_proj_before:.2f}->{grad_norm_text_proj_after:.2f}, text_embed: {grad_norm_text_embed_before:.2f}->{grad_norm_text_embed_after:.2f}). Skipping this batch.")
                         opt.zero_grad()  # Clear gradients
                         if use_amp:
                             scaler.update()  # Update scaler even though we skipped (unscale was called)
@@ -370,19 +383,11 @@ def main(cfg):
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
                 
-                # Gradient clipping (already unscaled if using AMP)
+                # Optimizer step (gradients already clipped)
                 if use_amp:
-                    clip_gradients(vit, max_grad_norm)
-                    clip_gradients(img_proj, max_grad_norm)
-                    clip_gradients(text_proj, max_grad_norm)
-                    clip_gradients(text_embed, max_grad_norm)
                     scaler.step(opt)
                     scaler.update()
                 else:
-                    clip_gradients(vit, max_grad_norm)
-                    clip_gradients(img_proj, max_grad_norm)
-                    clip_gradients(text_proj, max_grad_norm)
-                    clip_gradients(text_embed, max_grad_norm)
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping
