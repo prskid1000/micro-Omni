@@ -850,6 +850,7 @@ class TextDataset(IterableDataset):
         # Reset skip_samples to 0 after first iteration (only use for resuming)
         # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
+            print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
 
 class ASRDataset(IterableDataset):
@@ -968,6 +969,7 @@ class ASRDataset(IterableDataset):
         # Reset skip_samples to 0 after first iteration (only use for resuming)
         # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
+            print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
 
 class OCRDataset(IterableDataset):
@@ -1070,6 +1072,7 @@ class OCRDataset(IterableDataset):
         # Reset skip_samples to 0 after first iteration (only use for resuming)
         # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
+            print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
 
 class TTSDataset(IterableDataset):
@@ -1145,6 +1148,7 @@ class TTSDataset(IterableDataset):
         # Reset skip_samples to 0 after first iteration (only use for resuming)
         # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
+            print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
 
 class ImgCapDataset(IterableDataset):
@@ -1216,6 +1220,7 @@ class ImgCapDataset(IterableDataset):
         # Reset skip_samples to 0 after first iteration (only use for resuming)
         # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
+            print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
 
 class VocoderDataset(IterableDataset):
@@ -1306,6 +1311,7 @@ class VocoderDataset(IterableDataset):
         # Reset skip_samples to 0 after first iteration (only use for resuming)
         # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
+            print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
 
 class MixDataset(IterableDataset):
@@ -1411,4 +1417,5 @@ class MixDataset(IterableDataset):
         # Reset skip_samples to 0 after first iteration (only use for resuming)
         # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
+            print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
