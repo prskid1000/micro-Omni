@@ -34,6 +34,6 @@
   "n_mels": 128,
   "frame_ms": 80,
   "max_mel_length": 3600,
-  "tts_csv": "data/audio/tts.csv",
+  "tts_csv": "data/audio/production_tts.csv",
   "save_dir": "checkpoints/talker_tiny"
 }

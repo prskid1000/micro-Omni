@@ -314,13 +314,18 @@ The training follows a **staged approach** to fit within 12GB VRAM and enable ef
 
 **Process**:
 1. **Data**: Images + captions
-2. **Objective**: Simple classification task (e.g., predict if caption contains "red")
+2. **Objective**: Contrastive learning (CLIP-style) - image-caption alignment
 3. **Training**:
-   - Input: Image `(B, 3, 224, 224)`
-   - Encoder: ViT-Tiny → CLS token
-   - Head: Linear classifier on CLS token
-   - Loss: Cross-entropy classification loss
-4. **Note**: This is a simplified pretraining task. In production, use contrastive learning (CLIP-style).
+   - Input: Image `(B, 3, 224, 224)` + Caption text
+   - Encoder: ViT-Tiny → CLS token → Projection to embedding space
+   - Text Encoding: Thinker model (frozen) or token embeddings → Projection to embedding space
+   - Loss: InfoNCE contrastive loss (positive pairs: matching image-caption, negatives: other pairs in batch)
+   - Temperature: 0.07 (configurable)
+4. **Features**:
+   - Uses trained tokenizer from Stage A for consistent text encoding
+   - Configurable: `use_thinker_for_text` (recommended: True) uses frozen Thinker for better contextual embeddings
+   - Forces vision encoder to learn visual features aligned with text descriptions
+   - Perfect pretraining for multimodal understanding in Stage E
 
 **Output**: `checkpoints/vision_tiny/vision.pt`
 
@@ -436,7 +441,7 @@ All training scripts include:
 
 ### End-to-End Pipeline
 
-The inference system supports **four modes**: text-only, multimodal (image/audio input), speech output, and OCR (text extraction from images).
+The inference system supports **five modes**: text-only, multimodal (image/audio/video input), speech output, and OCR (text extraction from images).
 
 #### Mode 1: Text-Only Chat
 
@@ -541,6 +546,28 @@ Image (B, 3, 224, 224)
 - **Character Vocabulary**: Built from training data (includes special tokens: PAD, BOS, EOS, UNK)
 - **KV Caching**: Caches attention states for faster generation
 - **Integration**: Can be combined with multimodal understanding for richer image descriptions
+
+#### Mode 5: Video Input Processing
+
+**Flow**:
+```
+Video File
+  → Extract Frames (evenly spaced, default: 4 frames)
+  → Process First Frame (or multiple frames)
+  → Vision Encoder
+  → CLS Token (1, d_vision)
+  → Vision Projector
+  → (1, 1, d_thinker)
+  → Combined with Text/Audio (if provided)
+  → Thinker
+  → Generated Text Response
+```
+
+**Details**:
+- **Frame Extraction**: Automatically extracts evenly-spaced frames from video
+- **Processing**: Uses same vision pipeline as image input
+- **Default**: Processes first extracted frame as representative
+- **Integration**: Can be combined with text prompts for video understanding
 
 ### Complete Multimodal Round-Trip Example
 
@@ -704,6 +731,11 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in path/to.wav
 ### OCR (text extraction from images)
 ```
 python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image path/to.jpg --ocr
+```
+
+### Video understanding
+```
+python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --video path/to.mp4 --text "Describe what happens in this video"
 ```
 
 ## Notes
