@@ -731,7 +731,7 @@ def main(cfg):
                 logger.info(f"Saved final checkpoint: {final_path}")
                 
                 # Cleanup old checkpoints
-                cleanup_old_checkpoints(cfg["save_dir"], "vocoder_step_", keep_last=3)
+                cleanup_old_checkpoints(cfg["save_dir"], "vocoder_step_", keep_last_n=1)
             
             if step >= max_steps:
                 logger.info(f"Reached max_steps ({max_steps}), stopping training")
