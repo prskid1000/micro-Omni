@@ -76,7 +76,7 @@ python train_ocr.py --config configs/ocr_tiny.json
 - Text Decoder generates text autoregressively
 - Teacher forcing with cross-entropy loss
 - Memory optimized: batch_size=4, gradient accumulation=2
-- Supports synthetic and real-world OCR datasets
+- Supports synthetic OCR datasets (MJSynth)
 
 ### 5. More Training Data
 

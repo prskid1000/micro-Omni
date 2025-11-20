@@ -423,8 +423,8 @@ def main(cfg):
                     "scheduler": scheduler.state_dict(),
                     "scaler": scaler.state_dict() if scaler else None,
                     "step": step,
-                    "char_to_idx": ds.char_to_idx,
-                    "idx_to_char": ds.idx_to_char,
+                    "char_to_idx": train_ds.char_to_idx,
+                    "idx_to_char": train_ds.idx_to_char,
                     "config": cfg
                 }, checkpoint_path)
                 
@@ -432,8 +432,8 @@ def main(cfg):
                 final_path = os.path.join(cfg["save_dir"], "ocr.pt")
                 torch.save({
                     "model": model.state_dict(),
-                    "char_to_idx": ds.char_to_idx,
-                    "idx_to_char": ds.idx_to_char,
+                    "char_to_idx": train_ds.char_to_idx,
+                    "idx_to_char": train_ds.idx_to_char,
                     "config": cfg
                 }, final_path)
                 

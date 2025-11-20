@@ -249,9 +249,8 @@ python scripts/download_production_audio.py --dataset all --combine
 **Example CSV:**
 ```csv
 image,text
-ocr/images/000001.png,"HELLO"
-ocr/images/000002.png,"WORLD"
-ocr/textocr/img1.jpg,"Sample text"
+mjsynth/mnt/ramdisk/max/90kDICT32px/3000/7/182_slinking_71711.jpg,"slinking"
+mjsynth/mnt/ramdisk/max/90kDICT32px/3000/7/181_REMODELERS_64541.jpg,"REMODELERS"
 ```
 
 **Config Key:** `train_csv`
@@ -265,21 +264,21 @@ ocr/textocr/img1.jpg,"Sample text"
 **Download:**
 ```bash
 # ⚠️ Always use --combine to create production_ocr.csv (required for training)
-# Download with sample limit (default: 1,000,000 per dataset)
+# Download with sample limit (default: 1,000,000 samples)
 python scripts/download_production_ocr.py --dataset all --combine
 
-# Or specify custom sample limit per dataset
+# Or specify custom sample limit
 python scripts/download_production_ocr.py --dataset all --combine --max-samples 500000
 ```
 
 **Features:**
 - ✅ **`--combine` creates `production_ocr.csv`** - the file that `train_ocr.py` uses
 - ✅ Fine-grained resumption (checkpoints during processing)
-- ✅ Diverse text: Synthetic text, Real-world scene text
-- ✅ Sample-based limits (default: 1,000,000 samples per dataset)
+- ✅ Synthetic text dataset (MJSynth/Synth90k)
+- ✅ Sample-based limits (default: 1,000,000 samples)
 - ✅ Ready to use - no formatting needed
 
-**Note:** Some OCR datasets (MJSynth, TextOCR) may require manual download. See script output for instructions.
+**Note:** The MJSynth dataset may require manual download if automatic download fails. See script output for instructions.
 
 ---
 
@@ -587,9 +586,8 @@ data/
 │   └── [image files in subdirectories]
 │
 └── ocr/
-    ├── mjsynth_ocr.csv
-    ├── textocr_ocr.csv
-    ├── production_ocr.csv  (if --combine used)
+   ├── mjsynth_ocr.csv
+   ├── production_ocr.csv  (if --combine used)
     └── [OCR image files in subdirectories]
 ```
 
@@ -647,6 +645,7 @@ You can also download specific categories using `--dataset <category>`.
   - **Text**: ~2M samples (~200M tokens) from 2 datasets
   - **Audio**: ~2M samples from 2 datasets
   - **Images**: ~1M samples from 1 dataset
+  - **OCR**: ~1M samples from 1 dataset (MJSynth)
 - For 25.65M parameter model: Combined total provides sufficient data for single-epoch training
 - Based on Chinchilla scaling laws: 20-200 tokens per parameter (minimum: 513M tokens)
 - Automatically stops when reaching sample limit per dataset
