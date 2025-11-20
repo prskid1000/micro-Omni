@@ -604,7 +604,8 @@ def setup_resume_data_loading(train_ds, step, batch_size, logger, train_dl_kwarg
         step: Current step number (0 if not resuming)
         batch_size: Batch size for calculating skip_samples
         logger: Logger instance
-        train_dl_kwargs: Dict of kwargs to recreate DataLoader (batch_size, shuffle, num_workers, etc.)
+        train_dl_kwargs: Dict of kwargs to recreate DataLoader (batch_size, num_workers, etc.)
+            Note: Do not include 'shuffle' - IterableDatasets handle shuffling internally
     
     Returns:
         DataLoader: Recreated DataLoader with skip_samples applied

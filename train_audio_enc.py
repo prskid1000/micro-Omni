@@ -178,7 +178,6 @@ def main(cfg):
     new_train_dl = setup_resume_data_loading(
         train_ds, step, batch_size, logger,
         train_dl_kwargs={
-            "shuffle": True,
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": cfg.get("drop_last", True),
             "collate_fn": collate_fn_with_max
@@ -363,8 +362,12 @@ def main(cfg):
                     head.eval()
                     val_loss_sum = 0.0
                     val_count = 0
+                    batch_size = cfg.get("batch_size", 4)
                     with torch.no_grad():
                         for val_mel, val_text in val_dl:
+                            # Skip batches that don't match training batch size (CUDA graphs require fixed batch sizes)
+                            if use_compile and val_mel.size(0) != batch_size:
+                                continue
                             val_mel = val_mel.to(device)
                             val_tgt, val_tgt_lens = encode_text_batch(val_text)
                             val_tgt = val_tgt.to(device)
@@ -424,8 +427,12 @@ def main(cfg):
             head.eval()
             val_loss_sum = 0.0
             val_count = 0
+            batch_size = cfg.get("batch_size", 4)
             with torch.no_grad():
                 for val_mel, val_text in val_dl:
+                    # Skip batches that don't match training batch size (CUDA graphs require fixed batch sizes)
+                    if use_compile and val_mel.size(0) != batch_size:
+                        continue
                     val_mel = val_mel.to(device)
                     val_tgt, val_tgt_lens = encode_text_batch(val_text)
                     val_tgt = val_tgt.to(device)
@@ -462,21 +469,28 @@ def main(cfg):
             model.train()
             head.train()
         
-        # Save at end of epoch if max_steps not reached
-        if step < cfg["max_steps"]:
-            final_path = os.path.join(cfg["save_dir"], "audio_enc.pt")
-            checkpoint_data = {
-                "enc": model.state_dict(),
-                "head": head.state_dict(),
-                "optimizer": opt.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "step": step
-            }
-            if scaler is not None:
-                checkpoint_data["scaler"] = scaler.state_dict()
-            torch.save(checkpoint_data, final_path)
-            logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        # Save at end of epoch (checkpoint for resuming)
+        final_path = os.path.join(cfg["save_dir"], "audio_enc.pt")
+        checkpoint_data = {
+            "enc": model.state_dict(),
+            "head": head.state_dict(),
+            "optimizer": opt.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "step": step
+        }
+        if scaler is not None:
+            checkpoint_data["scaler"] = scaler.state_dict()
+        torch.save(checkpoint_data, final_path)
+        logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        
+        # Check if we've reached max_steps after epoch completion
+        if step >= cfg["max_steps"]:
+            logger.info(f"Reached max_steps={cfg['max_steps']}. Training complete.")
+            logger.training_end(step)
             return
+        
+        # Continue to next epoch
+        start_batch_idx = 0  # Reset batch index for new epoch
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--config", required=True)

@@ -251,7 +251,6 @@ def main(cfg):
     new_train_dl = setup_resume_data_loading(
         train_ds, step, batch_size, logger,
         train_dl_kwargs={
-            "shuffle": True,
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": True,
             "collate_fn": collate_mel_audio_fn

@@ -190,6 +190,11 @@ python train_text.py --config configs/thinker_tiny.json
 7. Initializes progress bar at correct position
 8. Training continues seamlessly from where it stopped
 
+**Epoch completion:**
+- Training continues through all epochs until `max_steps` is reached
+- Model is saved at the end of each epoch for checkpointing
+- Training only stops when `max_steps` is reached or manually interrupted
+
 **Validation during resume:**
 - Validation always processes the full validation set
 - `skip_samples` is temporarily reset to 0 during validation

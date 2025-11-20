@@ -220,9 +220,10 @@ def __iter__(self):
 - ✅ True streaming - data processed on-demand
 - ✅ Efficient resuming via `skip_samples` parameter (automatically handled by `setup_resume_data_loading()`)
 - ✅ Worker sharding for multi-process data loading
-- ✅ Buffer-based shuffling for randomization
+- ✅ Buffer-based shuffling for randomization (controlled by `shuffle_buffer_size` config)
 - ✅ Automatic checkpoint detection and resuming (via `load_checkpoint()`)
 - ✅ Proper validation on full dataset (via `ValidationSkipSamplesContext`)
+- ✅ **Note:** IterableDatasets handle shuffling internally - do not use `shuffle` parameter in DataLoader
 
 ### 2. Efficient Tokenizer Training
 

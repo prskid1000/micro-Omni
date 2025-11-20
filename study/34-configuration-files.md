@@ -59,9 +59,17 @@ configs/
   "data_path": "data/text/corpus.txt",
   "save_every": 1000,        // Save checkpoint frequency
   "eval_every": 500,         // Evaluation frequency
-  "checkpoint_dir": "checkpoints/thinker_tiny/"
+  "checkpoint_dir": "checkpoints/thinker_tiny/",
+  "shuffle_buffer_size": 10000  // Buffer size for streaming dataset shuffling
 }
 ```
+
+**Note on Shuffling:**
+- All datasets use `IterableDataset` which handles shuffling internally
+- `shuffle_buffer_size`: Controls randomization in streaming datasets (default: 10000)
+- Larger values = more randomization but more memory
+- Set to 0 to disable shuffling (validation datasets use 0)
+- **Do not use `shuffle` parameter in DataLoader** - IterableDatasets don't support it
 
 ---
 

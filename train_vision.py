@@ -231,7 +231,6 @@ def main(cfg):
     new_train_dl = setup_resume_data_loading(
         train_ds, step, batch_size, logger,
         train_dl_kwargs={
-            "shuffle": True,
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": cfg.get("drop_last", True)
         }
@@ -560,23 +559,30 @@ def main(cfg):
             text_proj.train()
             text_embed.train()
         
-        # Save at end of epoch if max_steps not reached
-        if step < cfg["max_steps"]:
-            final_path = os.path.join(cfg["save_dir"], "vision.pt")
-            checkpoint_data = {
-                "vit": vit.state_dict(),
-                "img_proj": img_proj.state_dict(),
-                "text_proj": text_proj.state_dict(),
-                "text_embed": text_embed.state_dict(),
-                "optimizer": opt.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "step": step
-            }
-            if scaler is not None:
-                checkpoint_data["scaler"] = scaler.state_dict()
-            torch.save(checkpoint_data, final_path)
-            logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        # Save at end of epoch (checkpoint for resuming)
+        final_path = os.path.join(cfg["save_dir"], "vision.pt")
+        checkpoint_data = {
+            "vit": vit.state_dict(),
+            "img_proj": img_proj.state_dict(),
+            "text_proj": text_proj.state_dict(),
+            "text_embed": text_embed.state_dict(),
+            "optimizer": opt.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "step": step
+        }
+        if scaler is not None:
+            checkpoint_data["scaler"] = scaler.state_dict()
+        torch.save(checkpoint_data, final_path)
+        logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        
+        # Check if we've reached max_steps after epoch completion
+        if step >= cfg["max_steps"]:
+            logger.info(f"Reached max_steps={cfg['max_steps']}. Training complete.")
+            logger.training_end(step)
             return
+        
+        # Continue to next epoch
+        start_batch_idx = 0  # Reset batch index for new epoch
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--config", required=True)

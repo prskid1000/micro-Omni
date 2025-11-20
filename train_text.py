@@ -152,7 +152,6 @@ def main(cfg):
     new_train_dl = setup_resume_data_loading(
         train_ds, step, batch_size, logger,
         train_dl_kwargs={
-            "shuffle": False,
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": cfg.get("drop_last", True)
         }
@@ -537,20 +536,27 @@ def main(cfg):
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
         model.train()
         
-        # Save at end of epoch if max_steps not reached
-        if step < cfg["max_steps"]:
-            final_path = os.path.join(cfg["save_dir"], "thinker.pt")
-            checkpoint_data = {
-                "model": model.state_dict(),
-                "optimizer": opt.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "step": step
-            }
-            if scaler is not None:
-                checkpoint_data["scaler"] = scaler.state_dict()
-            torch.save(checkpoint_data, final_path)
-            logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        # Save at end of epoch (checkpoint for resuming)
+        final_path = os.path.join(cfg["save_dir"], "thinker.pt")
+        checkpoint_data = {
+            "model": model.state_dict(),
+            "optimizer": opt.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "step": step
+        }
+        if scaler is not None:
+            checkpoint_data["scaler"] = scaler.state_dict()
+        torch.save(checkpoint_data, final_path)
+        logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        
+        # Check if we've reached max_steps after epoch completion
+        if step >= max_steps:
+            logger.info(f"Reached max_steps={max_steps}. Training complete.")
+            logger.training_end(step)
             return
+        
+        # Continue to next epoch
+        start_batch_idx = 0  # Reset batch index for new epoch
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--config", required=True)
