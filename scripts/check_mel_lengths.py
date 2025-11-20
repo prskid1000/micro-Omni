@@ -19,6 +19,7 @@ import torch
 import torchaudio
 from collections import Counter
 import numpy as np
+from omni.utils import load_audio
 
 def analyze_mel_lengths(csv_path, sample_size=None, sr=16000, hop_length=None, frame_ms=None, is_talker=False):
     """
@@ -92,7 +93,7 @@ def analyze_mel_lengths(csv_path, sample_size=None, sr=16000, hop_length=None, f
                 if not wav_path:
                     continue
                 
-                wav, file_sr = torchaudio.load(wav_path)
+                wav, file_sr = load_audio(wav_path)
                 if file_sr != sr:
                     wav = torchaudio.transforms.Resample(file_sr, sr)(wav)
                 

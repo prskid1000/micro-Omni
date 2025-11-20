@@ -15,7 +15,7 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, MixDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext
+    ValidationSkipSamplesContext, load_audio
 )
 
 def mix_collate_fn(batch):
@@ -251,7 +251,7 @@ def main(cfg):
                 # Process audio files
                 mel_list = []
                 for audio_path in valid_audios:
-                    wav, _ = torchaudio.load(audio_path)
+                    wav, _ = load_audio(audio_path)
                     wav = wav.to(device)
                     mel = mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
                     mel_list.append(mel)

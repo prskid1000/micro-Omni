@@ -12,7 +12,7 @@ from omni.codec import RVQ, GriffinLimVocoder, NeuralVocoder, HiFiGANVocoder
 from omni.talker import TalkerTiny
 from omni.tokenizer import BPETokenizer
 from omni.ocr_model import OCRModel
-from omni.utils import find_checkpoint
+from omni.utils import find_checkpoint, load_audio
 
 def extract_video_frames(video_path, num_frames=4):
     """Extract evenly spaced frames from video"""
@@ -728,7 +728,7 @@ def main():
         
         if has_audio and mel_spec is not None:
             print(f"Processing audio: {args.audio_in}")
-            wav, sr = torchaudio.load(args.audio_in)
+            wav, sr = load_audio(args.audio_in)
             wav = wav.to(device)
             if sr != 16000:
                 wav = torchaudio.functional.resample(wav, sr, 16000)

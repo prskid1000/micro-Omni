@@ -15,6 +15,33 @@ from PIL import Image
 from torchvision import transforms
 from einops import rearrange
 
+# Try to use recommended torchcodec API for audio loading
+# This fixes the deprecation warning about torchaudio.load()
+def load_audio(path):
+    """
+    Load audio file using recommended API when available,
+    falling back to torchaudio.load() for compatibility.
+    
+    Args:
+        path: Path to audio file
+    
+    Returns:
+        tuple: (audio_tensor, sample_rate)
+    """
+    # Try torchaudio.load_with_torchcodec first (if available in future versions)
+    if hasattr(torchaudio, 'load_with_torchcodec'):
+        return torchaudio.load_with_torchcodec(path)
+    
+    # Try torchcodec.decoders.AudioDecoder (recommended API)
+    try:
+        from torchcodec.decoders import AudioDecoder
+        decoder = AudioDecoder(path)
+        decoded = decoder()
+        return decoded.audio, decoded.sample_rate
+    except (ImportError, AttributeError, TypeError):
+        # Fall back to standard torchaudio.load()
+        return torchaudio.load(path)
+
 # Model utilities
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
     """Apply RMS normalization to input tensor."""
@@ -941,7 +968,7 @@ class ASRDataset(IterableDataset):
                     # Still try to load audio, but text will be empty
                 
                 try:
-                    wav, sr = torchaudio.load(wav_path)
+                    wav, sr = load_audio(wav_path)
                     if sr != self.sr:
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
                     mel = self.melspec(wav)[0].T
@@ -1125,7 +1152,7 @@ class TTSDataset(IterableDataset):
                     continue
                 
                 try:
-                    wav, sr = torchaudio.load(row["wav"])
+                    wav, sr = load_audio(row["wav"])
                     if sr != self.sr:
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
                     mel = self.melspec(wav)[0].T
@@ -1275,7 +1302,7 @@ class VocoderDataset(IterableDataset):
                     continue
                 
                 try:
-                    audio, sr = torchaudio.load(path)
+                    audio, sr = load_audio(path)
                     if sr != self.sr:
                         audio = torchaudio.transforms.Resample(sr, self.sr)(audio)
                     if audio.shape[0] > 1:
