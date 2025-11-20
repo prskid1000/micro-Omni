@@ -786,11 +786,11 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
     for a in audios:
         current_len = a.shape[0]
         if current_len > max_audio_len:
-            a = a[:max_audio_len]
+            a = a[:max_audio_len].clone()  # Clone to free original if longer
             current_len = max_audio_len
         pad_len = max_audio_len - current_len
         if pad_len > 0:
-            a = torch.cat([a, torch.zeros(pad_len)], dim=0)
+            a = torch.cat([a, torch.zeros(pad_len, dtype=a.dtype, device=a.device)], dim=0)
         padded_audios.append(a)
     
     return torch.stack(padded_mels), torch.stack(padded_audios)
@@ -1310,10 +1310,13 @@ class VocoderDataset(IterableDataset):
                         audio = audio.mean(dim=0, keepdim=True)
                     audio = audio.squeeze(0)
                     
+                    # Crop audio EARLY to minimize memory usage
+                    # This prevents loading large audio files into memory unnecessarily
                     if self.max_audio_length and audio.shape[0] > self.max_audio_length:
                         start_idx = torch.randint(0, audio.shape[0] - self.max_audio_length + 1, (1,)).item() if self.max_audio_length < audio.shape[0] else 0
-                        audio = audio[start_idx:start_idx + self.max_audio_length]
+                        audio = audio[start_idx:start_idx + self.max_audio_length].clone()  # Clone to free original
                     
+                    # Compute mel from cropped audio (much smaller)
                     mel = self.melspec(audio.unsqueeze(0))[0].T
                     mel_min, mel_max = mel.min(), mel.max()
                     if mel_max > mel_min + 1e-6:
@@ -1322,6 +1325,8 @@ class VocoderDataset(IterableDataset):
                     result = (mel, audio)
                     
                     # Buffer-based shuffling
+                    # Note: VocoderDataset stores both mel AND audio (unlike TTSDataset which only stores mel)
+                    # This uses ~3x more memory per sample, so consider reducing shuffle_buffer_size
                     if self.shuffle_buffer_size > 0:
                         buffer.append(result)
                         if len(buffer) >= self.shuffle_buffer_size:

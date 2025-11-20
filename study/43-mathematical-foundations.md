@@ -180,6 +180,122 @@ Benefits: Adaptive learning rates, momentum
 
 ---
 
+## 🎵 HiFi-GAN Vocoder Losses
+
+### LSGAN (Least Squares GAN) Loss
+
+**Discriminator Loss:**
+```
+L_D = ½ E[(D(x_real) - 1)²] + ½ E[D(x_fake)²]
+
+Where:
+- D(x_real): discriminator output for real audio (should be 1)
+- D(x_fake): discriminator output for fake audio (should be 0)
+- Uses MSE instead of cross-entropy (more stable gradients)
+```
+
+**Generator Adversarial Loss:**
+```
+L_G_adv = ½ E[(D(x_fake) - 1)²]
+
+Generator wants discriminator to output 1 for fake audio
+```
+
+### Feature Matching Loss
+
+```
+L_FM = E[Σᵢ |fᵢ(x_real) - fᵢ(x_fake)|]
+
+Where:
+- fᵢ: intermediate feature maps from discriminator layers
+- L1 distance between real and fake features
+- Stabilizes training by matching intermediate representations
+```
+
+### Mel Spectrogram Loss
+
+```
+L_mel = E[|mel_real - mel_fake|]
+
+Where:
+- mel_real: mel spectrogram of real audio
+- mel_fake: mel spectrogram of generated audio
+- L1 loss ensures frequency content matches
+```
+
+### Total Generator Loss
+
+```
+L_G = λ_adv × L_G_adv + λ_fm × L_FM + λ_mel × L_mel
+
+Default weights (μOmni):
+- λ_adv = 1.0   (adversarial)
+- λ_fm = 2.0    (feature matching)
+- λ_mel = 45.0  (mel spectrogram - highest weight)
+```
+
+### Why These Losses?
+
+- **LSGAN:** More stable than standard GAN (smoother gradients)
+- **Feature Matching:** Prevents mode collapse, improves quality
+- **Mel Loss:** Ensures frequency content matches (critical for audio)
+
+---
+
+## 🔊 HiFi-GAN Architecture
+
+### Generator: Mel → Audio
+
+**Upsampling Formula:**
+```
+T_audio = T_mel × hop_length
+
+Example: 33 mel frames × 256 hop = 8448 audio samples
+```
+
+**Multi-Receptive Field (MRF) Blocks:**
+```
+x_out = (x₁ + x₂ + ... + xₙ) / n
+
+Where each xᵢ is from a residual block with different:
+- Kernel sizes: [3, 7, 11]
+- Dilation rates: [1, 3, 5]
+
+Captures different temporal patterns simultaneously
+```
+
+**Output Activation:**
+```
+audio = Tanh(conv_post(x))
+
+Tanh ensures output in [-1, 1] range (standard audio format)
+```
+
+### Multi-Period Discriminator (MPD)
+
+**Period Reshaping:**
+```
+For period p:
+x_reshaped = reshape(x, [B, 1, T//p, p])
+
+Then applies 2D convolutions to capture periodic patterns
+```
+
+**Periods Used:** [2, 3, 5, 7, 11] - captures different temporal periodicities
+
+### Multi-Scale Discriminator (MSD)
+
+**Scale Downsampling:**
+```
+Scale 1: Original audio
+Scale 2: AvgPool1d(4, 2) - 2× downsampled
+Scale 3: AvgPool1d(4, 2) again - 4× downsampled
+
+Captures patterns at different time scales
+```
+
+---
+
 ## 💡 Key Insights
 
 ✅ **Attention:** Weighted averaging based on similarity  
@@ -187,7 +303,11 @@ Benefits: Adaptive learning rates, momentum
 ✅ **Cross-entropy:** Measures prediction quality  
 ✅ **CTC:** Handles variable-length alignment  
 ✅ **Normalization:** Stabilizes training  
-✅ **Softmax:** Converts scores to probabilities
+✅ **Softmax:** Converts scores to probabilities  
+✅ **LSGAN:** Stable adversarial training with MSE loss  
+✅ **Feature Matching:** Prevents mode collapse in GANs  
+✅ **Mel Loss:** Ensures frequency-domain accuracy  
+✅ **MRF Blocks:** Captures multi-scale temporal patterns
 
 ---
 

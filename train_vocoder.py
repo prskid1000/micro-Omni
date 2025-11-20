@@ -203,6 +203,7 @@ def main(cfg):
         train_size = val_size = None  # Unknown size
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
+    # Note: pin_memory=False to reduce RAM usage (vocoder needs both mel+audio, more memory than TTS)
     train_dl = DataLoader(
         train_ds, 
         batch_size=cfg.get("batch_size", 2), 
@@ -210,6 +211,7 @@ def main(cfg):
         num_workers=cfg.get("num_workers", 1),  # Reduced for 12GB VRAM
         drop_last=True,
         collate_fn=collate_mel_audio_fn,
+        pin_memory=False,  # Disabled to reduce RAM usage (vocoder stores mel+audio, not just mel)
     )
     val_dl = DataLoader(
         val_ds, 
@@ -217,7 +219,8 @@ def main(cfg):
         shuffle=False, 
         num_workers=cfg.get("num_workers", 2), 
         drop_last=cfg.get("drop_last", True),
-        collate_fn=collate_mel_audio_fn
+        collate_fn=collate_mel_audio_fn,
+        pin_memory=False,  # Disabled to reduce RAM usage
     )
     
     # Logger
@@ -293,7 +296,7 @@ def main(cfg):
                 num_workers=cfg.get("num_workers", 1),
                 drop_last=True,
                 collate_fn=collate_mel_audio_fn,
-                pin_memory=True
+                pin_memory=False  # Disabled to reduce RAM usage
             )
         
         # Create progress bar with correct starting position when resuming mid-epoch
@@ -625,17 +628,17 @@ def main(cfg):
             
             # Logging
             if step % print_freq == 0:
-                logger.log(
-                    step, 
-                    {
-                        "loss_g": loss_g.item(),
-                        "loss_d": loss_d.item(),
-                        "loss_mel": loss_mel.item(),
-                        "loss_adv": (loss_adv_mpd + loss_adv_msd).item(),
-                        "loss_fm": (loss_fm_mpd + loss_fm_msd).item(),
-                        "lr_g": scheduler_g.get_last_lr()[0],
-                        "lr_d": scheduler_d.get_last_lr()[0]
-                    }
+                loss_g_val = loss_g.item()
+                loss_d_val = loss_d.item()
+                loss_mel_val = loss_mel.item()
+                loss_adv_val = (loss_adv_mpd + loss_adv_msd).item()
+                loss_fm_val = (loss_fm_mpd + loss_fm_msd).item()
+                lr_g_val = scheduler_g.get_last_lr()[0]
+                lr_d_val = scheduler_d.get_last_lr()[0]
+                logger.info(
+                    f"Step {step} | loss_g={loss_g_val:.4f} | loss_d={loss_d_val:.4f} | "
+                    f"loss_mel={loss_mel_val:.4f} | loss_adv={loss_adv_val:.4f} | "
+                    f"loss_fm={loss_fm_val:.4f} | lr_g={lr_g_val:.6f} | lr_d={lr_d_val:.6f}"
                 )
             
             # Validation
@@ -696,7 +699,7 @@ def main(cfg):
                     
                     val_loss_g /= val_samples
                     val_loss_d /= val_samples
-                    logger.log(step, {"val_loss_g": val_loss_g, "val_loss_d": val_loss_d})
+                    logger.info(f"Step {step} | val_loss_g={val_loss_g:.4f} | val_loss_d={val_loss_d:.4f}")
                     
                     generator.train()
                     mpd.train()
