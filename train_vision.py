@@ -4,6 +4,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.vision_encoder import ViTTiny
+from omni.tokenizer import BPETokenizer
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, cleanup_old_checkpoints, ImgCapDataset,
@@ -29,11 +30,46 @@ def main(cfg):
     # Project image CLS token to embedding space for contrastive learning
     embed_dim = cfg.get("embed_dim", cfg["d_model"])  # Embedding dimension for contrastive learning
     img_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)
-    text_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)  # For text embeddings (if using text encoder)
+    text_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)  # For text embeddings
     
-    # Simple text encoder using word embeddings (can be replaced with proper tokenizer)
-    # For now, we'll use a simple approach: encode captions as bag-of-words
-    vocab_size = cfg.get("vocab_size", 10000)  # Vocabulary size for caption encoding
+    # Load or train tokenizer from thinker checkpoint if available
+    thinker_ckpt_dir = cfg.get("thinker_ckpt", "checkpoints/thinker_tiny")
+    vocab_size = cfg.get("vocab_size", 32000)
+    ctx_len = cfg.get("ctx_len", 512)
+    
+    # Ensure thinker checkpoint directory exists
+    os.makedirs(thinker_ckpt_dir, exist_ok=True)
+    
+    tok_model_path = os.path.join(thinker_ckpt_dir, "tokenizer.model")
+    if os.path.exists(tok_model_path):
+        print(f"Loading tokenizer from {tok_model_path}")
+        tok = BPETokenizer(tok_model_path)
+        # Get actual vocab size from tokenizer
+        vocab_size = tok.sp.get_piece_size()
+        print(f"Tokenizer vocab size: {vocab_size}")
+    else:
+        # Train tokenizer from captions if not found
+        print(f"Tokenizer not found at {tok_model_path}, training new tokenizer from captions...")
+        # Extract captions to temporary file for tokenizer training
+        temp_caption_file = os.path.join(cfg["save_dir"], ".temp_captions.txt")
+        with open(cfg["train_manifest"], 'r', encoding='utf-8') as f:
+            manifest_items = json.load(f)
+        with open(temp_caption_file, 'w', encoding='utf-8') as f:
+            for item in manifest_items:
+                caption = item.get("caption", "").strip()
+                if caption:
+                    f.write(caption + "\n")
+        print(f"  Training tokenizer on {len(manifest_items):,} captions...")
+        BPETokenizer.train_new(temp_caption_file, tok_model_path, vocab_size=vocab_size)
+        tok = BPETokenizer(tok_model_path)
+        print(f"✓ Tokenizer trained and saved to {tok_model_path}")
+        # Clean up temp file
+        try:
+            os.remove(temp_caption_file)
+        except:
+            pass
+    
+    # Token embedding layer (maps token IDs to embeddings)
     text_embed = nn.Embedding(vocab_size, cfg["d_model"]).to(device)
     
     opt = torch.optim.AdamW(list(vit.parameters())+list(img_proj.parameters())+list(text_proj.parameters())+list(text_embed.parameters()), 
@@ -61,97 +97,21 @@ def main(cfg):
     if accumulation_steps > 1:
         print(f"Gradient accumulation: {accumulation_steps} steps")
     
-    # Simple vocabulary for caption encoding (create from training data)
-    # Check for existing vocabulary checkpoint (resumable)
-    vocab_checkpoint_path = os.path.join(cfg["save_dir"], "vocab_build_checkpoint.json")
-    word_freq = {}
-    start_idx = 0
-    
-    if os.path.exists(vocab_checkpoint_path):
-        print(f"Found vocabulary checkpoint, resuming from checkpoint...")
-        try:
-            import json
-            checkpoint_data = json.load(open(vocab_checkpoint_path, 'r'))
-            word_freq = checkpoint_data.get("word_freq", {})
-            start_idx = checkpoint_data.get("last_processed_idx", 0)
-            print(f"  Resuming from caption {start_idx:,}")
-        except Exception as e:
-            print(f"  Warning: Could not load checkpoint: {e}, starting from beginning")
-            word_freq = {}
-            start_idx = 0
-    
-    if start_idx == 0:
-        print("Building vocabulary from captions (processing in chunks, resumable)...")
-    
-    # Build vocabulary incrementally without loading all captions into memory
-    # Load manifest directly for vocabulary building (since IterableDataset doesn't support indexing)
-    import json
-    with open(cfg["train_manifest"], 'r', encoding='utf-8') as f:
-        manifest_items = json.load(f)
-    total_captions = len(manifest_items)
-    checkpoint_freq = 10000  # Save checkpoint every N captions
-    
-    for i in range(start_idx, total_captions):
-        caption = manifest_items[i].get("caption", "")
-        words = caption.lower().split()
-        for word in words:
-            word_freq[word] = word_freq.get(word, 0) + 1
-        
-        # Save checkpoint periodically (resumable)
-        if (i + 1) % checkpoint_freq == 0:
-            try:
-                import json
-                checkpoint_data = {
-                    "word_freq": word_freq,
-                    "last_processed_idx": i + 1
-                }
-                json.dump(checkpoint_data, open(vocab_checkpoint_path, 'w'))
-                print(f"  Checkpoint saved: processed {i+1:,}/{total_captions:,} captions...")
-            except Exception as e:
-                print(f"  Warning: Could not save checkpoint: {e}")
-        
-        # Progress indicator for large datasets
-        if (i + 1) % 10000 == 0:
-            print(f"  Processed {i+1:,}/{total_captions:,} captions...")
-    
-    # Final checkpoint save
-    try:
-        import json
-        checkpoint_data = {
-            "word_freq": word_freq,
-            "last_processed_idx": total_captions
-        }
-        json.dump(checkpoint_data, open(vocab_checkpoint_path, 'w'))
-    except:
-        pass
-    
-    # Create simple word-based vocabulary
-    word_to_idx = {}
-    
-    # Keep top N most frequent words
-    sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
-    vocab_size = min(vocab_size, len(sorted_words))
-    word_to_idx = {word: idx+1 for idx, (word, _) in enumerate(sorted_words[:vocab_size-1])}  # +1 for padding=0
-    word_to_idx["<UNK>"] = vocab_size - 1
-    print(f"Vocabulary size: {len(word_to_idx)}")
-    
-    # Clean up checkpoint after successful completion
-    if os.path.exists(vocab_checkpoint_path):
-        try:
-            os.remove(vocab_checkpoint_path)
-        except:
-            pass
-    
     def encode_caption(caption):
-        """Encode caption to bag-of-words representation"""
-        words = caption.lower().split()
-        # Simple bag-of-words: sum embeddings
-        word_ids = [word_to_idx.get(word, word_to_idx["<UNK>"]) for word in words]
-        if len(word_ids) == 0:
-            word_ids = [word_to_idx["<UNK>"]]
-        # Average pooling
-        word_embeds = text_embed(torch.tensor(word_ids, device=device))
-        return word_embeds.mean(dim=0)  # Average pooling
+        """Encode caption using tokenizer and token embeddings"""
+        # Tokenize caption
+        token_ids = tok.encode(caption)
+        # Truncate to context length
+        token_ids = token_ids[:ctx_len-1]  # -1 for BOS token
+        # Add BOS token (typically token ID 1)
+        token_ids = [1] + token_ids  # BOS=1
+        if len(token_ids) == 0:
+            token_ids = [1]  # At least BOS token
+        # Convert to tensor and get embeddings
+        token_tensor = torch.tensor(token_ids, device=device, dtype=torch.long)
+        token_embeds = text_embed(token_tensor)  # (T, d_model)
+        # Average pooling over sequence
+        return token_embeds.mean(dim=0)  # (d_model,)
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation

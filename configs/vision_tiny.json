@@ -29,6 +29,8 @@
   "image_root": "data/images",
   "embed_dim": 128,
   "vocab_size": 32000,
+  "ctx_len": 512,
+  "thinker_ckpt": "checkpoints/thinker_tiny",
   "temperature": 0.07,
   "save_dir": "checkpoints/vision_tiny"
 }
