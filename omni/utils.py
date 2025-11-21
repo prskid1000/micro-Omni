@@ -14,6 +14,7 @@ import torchaudio
 from PIL import Image
 from torchvision import transforms
 from einops import rearrange
+from itertools import zip_longest
 
 # Try to use recommended torchcodec API for audio loading
 # This fixes the deprecation warning about torchaudio.load()
@@ -1385,62 +1386,65 @@ class MixDataset(IterableDataset):
         worker_skip = (self.skip_samples // num_workers) + (1 if worker_id < (self.skip_samples % num_workers) else 0)
         skipped = 0
         
-        # Load image manifest
+        # Load image manifest (usually small - just paths and captions)
+        # If this becomes a bottleneck, we could stream JSON line-by-line
         with open(self.image_manifest_path, 'r', encoding='utf-8') as f:
             images = json.load(f)
         
-        # Create iterators for text and ASR
-        text_lines = []
-        with open(self.text_path, 'r', encoding='utf-8', errors='ignore') as f:
-            text_lines = [line.strip() for line in f if line.strip()]
-        
-        asr_rows = []
-        with open(self.asr_csv_path, 'r', encoding='utf-8', errors='ignore') as f:
-            reader = csv.DictReader(f)
-            asr_rows = list(reader)
-        
-        max_len = max(len(text_lines), len(images), len(asr_rows))
-        
-        for idx in range(max_len):
-            # Worker sharding
-            if idx % num_workers != worker_id:
-                continue
-            
-            # Train/val split
-            if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
-                continue
-            
-            # Skip samples when resuming
-            if skipped < worker_skip:
-                skipped += 1
-                continue
-            
-            it = {}
-            
-            # Load text
-            if idx < len(text_lines):
-                it["text"] = text_lines[idx]
-            else:
-                it["text"] = "Describe the image or audio."
-            
-            # Load image
-            if idx < len(images):
-                img_item = images[idx]
-                img_path = os.path.join(self.image_root, img_item["image"])
-                it["image"], it["caption"] = img_path, img_item["caption"]
-            
-            # Load ASR
-            if idx < len(asr_rows):
-                row = asr_rows[idx]
-                it["audio"], it["trans"] = row["wav"], row["text"]
-            
-            # Buffer-based shuffling
-            if self.shuffle_buffer_size > 0:
-                buffer.append(it)
-                if len(buffer) >= self.shuffle_buffer_size:
-                    yield buffer.pop(rng.randint(0, len(buffer) - 1))
-            else:
-                yield it
+        # Stream text file line-by-line (like TextDataset)
+        with open(self.text_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as text_file:
+            # Stream ASR CSV row-by-row (like ASRDataset)
+            with open(self.asr_csv_path, 'r', encoding='utf-8', errors='ignore', buffering=8192*1024) as asr_file:
+                asr_reader = csv.DictReader(asr_file)
+                
+                # Use zip_longest to align all three sources by index
+                # This streams all sources simultaneously without loading into memory
+                for idx, (text_line, img_item, asr_row) in enumerate(zip_longest(
+                    text_file, images, asr_reader, fillvalue=None
+                )):
+                    # Worker sharding
+                    if idx % num_workers != worker_id:
+                        continue
+                    
+                    # Train/val split
+                    if val_split and (hash((idx, self.seed)) % 100 < val_split * 100) != val_mode:
+                        continue
+                    
+                    # Skip samples when resuming
+                    if skipped < worker_skip:
+                        skipped += 1
+                        continue
+                    
+                    it = {}
+                    
+                    # Load text (streaming)
+                    if text_line and text_line.strip():
+                        it["text"] = text_line.strip()
+                    else:
+                        it["text"] = "Describe the image or audio."
+                    
+                    # Load image (from manifest)
+                    if img_item:
+                        img_path = os.path.join(self.image_root, img_item["image"])
+                        it["image"], it["caption"] = img_path, img_item.get("caption", "")
+                    else:
+                        it["image"] = None
+                        it["caption"] = ""
+                    
+                    # Load ASR (streaming)
+                    if asr_row:
+                        it["audio"], it["trans"] = asr_row.get("wav", ""), asr_row.get("text", "")
+                    else:
+                        it["audio"] = None
+                        it["trans"] = ""
+                    
+                    # Buffer-based shuffling
+                    if self.shuffle_buffer_size > 0:
+                        buffer.append(it)
+                        if len(buffer) >= self.shuffle_buffer_size:
+                            yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                    else:
+                        yield it
         
         # Yield remaining buffer items
         if buffer:
