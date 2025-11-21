@@ -37,6 +37,15 @@ def mix_collate_fn(batch):
         result[key] = values if None not in values else values
     return result
 
+def strip_orig_mod(state_dict):
+    """Strip _orig_mod prefix from checkpoint keys (from torch.compile)"""
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        # Replace ._orig_mod. with . and _orig_mod. with empty string
+        new_key = key.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+        new_state_dict[new_key] = value
+    return new_state_dict
+
 def main(cfg):
     # Set random seed for reproducibility
     seed = cfg.get("seed", 42)
@@ -67,7 +76,9 @@ def main(cfg):
         compile_model=use_compile
     ).to(device)
     if os.path.exists(os.path.join(cfg["thinker_ckpt"], "thinker.pt")):
-        think.load_state_dict(torch.load(os.path.join(cfg["thinker_ckpt"], "thinker.pt"), map_location=device))
+        thinker_state = torch.load(os.path.join(cfg["thinker_ckpt"], "thinker.pt"), map_location=device)
+        thinker_state = strip_orig_mod(thinker_state)
+        think.load_state_dict(thinker_state)
 
     # Load audio encoder config from checkpoint or use defaults
     audio_cfg_path = "configs/audio_enc_tiny.json"
@@ -85,7 +96,9 @@ def main(cfg):
     else:
         aud = AudioEncoderTiny().to(device)
     if os.path.exists(os.path.join(cfg["audio_ckpt"], "audio_enc.pt")):
-        aud.load_state_dict(torch.load(os.path.join(cfg["audio_ckpt"], "audio_enc.pt"), map_location=device)["enc"])
+        audio_state = torch.load(os.path.join(cfg["audio_ckpt"], "audio_enc.pt"), map_location=device)["enc"]
+        audio_state = strip_orig_mod(audio_state)
+        aud.load_state_dict(audio_state)
 
     # Load vision encoder config from checkpoint or use defaults
     vision_cfg_path = "configs/vision_tiny.json"
@@ -103,7 +116,9 @@ def main(cfg):
     else:
         vis = ViTTiny().to(device)
     if os.path.exists(os.path.join(cfg["vision_ckpt"], "vision.pt")):
-        vis.load_state_dict(torch.load(os.path.join(cfg["vision_ckpt"], "vision.pt"), map_location=device)["vit"])
+        vision_state = torch.load(os.path.join(cfg["vision_ckpt"], "vision.pt"), map_location=device)["vit"]
+        vision_state = strip_orig_mod(vision_state)
+        vis.load_state_dict(vision_state)
 
     # simple projectors - use actual model dimensions
     audio_dim = audio_cfg.get("d_model", 192) if os.path.exists(audio_cfg_path) else 384
@@ -627,21 +642,21 @@ def main(cfg):
                     with torch.no_grad():
                         for val_data in val_dl:
                             val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
-                        try:
-                            if use_amp:
-                                with autocast(device_type='cuda'):
+                            try:
+                                if use_amp:
+                                    with autocast(device_type='cuda'):
+                                        val_logits = think(embeddings=val_emb)
+                                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                                else:
                                     val_logits = think(embeddings=val_emb)
                                     val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                            else:
-                                val_logits = think(embeddings=val_emb)
-                                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                            
-                            # Validate validation loss
-                            validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                            val_loss_sum += float(val_loss.detach())
-                            val_count += 1
-                            # Free validation tensors
-                            del val_logits, val_loss
+                                
+                                # Validate validation loss
+                                validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                                val_loss_sum += float(val_loss.detach())
+                                val_count += 1
+                                # Free validation tensors
+                                del val_logits, val_loss
                             except RuntimeError as e:
                                 error_msg = str(e)
                                 if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
@@ -737,71 +752,67 @@ def main(cfg):
             val_loss_sum = 0.0
             val_count = 0
             with torch.no_grad():
-            for val_data in val_dl:
-                val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
-                try:
-                    if use_amp:
-                        with autocast(device_type='cuda'):
+                for val_data in val_dl:
+                    val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
+                    try:
+                        if use_amp:
+                            with autocast(device_type='cuda'):
+                                val_logits = think(embeddings=val_emb)
+                                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
+                        else:
                             val_logits = think(embeddings=val_emb)
                             val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                    else:
-                        val_logits = think(embeddings=val_emb)
-                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
-                    
-                    # Validate validation loss
-                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                    val_loss_sum += float(val_loss.detach())
-                    val_count += 1
-                    # Free validation tensors
-                    del val_logits, val_loss
-                except RuntimeError as e:
-                    error_msg = str(e)
-                    if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
-                        logger.error(f"Epoch {epoch}: {e}")
-                        logger.error("Reloading from last checkpoint...")
-                        # Reload from last checkpoint
-                        reloaded_step = reload_from_last_checkpoint(
-                            cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
-                        )
-                        if reloaded_step > 0:
-                            step = reloaded_step
-                            # Also reload proj_a and proj_v from checkpoint
-                            checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
-                            if checkpoint_files:
-                                step_numbers = []
-                                for f in checkpoint_files:
-                                    try:
-                                        step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
-                                        step_numbers.append((step_num, f))
-                                    except:
-                                        continue
-                                if step_numbers:
-                                    step_numbers.sort(key=lambda x: x[0], reverse=True)
-                                    last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
-                                    checkpoint = torch.load(last_checkpoint, map_location=device)
-                                    if isinstance(checkpoint, dict):
-                                        if "proj_a" in checkpoint:
-                                            proj_a.load_state_dict(checkpoint["proj_a"])
-                                        if "proj_v" in checkpoint:
-                                            proj_v.load_state_dict(checkpoint["proj_v"])
-                            start_epoch = step // steps_per_epoch
-                            start_batch_idx = step % steps_per_epoch
-                            initial_step = step
-                            logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
-                        think.train()
-                        proj_a.train()
-                        proj_v.train()
-                        break
-                    else:
-                        logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
-                        # Continue with other validation batches
+                        
+                        # Validate validation loss
+                        validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                        val_loss_sum += float(val_loss.detach())
+                        val_count += 1
+                        # Free validation tensors
+                        del val_logits, val_loss
+                    except RuntimeError as e:
+                        error_msg = str(e)
+                        if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
+                            logger.error(f"Epoch {epoch}: {e}")
+                            logger.error("Reloading from last checkpoint...")
+                            # Reload from last checkpoint
+                            reloaded_step = reload_from_last_checkpoint(
+                                cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                            )
+                            if reloaded_step > 0:
+                                step = reloaded_step
+                                # Also reload proj_a and proj_v from checkpoint
+                                checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                                if checkpoint_files:
+                                    step_numbers = []
+                                    for f in checkpoint_files:
+                                        try:
+                                            step_num = int(f.replace("omni_step_", "").replace(".pt", ""))
+                                            step_numbers.append((step_num, f))
+                                        except:
+                                            continue
+                                    if step_numbers:
+                                        step_numbers.sort(key=lambda x: x[0], reverse=True)
+                                        last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                        checkpoint = torch.load(last_checkpoint, map_location=device)
+                                        if isinstance(checkpoint, dict):
+                                            if "proj_a" in checkpoint:
+                                                proj_a.load_state_dict(checkpoint["proj_a"])
+                                            if "proj_v" in checkpoint:
+                                                proj_v.load_state_dict(checkpoint["proj_v"])
+                                start_epoch = step // steps_per_epoch
+                                start_batch_idx = step % steps_per_epoch
+                                initial_step = step
+                                logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
+                            think.train()
+                            proj_a.train()
+                            proj_v.train()
+                            break
+                        else:
+                            logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
+                            # Continue with other validation batches
         
         avg_val_loss = val_loss_sum / max(val_count, 1)
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
-        
-        # Restore skip_samples after validation
-        if hasattr(underlying_ds, 'skip_samples'):
-            underlying_ds.skip_samples = original_skip_samples
         
         # Save at end of epoch (checkpoint for resuming)
         os.makedirs(cfg["save_dir"], exist_ok=True)
