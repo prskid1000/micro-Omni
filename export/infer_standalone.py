@@ -1,14 +1,16 @@
 """
-Standalone inference script for μOmni using Hugging Face transformers library.
+Standalone inference script for μOmni.
 
-This script can be used with just the exported model folder and transformers library.
-It uses transformers for tokenization and safetensors for model loading.
+This script can work in two modes:
+1. Full mode: Uses the full codebase (infer_chat.py) if available - recommended
+2. Standalone mode: Demonstrates model loading structure (limited functionality)
 
 Usage:
+    # Full mode (recommended - uses full codebase)
     python infer_standalone.py --model_dir . --text "Hello, how are you?"
     
-Or from the export folder:
-    python infer_standalone.py --text "Hello, how are you?"
+    # Or use the main inference script directly:
+    python infer_chat.py --ckpt_dir export --text "Hello, how are you?"
 """
 
 import argparse
@@ -179,9 +181,62 @@ def simple_generate(model_data, prompt, max_new_tokens=64, device="cuda"):
     return f"[Generation requires model architecture. To generate text, use infer_chat.py from the root directory. Input: {prompt}]"
 
 
+def try_use_full_codebase(model_dir, text=None, image=None, video=None, audio_in=None, audio_out=None, ocr=False):
+    """Try to use the full codebase inference script if available"""
+    # Check if we're in the project root or can find infer_chat.py
+    possible_paths = [
+        "infer_chat.py",
+        "../infer_chat.py",
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "infer_chat.py")
+    ]
+    
+    infer_script = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            infer_script = path
+            break
+    
+    if infer_script:
+        print("✓ Found full codebase - using infer_chat.py for full functionality")
+        import subprocess
+        cmd = [sys.executable, infer_script, "--ckpt_dir", model_dir]
+        if text:
+            cmd.extend(["--text", text])
+        if image:
+            cmd.extend(["--image", image])
+        if video:
+            cmd.extend(["--video", video])
+        if audio_in:
+            cmd.extend(["--audio_in", audio_in])
+        if audio_out:
+            cmd.extend(["--audio_out", audio_out])
+        if ocr:
+            cmd.append("--ocr")
+        
+        try:
+            subprocess.run(cmd, check=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"⚠ Full codebase execution failed: {e}")
+            return False
+        except FileNotFoundError:
+            return False
+    
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Standalone inference for μOmni using transformers library"
+        description="μOmni Inference - tries full codebase first, falls back to standalone",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Full mode (if codebase available)
+  python infer_standalone.py --model_dir export --text "Hello"
+  
+  # Or use main inference script directly (recommended):
+  python infer_chat.py --ckpt_dir export --text "Hello"
+        """
     )
     parser.add_argument(
         "--model_dir",
@@ -196,6 +251,35 @@ def main():
         help="Text prompt for generation"
     )
     parser.add_argument(
+        "--image",
+        type=str,
+        default=None,
+        help="Path to image file"
+    )
+    parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Path to video file"
+    )
+    parser.add_argument(
+        "--audio_in",
+        type=str,
+        default=None,
+        help="Path to audio input file"
+    )
+    parser.add_argument(
+        "--audio_out",
+        type=str,
+        default=None,
+        help="Path to save audio output file (TTS)"
+    )
+    parser.add_argument(
+        "--ocr",
+        action="store_true",
+        help="Extract text from image using OCR"
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -207,14 +291,32 @@ def main():
         default=64,
         help="Maximum tokens to generate (default: 64)"
     )
+    parser.add_argument(
+        "--force_standalone",
+        action="store_true",
+        help="Force standalone mode even if full codebase is available"
+    )
     
     args = parser.parse_args()
     
     print("=" * 60)
-    print("μOmni Standalone Inference (using transformers)")
+    print("μOmni Inference")
     print("=" * 60)
     print(f"Model directory: {args.model_dir}")
     print(f"Device: {args.device}")
+    print()
+    
+    # Try to use full codebase first (unless forced to standalone)
+    if not args.force_standalone:
+        if try_use_full_codebase(
+            args.model_dir, args.text, args.image, args.video,
+            args.audio_in, args.audio_out, args.ocr
+        ):
+            return
+    
+    # Fall back to standalone mode
+    print("⚠ Using standalone mode (limited functionality)")
+    print("  For full multimodal inference, use: python infer_chat.py --ckpt_dir <model_dir>")
     print()
     
     # Load model
@@ -226,6 +328,8 @@ def main():
         print("  1. You're in the export folder or specify --model_dir")
         print("  2. All required files are present (model.safetensors, config.json, tokenizer.model)")
         print("  3. Required libraries are installed: transformers, safetensors, sentencepiece")
+        print("\nFor full functionality, use the main inference script:")
+        print(f"  python infer_chat.py --ckpt_dir {args.model_dir}")
         sys.exit(1)
     
     # Generate
@@ -235,16 +339,17 @@ def main():
         prompt = input("Enter your prompt: ")
     
     print("\n" + "=" * 60)
-    print("Generation")
+    print("Generation (Standalone Mode)")
     print("=" * 60)
     
     output = simple_generate(model_data, prompt, max_new_tokens=args.max_tokens, device=args.device)
     print(f"\nOutput: {output}")
     
     print("\n" + "=" * 60)
-    print("Note: This is a simplified standalone version using transformers.")
-    print("For full multimodal inference (image, audio, video), you may need")
-    print("to register custom model classes with transformers or use the full codebase.")
+    print("⚠ Note: Standalone mode has limited functionality.")
+    print("For full multimodal inference (image, audio, video, OCR, TTS),")
+    print("use the main inference script:")
+    print(f"  python infer_chat.py --ckpt_dir {args.model_dir}")
     print("=" * 60)
 
 

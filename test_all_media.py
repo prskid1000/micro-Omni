@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import random
+import gc
 from pathlib import Path
 
 def run_inference(cmd_args, description):
@@ -28,55 +29,93 @@ def run_inference(cmd_args, description):
         print(result.stdout)
         if result.stderr:
             print("STDERR:", result.stderr)
+        
+        # Force garbage collection after subprocess to free memory
+        gc.collect()
+        
         return result.returncode == 0
     except subprocess.TimeoutExpired:
         print("ERROR: Command timed out")
+        gc.collect()
         return False
     except Exception as e:
         print(f"ERROR: {e}")
+        gc.collect()
         return False
 
-def find_random_file(directory, extensions, recursive=True):
-    """Find a random file with given extensions in directory"""
+def find_random_file(directory, extensions, recursive=True, max_scan=10000):
+    """Find a random file with given extensions in directory (memory-efficient)"""
     if not os.path.exists(directory):
         return None
     
-    files = []
     path = Path(directory)
+    files = []
+    count = 0
     
+    # Use iterator approach to avoid loading all files into memory
     if recursive:
         for ext in extensions:
-            files.extend(path.rglob(f"*{ext}"))
+            if count >= max_scan:
+                break
+            for file_path in path.rglob(f"*{ext}"):
+                # Skip hidden files and checkpoints
+                if not any(part.startswith('.') for part in file_path.parts):
+                    files.append(str(file_path))
+                    count += 1
+                    # Early exit if we have enough samples
+                    if len(files) >= 1000:  # Collect up to 1000, then pick randomly
+                        break
+                if count >= max_scan:
+                    break
     else:
         for ext in extensions:
-            files.extend(path.glob(f"*{ext}"))
-    
-    # Filter out hidden files and checkpoints
-    files = [f for f in files if not any(part.startswith('.') for part in f.parts)]
+            if count >= max_scan:
+                break
+            for file_path in path.glob(f"*{ext}"):
+                if not any(part.startswith('.') for part in file_path.parts):
+                    files.append(str(file_path))
+                    count += 1
+                    if len(files) >= 1000:
+                        break
+                if count >= max_scan:
+                    break
     
     if files:
-        return str(random.choice(files))
+        return random.choice(files)
     return None
 
-def get_random_text_sample(text_dir="data/text"):
-    """Get a random line from text corpus files"""
+def get_random_text_sample(text_dir="data/text", max_lines_to_read=1000):
+    """Get a random line from text corpus files (memory-efficient)"""
     if not os.path.exists(text_dir):
         return "Hello, how are you?"
     
-    # Find all .txt files
-    text_files = list(Path(text_dir).glob("*.txt"))
+    # Find .txt files (limit to first 100 to avoid memory issues)
+    text_files = []
+    for txt_file in Path(text_dir).glob("*.txt"):
+        text_files.append(txt_file)
+        if len(text_files) >= 100:
+            break
+    
     if not text_files:
         return "Hello, how are you?"
     
-    # Pick random file and random line
+    # Pick random file
     text_file = random.choice(text_files)
     try:
+        # Memory-efficient: read lines one at a time, don't load entire file
+        lines = []
         with open(text_file, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = [line.strip() for line in f if line.strip()]
-            if lines:
-                # Return a random line, but limit length for testing
-                line = random.choice(lines)
-                return line[:200] if len(line) > 200 else line
+            for i, line in enumerate(f):
+                if i >= max_lines_to_read:
+                    break
+                line = line.strip()
+                if line:
+                    lines.append(line)
+        
+        if lines:
+            # Return a random line, but limit length for testing
+            line = random.choice(lines)
+            return line[:200] if len(line) > 200 else line
     except Exception:
         pass
     
@@ -90,32 +129,44 @@ def main():
     
     # Find random samples from actual data folders
     print("\nScanning data folders for test samples...")
+    print("  (Using memory-efficient scanning, limiting to 10k files per directory)")
     
-    # Find random image
+    # Find random image (limit scan to prevent memory issues)
     sample_image = find_random_file(
         "data/images",
         [".jpg", ".jpeg", ".png", ".JPEG", ".PNG"],
-        recursive=True
+        recursive=True,
+        max_scan=10000
     )
     if sample_image:
         print(f"  ✓ Found image: {sample_image}")
     else:
         print("  ⚠ No images found in data/images/")
     
-    # Find random audio file
+    # Force cleanup after file scanning
+    gc.collect()
+    
+    # Find random audio file (limit scan to prevent memory issues)
     sample_audio = find_random_file(
         "data/audio",
         [".wav", ".flac", ".WAV", ".FLAC"],
-        recursive=True
+        recursive=True,
+        max_scan=10000
     )
     if sample_audio:
         print(f"  ✓ Found audio: {sample_audio}")
     else:
         print("  ⚠ No audio files found in data/audio/")
     
-    # Get random text sample
-    sample_text = get_random_text_sample("data/text")
+    # Force cleanup after file scanning
+    gc.collect()
+    
+    # Get random text sample (limit lines read to prevent memory issues)
+    sample_text = get_random_text_sample("data/text", max_lines_to_read=1000)
     print(f"  ✓ Using text sample: {sample_text[:50]}...")
+    
+    # Force cleanup
+    gc.collect()
     
     # Ensure examples directory exists for output files
     examples_dir = Path("examples")
@@ -257,7 +308,7 @@ def main():
     
     # Test 7: Video (if available) - check data/images for video or create from images
     print("\n[TEST 7] Video")
-    sample_video = find_random_file("data/images", [".mp4", ".avi", ".mov"], recursive=True)
+    sample_video = find_random_file("data/images", [".mp4", ".avi", ".mov"], recursive=True, max_scan=1000)
     if not sample_video:
         # Try examples as fallback
         sample_video = "examples/sample_video.mp4"

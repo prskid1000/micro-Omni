@@ -1,539 +1,363 @@
 
-import argparse, os, torch, torchaudio, json
+"""
+μOmni Multimodal Inference Interface
+Modular, class-based architecture for clean model loading and inference
+"""
+
+import argparse
+import os
+import json
+import torch
 import torch.nn as nn
+import torchaudio
+import numpy as np
+from pathlib import Path
+from typing import Optional, Tuple, Dict, List
 from PIL import Image
 from torch.amp import autocast
 from torchvision import transforms
 import torchvision.io as tvio
+
+# Model imports
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.codec import RVQ, GriffinLimVocoder, NeuralVocoder, HiFiGANVocoder
+from omni.codec import RVQ, NeuralVocoder
 from omni.talker import TalkerTiny
 from omni.tokenizer import BPETokenizer
 from omni.ocr_model import OCRModel
 from omni.utils import find_checkpoint, load_audio
 
-def extract_video_frames(video_path, num_frames=4):
-    """Extract evenly spaced frames from video"""
-    try:
-        video, audio, info = tvio.read_video(video_path, output_format="TCHW")
-        total_frames = video.shape[0]
-        if total_frames == 0:
-            return []
-        indices = [int(i * total_frames / (num_frames + 1)) for i in range(1, num_frames + 1)]
-        frames = [video[i] for i in indices if i < total_frames]
-        return frames
-    except Exception as e:
-        print(f"Warning: Could not extract frames from video: {e}")
-        return []
 
-def generate(model, tok, prompt, max_new=64, ctx=512, multimodal_emb=None, use_cache=True, use_amp=True):
-    """
-    Generate text from prompt, optionally with multimodal embeddings prepended.
-    Uses KV caching for faster autoregressive generation.
-    
-    Args:
-        model: ThinkerLM model
-        tok: Tokenizer
-        prompt: Text prompt
-        max_new: Maximum new tokens to generate
-        ctx: Context length
-        multimodal_emb: Optional (1, T_mm, D) multimodal embeddings to prepend
-        use_cache: Enable KV caching for faster generation (default: True)
-    """
-    device = next(model.parameters()).device
-    
-    # Enable KV caching if supported
-    if use_cache and hasattr(model, 'enable_kv_cache'):
-        model.enable_kv_cache(True)
-        model.reset_kv_cache()
-    
-    ids = [1] + tok.encode(prompt)
-    
-    # Calculate available context for text tokens
-    if multimodal_emb is not None:
-        mm_len = multimodal_emb.shape[1]
-        max_text_len = ctx - mm_len - max_new - 1
-        ids = ids[:max_text_len]
-        text_emb = model.tok_emb(torch.tensor(ids, dtype=torch.long, device=device)[None, :])
-        # Combine multimodal + text embeddings
-        combined_emb = torch.cat([multimodal_emb, text_emb], dim=1)
-        
-        # First forward pass with full prompt
-        if use_amp and device == "cuda":
-            with autocast(device_type='cuda'):
-                logits = model(embeddings=combined_emb)
-        else:
-            logits = model(embeddings=combined_emb)
-        next_id = int(torch.argmax(logits[0, -1]))
-        generated_ids = ids + [next_id]
-        
-        # Continue with incremental generation using cache
-        # After first token, use token IDs (not embeddings) so KV cache works properly
-        for _ in range(max_new - 1):
-            # Use token IDs for incremental generation (KV cache handles the rest)
-            next_idx = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            if use_amp and device == "cuda":
-                with autocast(device_type='cuda'):
-                    logits = model(idx=next_idx)
-            else:
-                logits = model(idx=next_idx)
-            next_id = int(torch.argmax(logits[0, -1]))
-            generated_ids.append(next_id)
-            if next_id == 2: break  # EOS
-    else:
-        ids = ids[-(ctx-max_new-1):]
-        x = torch.tensor(ids, dtype=torch.long, device=device)[None, :]
-        
-        # First forward pass with full prompt
-        if use_amp and device == "cuda":
-            with autocast(device_type='cuda'):
-                logits = model(x)
-        else:
-            logits = model(x)
-        next_id = int(torch.argmax(logits[0, -1]))
-        generated_ids = ids + [next_id]
-        
-        # Continue with incremental generation using cache
-        # KV cache is already enabled, so subsequent calls only process new tokens
-        for _ in range(max_new - 1):
-            # Only process new token (KV cache handles previous tokens)
-            x = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            if use_amp and device == "cuda":
-                with autocast(device_type='cuda'):
-                    logits = model(x)
-            else:
-                logits = model(x)
-            next_id = int(torch.argmax(logits[0, -1]))
-            generated_ids.append(next_id)
-            if next_id == 2: break  # EOS
-    
-    # Reset cache after generation
-    if use_cache and hasattr(model, 'reset_kv_cache'):
-        model.reset_kv_cache()
-    
-    return tok.decode(generated_ids)
+# ============================================================================
+# Utility Functions
+# ============================================================================
 
-def generate_audio(talker, rvq, voc, text_tokens, device, max_frames=None):
-    """Generate audio from text tokens using Talker model"""
-    if voc is None:
-        print("Warning: Vocoder not available, cannot generate audio")
+def strip_orig_mod_keys(state_dict: Dict) -> Dict:
+    """Strip _orig_mod. prefix from state_dict keys (from torch.compile)"""
+    if state_dict is None:
         return None
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        new_key = key.replace("._orig_mod.", ".").replace("._orig_mod", "").replace("_orig_mod.", "")
+        new_state_dict[new_key] = value
+    return new_state_dict
+
+
+# ============================================================================
+# Model Loader Classes
+# ============================================================================
+
+class BaseModelLoader:
+    """Base class for model loaders"""
     
-    # Determine number of frames based on text length
-    # Rough estimate: ~25-30 frames per token (at 12.5 Hz frame rate, ~2 tokens per second)
-    # Minimum 50 frames (~0.8s), maximum 1000 frames (~16s)
-    if max_frames is None:
-        if text_tokens is not None and len(text_tokens) > 0:
-            # Estimate frames based on token count
-            # At 12.5 Hz: 1 token ≈ 0.08s ≈ 1 frame, but we need more for natural speech
-            # Use ~30 frames per token for more natural pacing
-            max_frames = max(50, min(1000, int(len(text_tokens) * 30)))
-            print(f"Generating {max_frames} frames for {len(text_tokens)} tokens (~{max_frames * 256 / 16000:.2f}s)")
-        else:
-            max_frames = 200  # Default fallback (~3.2s)
+    def __init__(self, device: str = "cuda"):
+        self.device = device
+        self.model = None
+        self.loaded = False
     
-    talker.eval()
-    rvq.eval()
+    def load_config(self, config_path: str, default_config: Dict) -> Dict:
+        """Load config from file or return default"""
+        if os.path.exists(config_path):
+            return json.load(open(config_path))
+        return default_config
     
-    # Enable KV caching for faster generation
-    if hasattr(talker, 'enable_kv_cache'):
-        talker.enable_kv_cache(True)
-        talker.reset_kv_cache()
+    def load_checkpoint(self, ckpt_dir: str, prefix: str, step_prefix: str = None) -> Tuple[Optional[str], Optional[Dict]]:
+        """Load checkpoint using find_checkpoint utility"""
+        return find_checkpoint(ckpt_dir, prefix, step_prefix, self.device)
     
-    with torch.no_grad():
-        # Start with zero codes
-        codes = torch.zeros(1, 1, 2, dtype=torch.long, device=device)
-        
-        # First forward pass
-        base_logit, res_logit = talker(codes, use_cache=True)
-        base_code = torch.argmax(base_logit[0, -1, :])
-        res_code = torch.argmax(res_logit[0, -1, :])
-        next_codes = torch.tensor([[[base_code, res_code]]], device=device)
-        codes = torch.cat([codes, next_codes], dim=1)
-        
-        # Continue with incremental generation using KV cache
-        for _ in range(max_frames - 1):
-            # Only process new frame (KV cache handles the rest)
-            base_logit, res_logit = talker(next_codes, use_cache=True)
-            base_code = torch.argmax(base_logit[0, -1, :])
-            res_code = torch.argmax(res_logit[0, -1, :])
-            next_codes = torch.tensor([[[base_code, res_code]]], device=device)
-            codes = torch.cat([codes, next_codes], dim=1)
-        
-        # Reset cache after generation
-        if hasattr(talker, 'reset_kv_cache'):
-            talker.reset_kv_cache()
-        
-        # Decode codes to mel spectrogram
-        mel_frames = []
-        for t in range(codes.shape[1]):
-            frame_codes = codes[:, t:t+1, :]  # (1, 1, 2)
-            # RVQ decode expects (B, C) where C is codebooks
-            frame_codes_flat = frame_codes.squeeze(0).squeeze(0)  # (2,)
-            mel_frame = rvq.decode(frame_codes_flat.unsqueeze(0))  # (1, 128)
-            mel_frames.append(mel_frame.squeeze(0))  # (128,)
-        
-        mel = torch.stack(mel_frames, dim=0)  # (T, 128)
-        
-        # Convert mel to audio using vocoder
-        import numpy as np
-        
-        # Normalize mel spectrogram
-        mel_min = mel.min()
-        mel_max = mel.max()
-        if mel_max > mel_min + 1e-6:
-            mel_normalized = (mel - mel_min) / (mel_max - mel_min + 1e-8)
-        else:
-            # If no variation, create a simple pattern
-            t = torch.arange(mel.shape[0], device=mel.device, dtype=mel.dtype)[:, None]
-            mel_normalized = 0.5 + 0.3 * torch.sin(2 * np.pi * t / 20)
-        
-        # Handle neural vocoder (can use torch tensors directly) vs Griffin-Lim (needs numpy)
+    def load_state_dict(self, state_dict: Dict, strict: bool = False):
+        """Load state dict with _orig_mod key stripping"""
+        if state_dict is None:
+            return False
+        state_dict = strip_orig_mod_keys(state_dict)
         try:
-            if voc.vocoder_type == "hifigan" and isinstance(voc.vocoder, nn.Module):
-                # Neural vocoder: use torch tensor directly (more efficient)
-                mel_tensor = mel_normalized.T.unsqueeze(0)  # (1, n_mels, T)
-                with torch.no_grad():
-                    audio_tensor = voc.vocoder(mel_tensor)
-                audio = audio_tensor.squeeze().cpu().numpy()
-            else:
-                # Griffin-Lim: convert to numpy
-                mel_np = mel_normalized.cpu().numpy()  # (T, 128)
-                audio = voc.mel_to_audio(mel_np)
-            # Ensure audio has actual content
-            if np.max(np.abs(audio)) < 1e-6:
-                print("Warning: Generated audio is too quiet, adding variation")
-                # Add some base frequency content
-                duration = len(audio) / 16000
-                t = np.linspace(0, duration, len(audio))
-                audio = audio + 0.1 * np.sin(2 * np.pi * 440 * t)  # Add A4 tone
-            return audio
+            self.model.load_state_dict(state_dict, strict=strict)
+            return True
         except Exception as e:
-            print(f"Warning: Audio generation failed: {e}")
-            # Return a simple tone as fallback instead of silence
-            duration = 0.5
-            t = np.linspace(0, duration, int(16000 * duration))
-            return 0.1 * np.sin(2 * np.pi * 440 * t)  # A4 note instead of silence
+            print(f"Warning: Failed to load state_dict: {e}")
+            return False
 
-def main():
-    ap = argparse.ArgumentParser(description="μOmni multimodal inference interface")
-    ap.add_argument("--ckpt_dir", required=True, help="Checkpoint directory")
-    ap.add_argument("--image", default=None, help="Path to image file")
-    ap.add_argument("--video", default=None, help="Path to video file")
-    ap.add_argument("--audio_in", default=None, help="Path to audio input file")
-    ap.add_argument("--audio_out", default=None, help="Path to save audio output file (TTS)")
-    ap.add_argument("--text", default=None, help="Text prompt (optional, for multimodal)")
-    ap.add_argument("--prompt", default=None, help="Override default prompt")
-    ap.add_argument("--ocr", action="store_true", help="Extract text from image using OCR")
-    args, rest = ap.parse_known_args()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
 
-    # Try to load config from checkpoint directory or find related config
-    config_path = os.path.join(args.ckpt_dir, "config.json")
-    if not os.path.exists(config_path):
-        # Try to infer config from checkpoint directory name
-        if "thinker" in args.ckpt_dir:
-            config_path = "configs/thinker_tiny.json"
-        elif "omni" in args.ckpt_dir:
-            config_path = "configs/omni_sft_tiny.json"
-        else:
-            config_path = "configs/thinker_tiny.json"
+class ThinkerLoader(BaseModelLoader):
+    """Loader for ThinkerLM language model"""
     
-    # Load main config
-    main_cfg = {}
-    if os.path.exists(config_path):
-        main_cfg = json.load(open(config_path))
-        print(f"Loaded main config from {config_path}")
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        self.tokenizer = None
     
-    # Extract thinker config
-    if "thinker" in main_cfg:
-        thinker_cfg = main_cfg["thinker"]
-    elif main_cfg:
-        thinker_cfg = main_cfg
-    else:
-        # Default config matching thinker_tiny
-        thinker_cfg = {
-            "vocab_size": 32000,
-            "n_layers": 4,
-            "d_model": 256,
-            "n_heads": 4,
-            "d_ff": 1024,
-            "dropout": 0.1,
-            "rope_theta": 10000,
-            "ctx_len": 512
-        }
-        print("Using default Thinker config")
-    
-    # Load vision config
-    vision_cfg_path = "configs/vision_tiny.json"
-    if "vision_ckpt" in main_cfg:
-        # Extract config name from checkpoint path (e.g., "checkpoints/vision_tiny" -> "vision_tiny.json")
-        vision_ckpt_dir = main_cfg["vision_ckpt"]
-        if "vision_tiny" in vision_ckpt_dir:
-            vision_cfg_path = "configs/vision_tiny.json"
-    vision_cfg = {}
-    if os.path.exists(vision_cfg_path):
-        vision_cfg = json.load(open(vision_cfg_path))
-        print(f"Loaded Vision config from {vision_cfg_path}")
-    else:
-        vision_cfg = {
-            "img_size": 224,
-            "patch": 16,
-            "d_model": 128,
-            "n_layers": 4,
-            "n_heads": 2,
-            "d_ff": 512,
-            "dropout": 0.1
-        }
-        print("Using default Vision config")
-    
-    # Load audio config
-    audio_cfg_path = "configs/audio_enc_tiny.json"
-    if "audio_ckpt" in main_cfg:
-        audio_ckpt_dir = main_cfg["audio_ckpt"]
-        if "audio_enc_tiny" in audio_ckpt_dir:
-            audio_cfg_path = "configs/audio_enc_tiny.json"
-    audio_cfg = {}
-    if os.path.exists(audio_cfg_path):
-        audio_cfg = json.load(open(audio_cfg_path))
-        print(f"Loaded Audio config from {audio_cfg_path}")
-    else:
-        audio_cfg = {
-            "d_model": 192,
-            "n_layers": 4,
-            "n_heads": 3,
-            "d_ff": 768,
-            "dropout": 0.1
-        }
-        print("Using default Audio config")
-    
-    # Load talker config
-    talker_cfg_path = "configs/talker_tiny.json"
-    if "talker_ckpt" in main_cfg:
-        talker_ckpt_dir = main_cfg["talker_ckpt"]
-        if "talker_tiny" in talker_ckpt_dir:
-            talker_cfg_path = "configs/talker_tiny.json"
-    talker_cfg = {}
-    if os.path.exists(talker_cfg_path):
-        talker_cfg = json.load(open(talker_cfg_path))
-        print(f"Loaded Talker config from {talker_cfg_path}")
-    else:
-        talker_cfg = {
-            "d_model": 192,
-            "n_layers": 4,
-            "n_heads": 3,
-            "d_ff": 768,
-            "codebooks": 2,
-            "codebook_size": 128,
-            "dropout": 0.1
-        }
-        print("Using default Talker config")
-
-    # Load tokenizer (fallback to thinker checkpoint if not in current dir)
-    tok_path = os.path.join(args.ckpt_dir, "tokenizer.model")
-    if not os.path.exists(tok_path):
-        # Try thinker checkpoint directory
-        if "thinker_ckpt" in main_cfg:
-            tok_path = os.path.join(main_cfg["thinker_ckpt"], "tokenizer.model")
-        elif "thinker" in args.ckpt_dir:
-            tok_path = os.path.join("checkpoints/thinker_tiny", "tokenizer.model")
-        else:
-            # Default fallback
-            tok_path = os.path.join("checkpoints/thinker_tiny", "tokenizer.model")
-    tok = BPETokenizer(tok_path)
-    
-    # Load Thinker with correct architecture
-    ctx_len = thinker_cfg.get("ctx_len", 512)
-    think = ThinkerLM(
-        thinker_cfg.get("vocab_size", 32000),
-        thinker_cfg.get("n_layers", 4),
-        thinker_cfg.get("d_model", 256),
-        thinker_cfg.get("n_heads", 4),
-        thinker_cfg.get("d_ff", 1024),
-        thinker_cfg.get("dropout", 0.1),
-        thinker_cfg.get("rope_theta", 10000),
-        ctx_len,
-        use_gqa=thinker_cfg.get("use_gqa", False),
-        use_swiglu=thinker_cfg.get("use_swiglu", True),
-        use_moe=thinker_cfg.get("use_moe", False),
-        num_experts=thinker_cfg.get("num_experts", 8),
-        num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2)
-    ).to(device)
-    # Try to find thinker checkpoint
-    thinker_ckpt_dir = args.ckpt_dir
-    if "thinker_ckpt" in main_cfg:
-        thinker_ckpt_dir = main_cfg["thinker_ckpt"]
-    elif "thinker" not in args.ckpt_dir:
-        thinker_ckpt_dir = "checkpoints/thinker_tiny"
-    
-    tpath, thinker_ckpt = find_checkpoint(thinker_ckpt_dir, "thinker.pt", "thinker_step_", device)
-    thinker_loaded = False
-    if thinker_ckpt is not None:
-        # Handle different checkpoint formats
-        if isinstance(thinker_ckpt, dict):
-            if "model" in thinker_ckpt:
-                think.load_state_dict(thinker_ckpt["model"])
-                thinker_loaded = True
-            elif "thinker" in thinker_ckpt:
-                think.load_state_dict(thinker_ckpt["thinker"])
-                thinker_loaded = True
-            else:
-                think.load_state_dict(thinker_ckpt)
-                thinker_loaded = True
-        else:
-            think.load_state_dict(thinker_ckpt)
-            thinker_loaded = True
-        if thinker_loaded:
-            print("Loaded Thinker model")
-    if not thinker_loaded:
-        print("Warning: Thinker checkpoint not found, using untrained model")
-    think.eval()  # Set to evaluation mode
-
-    # Load Vision encoder from config
-    vis = ViTTiny(
-        vision_cfg.get("img_size", 224),
-        vision_cfg.get("patch", 16),
-        vision_cfg.get("d_model", 128),
-        vision_cfg.get("n_layers", 4),
-        vision_cfg.get("n_heads", 2),
-        vision_cfg.get("d_ff", 512),
-        vision_cfg.get("dropout", 0.1)
-    ).to(device)
-    # Try to find vision checkpoint
-    vision_ckpt_dir = args.ckpt_dir
-    if "vision_ckpt" in main_cfg:
-        vision_ckpt_dir = main_cfg["vision_ckpt"]
-    
-    vpath, vision_ckpt = find_checkpoint(vision_ckpt_dir, "vision.pt", "vision_step_", device)
-    if vision_ckpt is not None:
-        if isinstance(vision_ckpt, dict) and "vit" in vision_ckpt:
-            vis.load_state_dict(vision_ckpt["vit"])
-        elif isinstance(vision_ckpt, dict) and "model" in vision_ckpt:
-            vis.load_state_dict(vision_ckpt["model"])
-        else:
-            vis.load_state_dict(vision_ckpt)
-        print("Loaded Vision encoder")
-    else:
-        print("Warning: Vision checkpoint not found, using untrained model")
-    vis.eval()  # Set to evaluation mode
-
-    # Load Audio encoder from config
-    downsample_factor = audio_cfg.get("downsample_time", 8)
-    aud = AudioEncoderTiny(
-        audio_cfg.get("d_model", 192),
-        audio_cfg.get("n_heads", 3),
-        audio_cfg.get("d_ff", 768),
-        audio_cfg.get("n_layers", 4),
-        audio_cfg.get("dropout", 0.1),
-        downsample_factor=downsample_factor
-    ).to(device)
-    # Try to find audio encoder checkpoint
-    audio_ckpt_dir = args.ckpt_dir
-    if "audio_ckpt" in main_cfg:
-        audio_ckpt_dir = main_cfg["audio_ckpt"]
-    
-    apath, audio_ckpt = find_checkpoint(audio_ckpt_dir, "audio_enc.pt", "audio_enc_step_", device)
-    if audio_ckpt is not None:
-        if isinstance(audio_ckpt, dict) and "enc" in audio_ckpt:
-            aud.load_state_dict(audio_ckpt["enc"])
-        elif isinstance(audio_ckpt, dict) and "model" in audio_ckpt:
-            aud.load_state_dict(audio_ckpt["model"])
-        else:
-            aud.load_state_dict(audio_ckpt)
-        print("Loaded Audio encoder")
-    else:
-        print("Warning: Audio encoder checkpoint not found, using untrained model")
-    aud.eval()  # Set to evaluation mode
-
-    # Load Talker from config
-    codebooks = talker_cfg.get("codebooks", 2)
-    codebook_size = talker_cfg.get("codebook_size", 128)
-    rvq = RVQ(codebooks, codebook_size, d=64).to(device)
-    talker = TalkerTiny(
-        talker_cfg.get("d_model", 192),
-        talker_cfg.get("n_layers", 4),
-        talker_cfg.get("n_heads", 3),
-        talker_cfg.get("d_ff", 768),
-        codebooks,
-        codebook_size,
-        talker_cfg.get("dropout", 0.1),
-        use_gqa=talker_cfg.get("use_gqa", False),
-        use_swiglu=talker_cfg.get("use_swiglu", True),
-        rope_theta=talker_cfg.get("rope_theta", 10000.0)
-    ).to(device)
-    # Try to find talker checkpoint
-    talker_ckpt_dir = args.ckpt_dir
-    if "talker_ckpt" in main_cfg:
-        talker_ckpt_dir = main_cfg["talker_ckpt"]
-    
-    tpath, talker_ckpt = find_checkpoint(talker_ckpt_dir, "talker.pt", "talker_step_", device)
-    if talker_ckpt is not None:
-        if isinstance(talker_ckpt, dict):
-            if "rvq" in talker_ckpt:
-                rvq.load_state_dict(talker_ckpt["rvq"])
-            if "talker" in talker_ckpt:
-                talker.load_state_dict(talker_ckpt["talker"])
-        print("Loaded Talker model")
-    else:
-        print("Warning: Talker checkpoint not found, using untrained model")
-    
-    # Load projectors if omni checkpoint exists
-    proj_a, proj_v = None, None
-    omni_path, omni_ckpt = find_checkpoint(args.ckpt_dir, "omni.pt", "omni_step_", device)
-    if omni_ckpt is not None:
-        if isinstance(omni_ckpt, dict):
-            if "proj_a" in omni_ckpt and "proj_v" in omni_ckpt:
-                audio_dim = audio_cfg.get("d_model", 192)
-                vision_dim = vision_cfg.get("d_model", 128)
-                thinker_d_model = thinker_cfg.get("d_model", 256)
-                proj_a = torch.nn.Linear(audio_dim, thinker_d_model).to(device)
-                proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
-                proj_a.load_state_dict(omni_ckpt["proj_a"])
-                proj_v.load_state_dict(omni_ckpt["proj_v"])
-                print("Loaded multimodal projectors from omni checkpoint")
-            # Also try to load thinker from omni checkpoint if not already loaded
-            if "thinker" in omni_ckpt and not thinker_loaded:
-                think.load_state_dict(omni_ckpt["thinker"])
-                thinker_loaded = True
-                print("Loaded Thinker from omni checkpoint")
-    else:
-        print("Warning: omni.pt not found, multimodal features will not be used")
-    
-    # Determine input types first
-    has_image = args.image is not None
-    has_video = args.video is not None
-    has_audio = args.audio_in is not None
-    has_text = args.text is not None
-    use_ocr = args.ocr
-    
-    # Load OCR model if OCR is requested
-    ocr_model = None
-    if use_ocr and has_image:
+    def load(self, ckpt_dir: str, config: Dict) -> bool:
+        """Load Thinker model and tokenizer"""
         try:
-            ocr_cfg_path = "configs/ocr_tiny.json"
-            ocr_cfg = {}
-            if os.path.exists(ocr_cfg_path):
-                ocr_cfg = json.load(open(ocr_cfg_path))
-            else:
-                ocr_cfg = {
-                    "img_size": 224,
-                    "patch": 16,
-                    "vision_d_model": 128,
-                    "vision_layers": 4,
-                    "vision_heads": 2,
-                    "vision_d_ff": 512,
-                    "decoder_d_model": 256,
-                    "decoder_layers": 4,
-                    "decoder_heads": 4,
-                    "decoder_d_ff": 1024,
-                    "vocab_size": 128,
-                    "dropout": 0.1
-                }
+            # Load config
+            thinker_cfg = config.get("thinker", config)
+            vocab_size = thinker_cfg.get("vocab_size", 32000)
+            ctx_len = thinker_cfg.get("ctx_len", 512)
             
-            ocr_model = OCRModel(
+            # Initialize model
+            self.model = ThinkerLM(
+                vocab=vocab_size,
+                n_layers=thinker_cfg.get("n_layers", 4),
+                d=thinker_cfg.get("d_model", 256),
+                heads=thinker_cfg.get("n_heads", 4),
+                ff=thinker_cfg.get("d_ff", 1024),
+                dropout=thinker_cfg.get("dropout", 0.1),
+                rope_theta=thinker_cfg.get("rope_theta", 10000),
+                ctx=ctx_len,
+                use_gqa=thinker_cfg.get("use_gqa", False),
+                use_swiglu=thinker_cfg.get("use_swiglu", True),
+                use_moe=thinker_cfg.get("use_moe", False),
+                num_experts=thinker_cfg.get("num_experts", 8),
+                num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2)
+            ).to(self.device)
+            
+            # Load tokenizer
+            tok_path = os.path.join(ckpt_dir, "tokenizer.model")
+            if not os.path.exists(tok_path):
+                # Try thinker checkpoint directory
+                if "thinker_ckpt" in config:
+                    tok_path = os.path.join(config["thinker_ckpt"], "tokenizer.model")
+                else:
+                    tok_path = os.path.join("checkpoints/thinker_tiny", "tokenizer.model")
+            
+            self.tokenizer = BPETokenizer(tok_path)
+            
+            # Load checkpoint
+            thinker_ckpt_dir = ckpt_dir
+            if "thinker_ckpt" in config:
+                thinker_ckpt_dir = config["thinker_ckpt"]
+            elif "thinker" not in ckpt_dir:
+                thinker_ckpt_dir = "checkpoints/thinker_tiny"
+            
+            ckpt_path, ckpt = self.load_checkpoint(thinker_ckpt_dir, "thinker.pt", "thinker_step_")
+            
+            if ckpt is not None:
+                if isinstance(ckpt, dict):
+                    if "model" in ckpt:
+                        self.load_state_dict(ckpt["model"])
+                    elif "thinker" in ckpt:
+                        self.load_state_dict(ckpt["thinker"])
+                    else:
+                        self.load_state_dict(ckpt)
+                else:
+                    self.load_state_dict(ckpt)
+                print("✓ Loaded Thinker model")
+            else:
+                print("⚠ Warning: Thinker checkpoint not found, using untrained model")
+            
+            self.model.eval()
+            self.loaded = True
+            return True
+        except Exception as e:
+            print(f"✗ Failed to load Thinker: {e}")
+            return False
+
+
+class VisionLoader(BaseModelLoader):
+    """Loader for Vision encoder"""
+    
+    def load(self, ckpt_dir: str, config: Dict) -> bool:
+        """Load Vision encoder"""
+        try:
+            # Load config
+            vision_cfg = self.load_config("configs/vision_tiny.json", {
+                "img_size": 224, "patch": 16, "d_model": 128,
+                "n_layers": 4, "n_heads": 2, "d_ff": 512, "dropout": 0.1
+            })
+            
+            # Initialize model
+            self.model = ViTTiny(
+                img_size=vision_cfg.get("img_size", 224),
+                patch=vision_cfg.get("patch", 16),
+                d=vision_cfg.get("d_model", 128),
+                layers=vision_cfg.get("n_layers", 4),
+                heads=vision_cfg.get("n_heads", 2),
+                ff=vision_cfg.get("d_ff", 512),
+                dropout=vision_cfg.get("dropout", 0.1)
+            ).to(self.device)
+            
+            # Load checkpoint
+            vision_ckpt_dir = ckpt_dir
+            if "vision_ckpt" in config:
+                vision_ckpt_dir = config["vision_ckpt"]
+            
+            ckpt_path, ckpt = self.load_checkpoint(vision_ckpt_dir, "vision.pt", "vision_step_")
+            
+            if ckpt is not None:
+                if isinstance(ckpt, dict):
+                    if "vit" in ckpt:
+                        self.load_state_dict(ckpt["vit"])
+                    elif "model" in ckpt:
+                        self.load_state_dict(ckpt["model"])
+                    else:
+                        self.load_state_dict(ckpt)
+                else:
+                    self.load_state_dict(ckpt)
+                print("✓ Loaded Vision encoder")
+            else:
+                print("⚠ Warning: Vision checkpoint not found, using untrained model")
+            
+            self.model.eval()
+            self.loaded = True
+            return True
+        except Exception as e:
+            print(f"✗ Failed to load Vision: {e}")
+            return False
+
+
+class AudioLoader(BaseModelLoader):
+    """Loader for Audio encoder"""
+    
+    def load(self, ckpt_dir: str, config: Dict) -> bool:
+        """Load Audio encoder"""
+        try:
+            # Load config
+            audio_cfg = self.load_config("configs/audio_enc_tiny.json", {
+                "d_model": 192, "n_layers": 4, "n_heads": 3,
+                "d_ff": 768, "dropout": 0.1, "downsample_time": 8
+            })
+            
+            # Initialize model
+            downsample_factor = audio_cfg.get("downsample_time", 8)
+            self.model = AudioEncoderTiny(
+                d=audio_cfg.get("d_model", 192),  # Use 'd' not 'd_model'
+                heads=audio_cfg.get("n_heads", 3),  # Use 'heads' not 'n_heads'
+                ff=audio_cfg.get("d_ff", 768),  # Use 'ff' not 'd_ff'
+                layers=audio_cfg.get("n_layers", 4),  # Use 'layers' not 'n_layers'
+                dropout=audio_cfg.get("dropout", 0.1),
+                downsample_factor=downsample_factor
+            ).to(self.device)
+            
+            # Load checkpoint
+            audio_ckpt_dir = ckpt_dir
+            if "audio_ckpt" in config:
+                audio_ckpt_dir = config["audio_ckpt"]
+            
+            ckpt_path, ckpt = self.load_checkpoint(audio_ckpt_dir, "audio_enc.pt", "audio_enc_step_")
+            
+            if ckpt is not None:
+                if isinstance(ckpt, dict):
+                    if "enc" in ckpt:
+                        self.load_state_dict(ckpt["enc"])
+                    elif "model" in ckpt:
+                        self.load_state_dict(ckpt["model"])
+                    else:
+                        self.load_state_dict(ckpt)
+                else:
+                    self.load_state_dict(ckpt)
+                print("✓ Loaded Audio encoder")
+            else:
+                print("⚠ Warning: Audio checkpoint not found, using untrained model")
+            
+            self.model.eval()
+            self.loaded = True
+            return True
+        except Exception as e:
+            print(f"✗ Failed to load Audio: {e}")
+            return False
+
+
+class TalkerLoader(BaseModelLoader):
+    """Loader for Talker (TTS) model"""
+    
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        self.rvq = None
+    
+    def load(self, ckpt_dir: str, config: Dict) -> bool:
+        """Load Talker and RVQ"""
+        try:
+            # Load config
+            talker_cfg = self.load_config("configs/talker_tiny.json", {
+                "d_model": 192, "n_layers": 4, "n_heads": 3,
+                "d_ff": 768, "codebooks": 2, "codebook_size": 128, "dropout": 0.1
+            })
+            
+            codebooks = talker_cfg.get("codebooks", 2)
+            codebook_size = talker_cfg.get("codebook_size", 128)
+            
+            # Initialize RVQ
+            self.rvq = RVQ(codebooks, codebook_size, d=64).to(self.device)
+            
+            # Initialize Talker
+            self.model = TalkerTiny(
+                d=talker_cfg.get("d_model", 192),
+                n_layers=talker_cfg.get("n_layers", 4),
+                n_heads=talker_cfg.get("n_heads", 3),
+                ff=talker_cfg.get("d_ff", 768),
+                codebooks=codebooks,
+                codebook_size=codebook_size,
+                dropout=talker_cfg.get("dropout", 0.1),
+                use_gqa=talker_cfg.get("use_gqa", False),
+                use_swiglu=talker_cfg.get("use_swiglu", True),
+                rope_theta=talker_cfg.get("rope_theta", 10000.0)
+            ).to(self.device)
+            
+            # Load checkpoint
+            talker_ckpt_dir = ckpt_dir
+            if "talker_ckpt" in config:
+                talker_ckpt_dir = config["talker_ckpt"]
+            
+            ckpt_path, ckpt = self.load_checkpoint(talker_ckpt_dir, "talker.pt", "talker_step_")
+            
+            if ckpt is not None:
+                if isinstance(ckpt, dict):
+                    if "rvq" in ckpt:
+                        rvq_state = strip_orig_mod_keys(ckpt["rvq"])
+                        self.rvq.load_state_dict(rvq_state, strict=False)
+                    if "talker" in ckpt:
+                        self.load_state_dict(ckpt["talker"])
+                print("✓ Loaded Talker model")
+            else:
+                print("⚠ Warning: Talker checkpoint not found, using untrained model")
+            
+            self.model.eval()
+            self.rvq.eval()
+            self.loaded = True
+            return True
+        except Exception as e:
+            print(f"✗ Failed to load Talker: {e}")
+            return False
+
+
+class OCRLoader(BaseModelLoader):
+    """Loader for OCR model"""
+    
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        self.char_to_idx = None
+        self.idx_to_char = None
+    
+    def load(self, ckpt_dir: str, config: Dict) -> bool:
+        """Load OCR model with vocab_size from checkpoint"""
+        try:
+            # First, try to load checkpoint to get vocab_size
+            ocr_ckpt_dir = ckpt_dir
+            if not os.path.exists(os.path.join(ocr_ckpt_dir, "ocr.pt")):
+                ocr_ckpt_dir = "checkpoints/ocr_tiny"
+            
+            ckpt_path, ckpt = self.load_checkpoint(ocr_ckpt_dir, "ocr.pt", "ocr_step_")
+            
+            # Get vocab_size from checkpoint
+            vocab_size = 128  # Default
+            if ckpt is not None and isinstance(ckpt, dict):
+                if "char_to_idx" in ckpt:
+                    vocab_size = len(ckpt["char_to_idx"])
+                    self.char_to_idx = ckpt["char_to_idx"]
+                    self.idx_to_char = ckpt.get("idx_to_char", {v: k for k, v in self.char_to_idx.items()})
+                elif "config" in ckpt and "vocab_size" in ckpt["config"]:
+                    vocab_size = ckpt["config"]["vocab_size"]
+            
+            # Load config
+            ocr_cfg = self.load_config("configs/ocr_tiny.json", {
+                "img_size": 224, "patch": 16, "vision_d_model": 128,
+                "vision_layers": 4, "vision_heads": 2, "vision_d_ff": 512,
+                "decoder_d_model": 256, "decoder_layers": 4, "decoder_heads": 4,
+                "decoder_d_ff": 1024, "dropout": 0.1
+            })
+            
+            # Initialize model with correct vocab_size
+            self.model = OCRModel(
                 img_size=ocr_cfg.get("img_size", 224),
                 patch=ocr_cfg.get("patch", 16),
                 vision_d_model=ocr_cfg.get("vision_d_model", 128),
@@ -544,279 +368,793 @@ def main():
                 decoder_layers=ocr_cfg.get("decoder_layers", 4),
                 decoder_heads=ocr_cfg.get("decoder_heads", 4),
                 decoder_d_ff=ocr_cfg.get("decoder_d_ff", 1024),
-                vocab_size=ocr_cfg.get("vocab_size", 128),
-                dropout=ocr_cfg.get("dropout", 0.1)
-            ).to(device)
+                vocab_size=vocab_size,
+                dropout=ocr_cfg.get("dropout", 0.1),
+                use_gqa=ocr_cfg.get("use_gqa", False),
+                use_swiglu=ocr_cfg.get("use_swiglu", True),
+                use_flash=ocr_cfg.get("use_flash", True)
+            ).to(self.device)
             
-            # Try to load OCR checkpoint
-            ocr_ckpt_dir = args.ckpt_dir
-            if not os.path.exists(os.path.join(ocr_ckpt_dir, "ocr.pt")):
-                ocr_ckpt_dir = "checkpoints/ocr_tiny"
-            
-            ocr_path, ocr_checkpoint = find_checkpoint(ocr_ckpt_dir, "ocr.pt", "ocr_step_", device)
-            if ocr_checkpoint is not None:
-                if isinstance(ocr_checkpoint, dict):
-                    if "model" in ocr_checkpoint:
-                        ocr_model.load_state_dict(ocr_checkpoint["model"])
+            # Load checkpoint state_dict
+            if ckpt is not None:
+                if isinstance(ckpt, dict):
+                    if "model" in ckpt:
+                        self.load_state_dict(ckpt["model"])
                     else:
-                        ocr_model.load_state_dict(ocr_checkpoint)
-                    print("Loaded OCR model")
-                    if "char_to_idx" in ocr_checkpoint:
-                        ocr_char_to_idx = ocr_checkpoint["char_to_idx"]
-                        ocr_idx_to_char = ocr_checkpoint.get("idx_to_char", {v: k for k, v in ocr_char_to_idx.items()})
-                    else:
-                        ocr_char_to_idx = None
-                        ocr_idx_to_char = None
+                        self.load_state_dict(ckpt)
                 else:
-                    ocr_model.load_state_dict(ocr_checkpoint)
-                    print("Loaded OCR model (legacy format)")
-                    ocr_char_to_idx = None
-                    ocr_idx_to_char = None
+                    self.load_state_dict(ckpt)
+                print(f"✓ Loaded OCR model (vocab_size={vocab_size})")
             else:
-                print("Warning: OCR checkpoint not found, using untrained model")
-                ocr_char_to_idx = None
-                ocr_idx_to_char = None
+                print("⚠ Warning: OCR checkpoint not found, using untrained model")
             
-            ocr_model.eval()
+            self.model.eval()
+            self.loaded = True
+            return True
         except Exception as e:
-            print(f"Warning: Failed to load OCR model: {e}")
-            ocr_model = None
-            ocr_char_to_idx = None
-            ocr_idx_to_char = None
-    else:
-        ocr_char_to_idx = None
-        ocr_idx_to_char = None
+            print(f"✗ Failed to load OCR: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
-    # Image transform
-    tf = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
+
+class VocoderLoader:
+    """Loader for Vocoder (TTS output)"""
     
-    # Audio processing setup
-    mel_spec = None
-    if hasattr(torchaudio.transforms, 'MelSpectrogram'):
-        mel_spec = torchaudio.transforms.MelSpectrogram(
-            sample_rate=16000, n_fft=1024, hop_length=160, 
-            win_length=400, n_mels=128
-        ).to(device)
-
-    # Load vocoder if needed (for audio output TTS)
-    voc = None
-    if args.audio_out:  # Load if we need to generate audio output
+    def __init__(self, device: str = "cuda"):
+        self.device = device
+        self.vocoder = None
+        self.loaded = False
+    
+    def load(self, ckpt_dir: str) -> bool:
+        """Load vocoder for audio output"""
         try:
-            # Try to use neural vocoder (HiFi-GAN) with automatic fallback to Griffin-Lim
-            # Check for pretrained checkpoint
-            hifigan_checkpoint = os.path.join(args.ckpt_dir, "hifigan.pt")
+            hifigan_checkpoint = os.path.join(ckpt_dir, "hifigan.pt")
             if not os.path.exists(hifigan_checkpoint):
-                # Also check in checkpoints root
                 hifigan_checkpoint = "checkpoints/hifigan.pt"
             
-            voc = NeuralVocoder(
+            self.vocoder = NeuralVocoder(
                 sample_rate=16000,
                 n_mels=128,
                 checkpoint_path=hifigan_checkpoint if os.path.exists(hifigan_checkpoint) else None,
                 prefer_neural=True
             )
-            # Move neural vocoder to device if needed
-            if voc.vocoder_type == "hifigan":
-                voc = voc.to(device).eval()
-            print(f"Loaded {voc.vocoder_type} vocoder for audio output")
+            
+            if self.vocoder.vocoder_type == "hifigan":
+                self.vocoder = self.vocoder.to(self.device).eval()
+            
+            print(f"✓ Loaded {self.vocoder.vocoder_type} vocoder")
+            self.loaded = True
+            return True
         except Exception as e:
-            print(f"Warning: Failed to load vocoder: {e}. Audio output disabled.")
-            voc = None
+            print(f"⚠ Warning: Failed to load vocoder: {e}")
+            return False
 
-    if has_image or has_video or has_audio or has_text:
-        # Collect multimodal embeddings
+
+# ============================================================================
+# Processing Classes
+# ============================================================================
+
+class ImageProcessor:
+    """Process images for vision encoder"""
+    
+    def __init__(self, img_size: int = 224):
+        self.transform = transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor()
+        ])
+    
+    def process(self, image_path: str) -> torch.Tensor:
+        """Load and process image"""
+        img = Image.open(image_path).convert("RGB")
+        return self.transform(img).unsqueeze(0)
+
+
+class AudioProcessor:
+    """Process audio for audio encoder"""
+    
+    def __init__(self, device: str = "cuda", sample_rate: int = 16000):
+        self.device = device
+        self.sample_rate = sample_rate
+        self.mel_spec = None
+        if hasattr(torchaudio.transforms, 'MelSpectrogram'):
+            self.mel_spec = torchaudio.transforms.MelSpectrogram(
+                sample_rate=sample_rate, n_fft=1024, hop_length=160,
+                win_length=400, n_mels=128
+            ).to(device)
+    
+    def process(self, audio_path: str) -> torch.Tensor:
+        """Load and process audio to mel spectrogram"""
+        wav, sr = load_audio(audio_path)
+        wav = wav.to(self.device)
+        if sr != self.sample_rate:
+            wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
+        if self.mel_spec is not None:
+            mel = self.mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
+            return mel
+        return None
+
+
+class VideoProcessor:
+    """Process videos by extracting frames"""
+    
+    @staticmethod
+    def extract_frames(video_path: str, num_frames: int = 4) -> List[torch.Tensor]:
+        """Extract evenly spaced frames from video"""
+        try:
+            video, audio, info = tvio.read_video(video_path, output_format="TCHW")
+            total_frames = video.shape[0]
+            if total_frames == 0:
+                return []
+            indices = [int(i * total_frames / (num_frames + 1)) for i in range(1, num_frames + 1)]
+            frames = [video[i] for i in indices if i < total_frames]
+            return frames
+        except Exception as e:
+            print(f"Warning: Could not extract frames from video: {e}")
+            return []
+
+
+# ============================================================================
+# Generation Classes
+# ============================================================================
+
+class TextGenerator:
+    """Generate text from prompts"""
+    
+    def __init__(self, model: ThinkerLM, tokenizer: BPETokenizer, device: str = "cuda"):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+    
+    def generate(self, prompt: str, max_new: int = 64, ctx: int = 512,
+                 multimodal_emb: Optional[torch.Tensor] = None,
+                 use_cache: bool = True, use_amp: bool = True) -> str:
+        """Generate text from prompt"""
+        if use_cache and hasattr(self.model, 'enable_kv_cache'):
+            self.model.enable_kv_cache(True)
+            self.model.reset_kv_cache()
+        
+        ids = [1] + self.tokenizer.encode(prompt)
+        
+        if multimodal_emb is not None:
+            mm_len = multimodal_emb.shape[1]
+            max_text_len = ctx - mm_len - max_new - 1
+            ids = ids[:max_text_len]
+            text_emb = self.model.tok_emb(torch.tensor(ids, dtype=torch.long, device=self.device)[None, :])
+            combined_emb = torch.cat([multimodal_emb, text_emb], dim=1)
+            
+            if use_amp and self.device == "cuda":
+                with autocast(device_type='cuda'):
+                    logits = self.model(embeddings=combined_emb)
+            else:
+                logits = self.model(embeddings=combined_emb)
+            next_id = int(torch.argmax(logits[0, -1]))
+            generated_ids = ids + [next_id]
+            
+            for _ in range(max_new - 1):
+                next_idx = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
+                if use_amp and self.device == "cuda":
+                    with autocast(device_type='cuda'):
+                        logits = self.model(idx=next_idx)
+                else:
+                    logits = self.model(idx=next_idx)
+                next_id = int(torch.argmax(logits[0, -1]))
+                generated_ids.append(next_id)
+                if next_id == 2:
+                    break
+        else:
+            ids = ids[-(ctx-max_new-1):]
+            x = torch.tensor(ids, dtype=torch.long, device=self.device)[None, :]
+            
+            if use_amp and self.device == "cuda":
+                with autocast(device_type='cuda'):
+                    logits = self.model(x)
+            else:
+                logits = self.model(x)
+            next_id = int(torch.argmax(logits[0, -1]))
+            generated_ids = ids + [next_id]
+            
+            for _ in range(max_new - 1):
+                x = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
+                if use_amp and self.device == "cuda":
+                    with autocast(device_type='cuda'):
+                        logits = self.model(x)
+                else:
+                    logits = self.model(x)
+                next_id = int(torch.argmax(logits[0, -1]))
+                generated_ids.append(next_id)
+                if next_id == 2:
+                    break
+        
+        if use_cache and hasattr(self.model, 'reset_kv_cache'):
+            self.model.reset_kv_cache()
+        
+        return self.tokenizer.decode(generated_ids)
+
+
+class AudioGenerator:
+    """Generate audio from text (TTS)"""
+    
+    def __init__(self, talker: TalkerTiny, rvq: RVQ, vocoder: NeuralVocoder, device: str = "cuda"):
+        self.talker = talker
+        self.rvq = rvq
+        self.vocoder = vocoder
+        self.device = device
+    
+    def generate(self, text_tokens: List[int], max_frames: Optional[int] = None,
+                 temperature: float = 0.8, top_k: int = 50) -> Optional[np.ndarray]:
+        """Generate audio from text tokens"""
+        if self.vocoder is None:
+            print("Warning: Vocoder not available")
+            return None
+        
+        if max_frames is None:
+            if text_tokens and len(text_tokens) > 0:
+                max_frames = max(50, min(1000, int(len(text_tokens) * 30)))
+            else:
+                max_frames = 200
+        
+        self.talker.eval()
+        self.rvq.eval()
+        
+        if hasattr(self.talker, 'enable_kv_cache'):
+            self.talker.enable_kv_cache(True)
+            self.talker.reset_kv_cache()
+        
+        def sample_with_temperature(logits, temp=1.0, top_k_val=None):
+            if temp == 0.0:
+                return torch.argmax(logits, dim=-1)
+            logits = logits / temp
+            if top_k_val is not None and top_k_val > 0:
+                top_k_val = min(top_k_val, logits.size(-1))
+                top_k_values, top_k_indices = torch.topk(logits, top_k_val, dim=-1)
+                filtered_logits = torch.full_like(logits, float('-inf'))
+                filtered_logits.scatter_(-1, top_k_indices, top_k_values)
+                logits = filtered_logits
+            probs = torch.softmax(logits, dim=-1)
+            return torch.multinomial(probs, num_samples=1).squeeze(-1)
+        
+        with torch.no_grad():
+            codes = torch.zeros(1, 1, 2, dtype=torch.long, device=self.device)
+            
+            base_logit, res_logit = self.talker(codes, use_cache=True)
+            base_code = sample_with_temperature(base_logit[0, -1, :], temperature, top_k).item()
+            res_code = sample_with_temperature(res_logit[0, -1, :], temperature, top_k).item()
+            next_codes = torch.tensor([[[base_code, res_code]]], device=self.device)
+            codes = torch.cat([codes, next_codes], dim=1)
+            
+            for _ in range(max_frames - 1):
+                base_logit, res_logit = self.talker(next_codes, use_cache=True)
+                base_code = sample_with_temperature(base_logit[0, -1, :], temperature, top_k).item()
+                res_code = sample_with_temperature(res_logit[0, -1, :], temperature, top_k).item()
+                next_codes = torch.tensor([[[base_code, res_code]]], device=self.device)
+                codes = torch.cat([codes, next_codes], dim=1)
+            
+            if hasattr(self.talker, 'reset_kv_cache'):
+                self.talker.reset_kv_cache()
+            
+            # Remove BOS token
+            if codes.shape[1] > 1:
+                codes = codes[:, 1:, :]
+            
+            # Decode to mel
+            mel_frames = []
+            for t in range(codes.shape[1]):
+                frame_codes = codes[:, t:t+1, :]
+                frame_codes_flat = frame_codes.squeeze(0).squeeze(0)
+                mel_frame = self.rvq.decode(frame_codes_flat.unsqueeze(0))
+                mel_frames.append(mel_frame.squeeze(0))
+            
+            mel = torch.stack(mel_frames, dim=0)
+            
+            # Normalize
+            mel_min = mel.min()
+            mel_max = mel.max()
+            if mel_max > mel_min + 1e-6:
+                mel_normalized = (mel - mel_min) / (mel_max - mel_min + 1e-8)
+            else:
+                t = torch.arange(mel.shape[0], device=mel.device, dtype=mel.dtype)[:, None]
+                mel_normalized = 0.5 + 0.3 * torch.sin(2 * np.pi * t / 20)
+            
+            # Convert to audio
+            try:
+                if self.vocoder.vocoder_type == "hifigan" and isinstance(self.vocoder.vocoder, nn.Module):
+                    mel_tensor = mel_normalized.T.unsqueeze(0)
+                    with torch.no_grad():
+                        audio_tensor = self.vocoder.vocoder(mel_tensor)
+                    audio = audio_tensor.squeeze().cpu().numpy()
+                else:
+                    mel_np = mel_normalized.cpu().numpy()
+                    audio = self.vocoder.mel_to_audio(mel_np)
+                
+                if np.max(np.abs(audio)) < 1e-6:
+                    duration = len(audio) / 16000
+                    t = np.linspace(0, duration, len(audio))
+                    audio = audio + 0.1 * np.sin(2 * np.pi * 440 * t)
+                
+                return audio
+            except Exception as e:
+                print(f"Warning: Audio generation failed: {e}")
+                duration = 0.5
+                t = np.linspace(0, duration, int(16000 * duration))
+                return 0.1 * np.sin(2 * np.pi * 440 * t)
+
+
+class OCRProcessor:
+    """Process OCR text extraction"""
+    
+    def __init__(self, model: OCRModel, char_to_idx: Dict, idx_to_char: Dict, device: str = "cuda"):
+        self.model = model
+        self.char_to_idx = char_to_idx
+        self.idx_to_char = idx_to_char
+        self.device = device
+    
+    def extract_text(self, image_tensor: torch.Tensor, max_len: int = 128) -> str:
+        """Extract text from image"""
+        self.model.eval()
+        with torch.no_grad():
+            bos_id = self.char_to_idx.get('<BOS>', 1) if self.char_to_idx else 1
+            eos_id = self.char_to_idx.get('<EOS>', 2) if self.char_to_idx else 2
+            
+            text_ids = torch.tensor([[bos_id]], dtype=torch.long, device=self.device)
+            ocr_text = ""
+            
+            for _ in range(max_len):
+                if self.device == "cuda":
+                    with autocast(device_type='cuda'):
+                        logits = self.model(image_tensor, text_ids)
+                else:
+                    logits = self.model(image_tensor, text_ids)
+                
+                next_id = int(torch.argmax(logits[0, -1]))
+                if next_id == eos_id or next_id == 0:
+                    break
+                
+                if self.idx_to_char:
+                    char = self.idx_to_char.get(next_id, '')
+                    if char and char not in ['<BOS>', '<EOS>', '<PAD>', '<UNK>']:
+                        ocr_text += char
+                else:
+                    if 32 <= next_id < 127:
+                        ocr_text += chr(next_id)
+                
+                text_ids = torch.cat([text_ids, torch.tensor([[next_id]], dtype=torch.long, device=self.device)], dim=1)
+            
+            return ocr_text
+
+
+# ============================================================================
+# Main Inference Engine
+# ============================================================================
+
+class InferenceEngine:
+    """Main inference engine orchestrating all models"""
+    
+    def __init__(self, ckpt_dir: str, device: str = "cuda"):
+        self.ckpt_dir = ckpt_dir
+        self.device = device
+        
+        # Load config
+        config_path = os.path.join(ckpt_dir, "config.json")
+        if not os.path.exists(config_path):
+            if "thinker" in ckpt_dir:
+                config_path = "configs/thinker_tiny.json"
+            elif "omni" in ckpt_dir:
+                config_path = "configs/omni_sft_tiny.json"
+            else:
+                config_path = "configs/thinker_tiny.json"
+        
+        self.config = {}
+        if os.path.exists(config_path):
+            self.config = json.load(open(config_path))
+        
+        # Model loaders
+        self.thinker_loader = ThinkerLoader(device)
+        self.vision_loader = VisionLoader(device)
+        self.audio_loader = AudioLoader(device)
+        self.talker_loader = TalkerLoader(device)
+        self.ocr_loader = OCRLoader(device)
+        self.vocoder_loader = VocoderLoader(device)
+        
+        # Projectors
+        self.proj_a = None
+        self.proj_v = None
+        
+        # Processors
+        self.image_processor = ImageProcessor()
+        self.audio_processor = AudioProcessor(device)
+        
+        # Generators (initialized after models load)
+        self.text_generator = None
+        self.audio_generator = None
+        self.ocr_processor = None
+    
+    def load_models(self, load_vision: bool = True, load_audio: bool = True,
+                   load_talker: bool = False, load_ocr: bool = False, load_vocoder: bool = False):
+        """Load required models"""
+        print(f"Loading models from {self.ckpt_dir}...")
+        print("=" * 60)
+        
+        # Always load Thinker (required for all inference)
+        print("\n[1/6] Loading ThinkerLM (Language Model)...")
+        if not self.thinker_loader.load(self.ckpt_dir, self.config):
+            raise RuntimeError("Failed to load Thinker model")
+        
+        self.text_generator = TextGenerator(
+            self.thinker_loader.model,
+            self.thinker_loader.tokenizer,
+            self.device
+        )
+        
+        # Load vision if needed
+        if load_vision:
+            print("\n[2/6] Loading Vision Encoder (ViTTiny)...")
+            self.vision_loader.load(self.ckpt_dir, self.config)
+        
+        # Load audio if needed
+        if load_audio:
+            print("\n[3/6] Loading Audio Encoder (AudioEncoderTiny)...")
+            self.audio_loader.load(self.ckpt_dir, self.config)
+        
+        # Load talker if needed (includes RVQ)
+        if load_talker:
+            print("\n[4/6] Loading Talker (TTS) + RVQ Codec...")
+            self.talker_loader.load(self.ckpt_dir, self.config)
+            if load_vocoder:
+                print("\n[5/6] Loading Vocoder (NeuralVocoder: HiFi-GAN/Griffin-Lim)...")
+                self.vocoder_loader.load(self.ckpt_dir)
+            if self.talker_loader.loaded and self.vocoder_loader.loaded:
+                self.audio_generator = AudioGenerator(
+                    self.talker_loader.model,
+                    self.talker_loader.rvq,
+                    self.vocoder_loader.vocoder,
+                    self.device
+                )
+        
+        # Load OCR if needed
+        if load_ocr:
+            print("\n[6/6] Loading OCR Model (OCRModel)...")
+            self.ocr_loader.load(self.ckpt_dir, self.config)
+            if self.ocr_loader.loaded:
+                self.ocr_processor = OCRProcessor(
+                    self.ocr_loader.model,
+                    self.ocr_loader.char_to_idx,
+                    self.ocr_loader.idx_to_char,
+                    self.device
+                )
+        
+        # Load projectors
+        print("\n[Projectors] Loading multimodal projectors...")
+        self._load_projectors()
+        
+        # Print summary
+        print("\n" + "=" * 60)
+        print("MODEL LOADING SUMMARY")
+        print("=" * 60)
+        print(f"✓ ThinkerLM: {'Loaded' if self.thinker_loader.loaded else 'Not loaded'}")
+        print(f"✓ Vision Encoder (ViTTiny): {'Loaded' if self.vision_loader.loaded else 'Not loaded'}")
+        print(f"✓ Audio Encoder (AudioEncoderTiny): {'Loaded' if self.audio_loader.loaded else 'Not loaded'}")
+        print(f"✓ Talker (TalkerTiny): {'Loaded' if self.talker_loader.loaded else 'Not loaded'}")
+        print(f"✓ RVQ Codec: {'Loaded' if (self.talker_loader.loaded and self.talker_loader.rvq is not None) else 'Not loaded'}")
+        print(f"✓ Vocoder (NeuralVocoder): {'Loaded' if self.vocoder_loader.loaded else 'Not loaded'}")
+        print(f"✓ OCR Model (OCRModel): {'Loaded' if self.ocr_loader.loaded else 'Not loaded'}")
+        print(f"✓ Tokenizer (BPETokenizer): {'Loaded' if self.thinker_loader.tokenizer is not None else 'Not loaded'}")
+        print(f"✓ Projectors (proj_a, proj_v): {'Loaded' if (self.proj_a is not None and self.proj_v is not None) else 'Not loaded'}")
+        print("=" * 60)
+    
+    def _load_projectors(self):
+        """Load multimodal projectors"""
+        # Get dimensions from config or defaults
+        audio_dim = 192
+        vision_dim = 128
+        thinker_d_model = 256
+        
+        if isinstance(self.config, dict):
+            if "audio" in self.config and isinstance(self.config["audio"], dict):
+                audio_dim = self.config["audio"].get("d_model", 192)
+            elif "d_model" in self.config.get("audio", {}):
+                audio_dim = self.config["audio"]["d_model"]
+            
+            if "vision" in self.config and isinstance(self.config["vision"], dict):
+                vision_dim = self.config["vision"].get("d_model", 128)
+            elif "d_model" in self.config.get("vision", {}):
+                vision_dim = self.config["vision"]["d_model"]
+            
+            if "thinker" in self.config and isinstance(self.config["thinker"], dict):
+                thinker_d_model = self.config["thinker"].get("d_model", 256)
+            elif "d_model" in self.config:
+                thinker_d_model = self.config.get("d_model", 256)
+        
+        # Try to load from checkpoint
+        ckpt_path, ckpt = find_checkpoint(self.ckpt_dir, "omni.pt", "omni_step_", self.device)
+        loaded_from_ckpt = False
+        
+        if ckpt is not None and isinstance(ckpt, dict):
+            if "proj_a" in ckpt and "proj_v" in ckpt:
+                self.proj_a = nn.Linear(audio_dim, thinker_d_model).to(self.device)
+                self.proj_v = nn.Linear(vision_dim, thinker_d_model).to(self.device)
+                
+                proj_a_state = strip_orig_mod_keys(ckpt["proj_a"])
+                proj_v_state = strip_orig_mod_keys(ckpt["proj_v"])
+                
+                if proj_a_state and proj_v_state:
+                    self.proj_a.load_state_dict(proj_a_state, strict=False)
+                    self.proj_v.load_state_dict(proj_v_state, strict=False)
+                    print("✓ Loaded multimodal projectors from checkpoint")
+                    loaded_from_ckpt = True
+        
+        # Create fallback projectors if not loaded from checkpoint
+        if not loaded_from_ckpt:
+            print(f"⚠ Projectors not found in checkpoint, creating fallback projectors")
+            print(f"  Audio: {audio_dim} -> {thinker_d_model}")
+            print(f"  Vision: {vision_dim} -> {thinker_d_model}")
+            self.proj_a = nn.Linear(audio_dim, thinker_d_model).to(self.device)
+            self.proj_v = nn.Linear(vision_dim, thinker_d_model).to(self.device)
+            # Initialize with small random weights
+            nn.init.normal_(self.proj_a.weight, std=0.02)
+            nn.init.normal_(self.proj_v.weight, std=0.02)
+            nn.init.zeros_(self.proj_a.bias)
+            nn.init.zeros_(self.proj_v.bias)
+            print("✓ Created fallback projectors (untrained)")
+    
+    def process_image(self, image_path: str) -> Optional[torch.Tensor]:
+        """Process image and return embeddings"""
+        if not self.vision_loader.loaded:
+            return None
+        
+        img_tensor = self.image_processor.process(image_path).to(self.device)
+        
+        if self.device == "cuda":
+            with autocast(device_type='cuda'):
+                cls, _ = self.vision_loader.model(img_tensor)
+        else:
+            cls, _ = self.vision_loader.model(img_tensor)
+        
+        # Always project vision embeddings to thinker dimension
+        if self.proj_v is not None:
+            if self.device == "cuda":
+                with autocast(device_type='cuda'):
+                    img_emb = self.proj_v(cls)
+            else:
+                img_emb = self.proj_v(cls)
+            return img_emb
+        else:
+            # Fallback: if no projector, create one on the fly
+            vision_dim = cls.shape[-1]
+            thinker_d_model = self.config.get("thinker", {}).get("d_model", 256)
+            if vision_dim != thinker_d_model:
+                proj_v = nn.Linear(vision_dim, thinker_d_model).to(self.device)
+                nn.init.normal_(proj_v.weight, std=0.02)
+                nn.init.zeros_(proj_v.bias)
+                if self.device == "cuda":
+                    with autocast(device_type='cuda'):
+                        img_emb = proj_v(cls)
+                else:
+                    img_emb = proj_v(cls)
+                return img_emb
+        return None
+    
+    def process_audio(self, audio_path: str) -> Optional[torch.Tensor]:
+        """Process audio and return embeddings"""
+        if not self.audio_loader.loaded:
+            return None
+        
+        mel = self.audio_processor.process(audio_path)
+        if mel is None:
+            return None
+        
+        if self.device == "cuda":
+            with autocast(device_type='cuda'):
+                audio_emb = self.audio_loader.model(mel)
+        else:
+            audio_emb = self.audio_loader.model(mel)
+        
+        # Always project audio embeddings to thinker dimension
+        if self.proj_a is not None:
+            if self.device == "cuda":
+                with autocast(device_type='cuda'):
+                    audio_emb = self.proj_a(audio_emb)
+            else:
+                audio_emb = self.proj_a(audio_emb)
+        else:
+            # Fallback: if no projector, create one on the fly
+            audio_dim = audio_emb.shape[-1]
+            thinker_d_model = self.config.get("thinker", {}).get("d_model", 256)
+            if audio_dim != thinker_d_model:
+                proj_a = nn.Linear(audio_dim, thinker_d_model).to(self.device)
+                nn.init.normal_(proj_a.weight, std=0.02)
+                nn.init.zeros_(proj_a.bias)
+                if self.device == "cuda":
+                    with autocast(device_type='cuda'):
+                        audio_emb = proj_a(audio_emb)
+                else:
+                    audio_emb = proj_a(audio_emb)
+        
+        # Limit length
+        ctx_len = self.config.get("thinker", {}).get("ctx_len", 512)
+        max_audio_tokens = min(audio_emb.shape[1], ctx_len // 4)
+        return audio_emb[:, :max_audio_tokens, :]
+    
+    def process_video(self, video_path: str) -> Optional[torch.Tensor]:
+        """Process video and return embeddings"""
+        frames = VideoProcessor.extract_frames(video_path)
+        if not frames:
+            return None
+        
+        # Process first frame
+        frame = frames[0].permute(1, 2, 0).numpy()
+        frame = (frame * 255).astype('uint8')
+        img = Image.fromarray(frame).convert("RGB")
+        img_tensor = self.image_processor.transform(img).unsqueeze(0).to(self.device)
+        
+        if self.device == "cuda":
+            with autocast(device_type='cuda'):
+                cls, _ = self.vision_loader.model(img_tensor)
+        else:
+            cls, _ = self.vision_loader.model(img_tensor)
+            
+        # Always project vision embeddings to thinker dimension
+        if self.proj_v is not None:
+            if self.device == "cuda":
+                with autocast(device_type='cuda'):
+                    img_emb = self.proj_v(cls)
+            else:
+                img_emb = self.proj_v(cls)
+            return img_emb
+        else:
+            # Fallback: if no projector, create one on the fly
+            vision_dim = cls.shape[-1]
+            thinker_d_model = self.config.get("thinker", {}).get("d_model", 256)
+            if vision_dim != thinker_d_model:
+                proj_v = nn.Linear(vision_dim, thinker_d_model).to(self.device)
+                nn.init.normal_(proj_v.weight, std=0.02)
+                nn.init.zeros_(proj_v.bias)
+                if self.device == "cuda":
+                    with autocast(device_type='cuda'):
+                        img_emb = proj_v(cls)
+                else:
+                    img_emb = proj_v(cls)
+                return img_emb
+        return None
+    
+    def infer(self, text: Optional[str] = None, image: Optional[str] = None,
+              video: Optional[str] = None, audio_in: Optional[str] = None,
+              use_ocr: bool = False, audio_out: Optional[str] = None) -> str:
+        """Main inference method"""
         multimodal_embeddings = []
         
-        if has_video:
-            print(f"Processing video: {args.video}")
-            frames = extract_video_frames(args.video, num_frames=4)
-            if frames:
-                print(f"Extracted {len(frames)} frames from video")
-                # Process first frame as representative
-                frame = frames[0].permute(1, 2, 0).numpy()
-                frame = (frame * 255).astype('uint8')
-                img = Image.fromarray(frame).convert("RGB")
-                img_tensor = tf(img).unsqueeze(0).to(device)
-                if device == "cuda":
-                    with autocast(device_type='cuda'):
-                        cls, _ = vis(img_tensor)
-                        if proj_v is not None:
-                            img_emb = proj_v(cls)  # (1,1,thinker_d_model)
-                        else:
-                            img_emb = None
+        # Process OCR if requested
+        if use_ocr and image and self.ocr_processor:
+            img_tensor = self.image_processor.process(image).to(self.device)
+            ocr_text = self.ocr_processor.extract_text(img_tensor)
+            if ocr_text:
+                print(f"OCR extracted text: {ocr_text}")
+                if not text:
+                    text = f"Extracted text from image: {ocr_text}. Describe what you see."
                 else:
-                    cls, _ = vis(img_tensor)
-                    if proj_v is not None:
-                        img_emb = proj_v(cls)  # (1,1,thinker_d_model)
-                    else:
-                        img_emb = None
-                if img_emb is not None:
-                    multimodal_embeddings.append(img_emb)
-                    print("Integrated video frame features")
+                    text = f"{text} (OCR extracted: {ocr_text})"
         
-        if has_image:
-            print(f"Processing image: {args.image}")
-            img = Image.open(args.image).convert("RGB")
-            img_tensor = tf(img).unsqueeze(0).to(device)
-            
-            # OCR processing if requested
-            if use_ocr and ocr_model is not None:
-                print("Extracting text from image using OCR...")
-                try:
-                    # Generate text using OCR model (autoregressive)
-                    ocr_model.eval()
-                    max_ocr_len = 128
-                    with torch.no_grad():
-                        # Start with BOS token
-                        if ocr_char_to_idx is not None:
-                            bos_id = ocr_char_to_idx.get('<BOS>', 1)
-                            eos_id = ocr_char_to_idx.get('<EOS>', 2)
-                        else:
-                            bos_id = 1
-                            eos_id = 2
-                        
-                        text_ids = torch.tensor([[bos_id]], dtype=torch.long, device=device)
-                        ocr_text = ""
-                        
-                        for _ in range(max_ocr_len):
-                            if device == "cuda":
-                                with autocast(device_type='cuda'):
-                                    logits = ocr_model(img_tensor, text_ids)  # (1, T, vocab_size)
-                            else:
-                                logits = ocr_model(img_tensor, text_ids)
-                            
-                            next_id = int(torch.argmax(logits[0, -1]))
-                            if next_id == eos_id or next_id == 0:  # EOS or PAD
-                                break
-                            
-                            if ocr_idx_to_char is not None:
-                                char = ocr_idx_to_char.get(next_id, '')
-                                if char and char not in ['<BOS>', '<EOS>', '<PAD>', '<UNK>']:
-                                    ocr_text += char
-                            else:
-                                # Fallback: use ASCII if no mapping
-                                if 32 <= next_id < 127:
-                                    ocr_text += chr(next_id)
-                            
-                            text_ids = torch.cat([text_ids, torch.tensor([[next_id]], dtype=torch.long, device=device)], dim=1)
-                        
-                        if ocr_text:
-                            print(f"OCR extracted text: {ocr_text}")
-                            # Use OCR text as part of the prompt or multimodal input
-                            if not has_text:
-                                args.text = f"Extracted text from image: {ocr_text}. Describe what you see."
-                            else:
-                                args.text = f"{args.text} (OCR extracted: {ocr_text})"
-                except Exception as e:
-                    print(f"Warning: OCR extraction failed: {e}")
-            
-            # Regular vision processing
-            if device == "cuda":
-                with autocast(device_type='cuda'):
-                    cls, _ = vis(img_tensor)
-            else:
-                cls, _ = vis(img_tensor)
-            
-            if proj_v is not None:
-                if device == "cuda":
-                    with autocast(device_type='cuda'):
-                        img_emb = proj_v(cls)  # (1,1,thinker_d_model)
-                else:
-                    img_emb = proj_v(cls)  # (1,1,thinker_d_model)
+        # Process image
+        if image:
+            img_emb = self.process_image(image)
+            if img_emb is not None:
                 multimodal_embeddings.append(img_emb)
-                print("Integrated image features")
         
-        if has_audio and mel_spec is not None:
-            print(f"Processing audio: {args.audio_in}")
-            wav, sr = load_audio(args.audio_in)
-            wav = wav.to(device)
-            if sr != 16000:
-                wav = torchaudio.functional.resample(wav, sr, 16000)
-            print(f"Audio loaded: {wav.shape}, sample rate: {sr}")
-            mel = mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
-            if device == "cuda":
-                with autocast(device_type='cuda'):
-                    audio_emb = aud(mel)  # (1, T', audio_dim)
-                    if proj_a is not None:
-                        audio_emb = proj_a(audio_emb)  # (1, T', thinker_d_model)
+        # Process video
+        if video:
+            vid_emb = self.process_video(video)
+            if vid_emb is not None:
+                multimodal_embeddings.append(vid_emb)
+        
+        # Process audio
+        if audio_in:
+            aud_emb = self.process_audio(audio_in)
+            if aud_emb is not None:
+                multimodal_embeddings.append(aud_emb)
+        
+        # Build prompt
+        if not text:
+            if image or video:
+                text = "Describe what you see concisely."
+            elif audio_in:
+                text = "What did you hear?"
             else:
-                audio_emb = aud(mel)  # (1, T', audio_dim)
-                if proj_a is not None:
-                    audio_emb = proj_a(audio_emb)  # (1, T', thinker_d_model)
-            
-            if proj_a is not None and audio_emb is not None:
-                # Limit audio length
-                max_audio_tokens = min(audio_emb.shape[1], ctx_len // 4)
-                audio_emb = audio_emb[:, :max_audio_tokens, :]
-                multimodal_embeddings.append(audio_emb)
-                print(f"Integrated audio features ({audio_emb.shape[1]} tokens)")
+                text = "Respond to the multimodal input."
         
-        # Build text prompt
-        if has_text:
-            prompt = args.text
-        elif args.prompt:
-            prompt = args.prompt
-        elif has_image or has_video:
-            prompt = "Describe what you see concisely."
-        elif has_audio:
-            prompt = "What did you hear?"
-        else:
-            prompt = "Respond to the multimodal input."
-        
-        # Combine multimodal embeddings if any
+        # Combine multimodal embeddings
         multimodal_emb = None
         if multimodal_embeddings:
-            multimodal_emb = torch.cat(multimodal_embeddings, dim=1)  # (1, T_mm, thinker_d_model)
-            print(f"Combined multimodal features: {multimodal_emb.shape[1]} tokens")
+            multimodal_emb = torch.cat(multimodal_embeddings, dim=1)
         
-        print(f"Prompt: {prompt}")
-        out = generate(think, tok, prompt, ctx=ctx_len, multimodal_emb=multimodal_emb)
-        print(f"\nμOmni (text): {out}\n")
+        # Generate text
+        ctx_len = self.config.get("thinker", {}).get("ctx_len", 512)
+        response = self.text_generator.generate(
+            text, max_new=64, ctx=ctx_len,
+            multimodal_emb=multimodal_emb
+        )
         
         # Generate audio output if requested
-        if args.audio_out and voc is not None and talker is not None:
+        if audio_out and self.audio_generator:
             print("Generating audio output...")
             try:
-                # Extract text tokens from response
-                text_ids = tok.encode(out)
-                # Generate audio with duration based on text length
-                audio = generate_audio(talker, rvq, voc, text_ids, device, max_frames=None)
+                text_ids = self.thinker_loader.tokenizer.encode(response)
+                audio = self.audio_generator.generate(text_ids)
                 if audio is not None:
-                    # Save audio
                     import soundfile as sf
-                    sf.write(args.audio_out, audio, 16000)
-                    print(f"Audio saved to: {args.audio_out}")
+                    sf.write(audio_out, audio, 16000)
+                    print(f"Audio saved to: {audio_out}")
             except Exception as e:
                 print(f"Warning: Could not generate audio: {e}")
 
+        return response
+
+
+# ============================================================================
+# Main Function
+# ============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(description="μOmni multimodal inference interface")
+    parser.add_argument("--ckpt_dir", required=True, help="Checkpoint directory")
+    parser.add_argument("--image", default=None, help="Path to image file")
+    parser.add_argument("--video", default=None, help="Path to video file")
+    parser.add_argument("--audio_in", default=None, help="Path to audio input file")
+    parser.add_argument("--audio_out", default=None, help="Path to save audio output file (TTS)")
+    parser.add_argument("--text", default=None, help="Text prompt (optional, for multimodal)")
+    parser.add_argument("--prompt", default=None, help="Override default prompt")
+    parser.add_argument("--ocr", action="store_true", help="Extract text from image using OCR")
+    args = parser.parse_args()
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    
+    # Determine which models to load
+    has_image = args.image is not None
+    has_video = args.video is not None
+    has_audio = args.audio_in is not None
+    use_ocr = args.ocr
+    has_audio_out = args.audio_out is not None
+    
+    # Initialize inference engine
+    engine = InferenceEngine(args.ckpt_dir, device)
+    
+    # Load required models
+    engine.load_models(
+        load_vision=has_image or has_video or use_ocr,
+        load_audio=has_audio,
+        load_talker=has_audio_out,
+        load_ocr=use_ocr and has_image,
+        load_vocoder=has_audio_out
+    )
+    
+    # Run inference
+    if has_image or has_video or has_audio or args.text:
+        # Single query mode
+        prompt = args.text or args.prompt
+        response = engine.infer(
+            text=prompt,
+            image=args.image,
+            video=args.video,
+            audio_in=args.audio_in,
+            use_ocr=use_ocr,
+            audio_out=args.audio_out
+        )
+        print(f"\nμOmni (text): {response}\n")
     else:
-        # Interactive text chat mode
+        # Interactive mode
         print("Entering interactive chat mode. Type 'exit' to quit.")
         while True:
             try:
                 q = input("You: ")
                 if q.lower() in ['exit', 'quit', 'q']:
                     break
-                out = generate(think, tok, q)
-                print("μOmni:", out)
-                # Generate audio output if requested
-                if args.audio_out and voc is not None and talker is not None:
-                    print("Generating audio output...")
-                    try:
-                        text_ids = tok.encode(out)
-                        # Generate audio with duration based on text length
-                        audio = generate_audio(talker, rvq, voc, text_ids, device, max_frames=None)
-                        if audio is not None:
-                            import soundfile as sf
-                            audio_path = args.audio_out.replace(".wav", f"_{len([f for f in os.listdir('.') if f.startswith('output_')])}.wav")
-                            sf.write(audio_path, audio, 16000)
-                            print(f"Audio saved to: {audio_path}")
-                    except Exception as e:
-                        print(f"Warning: Could not generate audio: {e}")
+                response = engine.infer(text=q, audio_out=args.audio_out)
+                print("μOmni:", response)
             except EOFError:
                 break
             except KeyboardInterrupt:
                 break
+
 
 if __name__ == "__main__":
     main()
