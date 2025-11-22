@@ -21,16 +21,20 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.makedirs(cfg["save_dir"], exist_ok=True)
+    save_dir = cfg.get("save_dir", "checkpoints/vision_tiny")
+    os.makedirs(save_dir, exist_ok=True)
+    train_manifest = cfg.get("train_manifest", "data/images/production_annotations.json")
+    image_root = cfg.get("image_root", "data/images")
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
-    vit = ViTTiny(cfg["img_size"], cfg["patch"], cfg["d_model"], cfg["n_layers"], cfg["n_heads"], cfg["d_ff"], cfg["dropout"], compile_model=use_compile).to(device)
+    d_model = cfg.get("d_model", 128)
+    vit = ViTTiny(cfg.get("img_size", 224), cfg.get("patch", 16), d_model, cfg.get("n_layers", 4), cfg.get("n_heads", 2), cfg.get("d_ff", 512), cfg.get("dropout", 0.1), compile_model=use_compile).to(device)
     
     # Use contrastive learning (CLIP-style) for proper vision-language alignment
     # Project image CLS token to embedding space for contrastive learning
-    embed_dim = cfg.get("embed_dim", cfg["d_model"])  # Embedding dimension for contrastive learning
-    img_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)
+    embed_dim = cfg.get("embed_dim", d_model)  # Embedding dimension for contrastive learning
+    img_proj = nn.Linear(d_model, embed_dim).to(device)
     
     # Configurable: Use Thinker model or simple tokenizer+embedding for text encoding
     use_thinker_for_text = cfg.get("use_thinker_for_text", True)
@@ -45,7 +49,8 @@ def main(cfg):
     if use_thinker_for_text:
         # Use Thinker model for text encoding (frozen) - better contextual embeddings
         print("Using Thinker model for text encoding (recommended)")
-        text_proj = nn.Linear(cfg.get("thinker_d_model", 256), embed_dim).to(device)
+        thinker_d_model = cfg.get("thinker_d_model", 256)
+        text_proj = nn.Linear(thinker_d_model, embed_dim).to(device)
         
         # Load Thinker model architecture
         think = ThinkerLM(
@@ -89,7 +94,7 @@ def main(cfg):
     else:
         # Use simple tokenizer + embedding layer (lighter, faster, but less contextual)
         print("Using tokenizer + embedding layer for text encoding (lighter option)")
-        text_proj = nn.Linear(cfg["d_model"], embed_dim).to(device)
+        text_proj = nn.Linear(d_model, embed_dim).to(device)
         # text_embed will be created after tokenizer is loaded
     
     # Load or train tokenizer
@@ -103,8 +108,8 @@ def main(cfg):
         # Train tokenizer from captions if not found
         print(f"Tokenizer not found at {tok_model_path}, training new tokenizer from captions...")
         os.makedirs(thinker_ckpt_dir, exist_ok=True)
-        temp_caption_file = os.path.join(cfg["save_dir"], ".temp_captions.txt")
-        with open(cfg["train_manifest"], 'r', encoding='utf-8') as f:
+        temp_caption_file = os.path.join(save_dir, ".temp_captions.txt")
+        with open(train_manifest, 'r', encoding='utf-8') as f:
             manifest_items = json.load(f)
         with open(temp_caption_file, 'w', encoding='utf-8') as f:
             for item in manifest_items:
@@ -124,13 +129,13 @@ def main(cfg):
     
     # Create token embedding layer if not using Thinker
     if not use_thinker_for_text:
-        text_embed = nn.Embedding(vocab_size, cfg["d_model"]).to(device)
+        text_embed = nn.Embedding(vocab_size, d_model).to(device)
     
     # Optimizer: include text_embed if using simple mode
     opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters())
     if text_embed is not None:
         opt_params += list(text_embed.parameters())
-    opt = torch.optim.AdamW(opt_params, lr=cfg["lr"], weight_decay=cfg["wd"])
+    opt = torch.optim.AdamW(opt_params, lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
     
     # Contrastive loss (InfoNCE)
     temperature = cfg.get("temperature", 0.07)  # Temperature for contrastive loss
@@ -185,9 +190,9 @@ def main(cfg):
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     
     train_ds = ImgCapDataset(
-        cfg["train_manifest"], 
-        cfg["image_root"], 
-        cfg["img_size"],
+        train_manifest, 
+        image_root, 
+        cfg.get("img_size", 224),
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
         seed=seed,
         skip_samples=0
@@ -196,9 +201,9 @@ def main(cfg):
     train_ds._val_mode = False  # Training mode
     
     val_ds = ImgCapDataset(
-        cfg["train_manifest"], 
-        cfg["image_root"], 
-        cfg["img_size"],
+        train_manifest, 
+        image_root, 
+        cfg.get("img_size", 224),
         shuffle_buffer_size=0,  # No shuffling for validation
         seed=seed,  # Same seed for consistent hash-based split
         skip_samples=0
@@ -234,7 +239,7 @@ def main(cfg):
     # Resume from checkpoint if available
     step = 0
     step, resume_from = load_checkpoint(
-        cfg["save_dir"], 
+        save_dir, 
         "vision_step_", 
         device, 
         logger,
@@ -439,7 +444,7 @@ def main(cfg):
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(cfg["save_dir"], f"vision_step_{step}.pt")
+                checkpoint_path = os.path.join(save_dir, f"vision_step_{step}.pt")
                 checkpoint_data = {
                     "vit": vit.state_dict(),
                     "img_proj": img_proj.state_dict(),
@@ -453,7 +458,7 @@ def main(cfg):
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
                 # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(cfg["save_dir"], "vision_step_", keep_last_n=1)
+                cleanup_old_checkpoints(save_dir, "vision_step_", keep_last_n=1)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -516,7 +521,7 @@ def main(cfg):
                     # Thinker remains in eval mode (frozen)
             
             if step >= cfg["max_steps"]:
-                final_path = os.path.join(cfg["save_dir"], "vision.pt")
+                final_path = os.path.join(save_dir, "vision.pt")
                 checkpoint_data = {
                     "vit": vit.state_dict(),
                     "img_proj": img_proj.state_dict(),

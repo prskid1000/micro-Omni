@@ -76,6 +76,7 @@ python sft_omni.py --config configs/omni_sft_tiny.json
 ✅ **Final integration** of all components  
 ✅ **Freeze encoders** (already trained)  
 ✅ **Mixed batches** teach cross-modal understanding  
+✅ **Attention masking** prevents attention to padding tokens  
 ✅ **5 epochs** sufficient for fine-tuning  
 ✅ **Output** is the complete μOmni system!
 

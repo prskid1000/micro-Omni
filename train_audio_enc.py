@@ -100,6 +100,9 @@ def main(cfg):
     # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
     collate_fn_with_max = partial(collate_mel_text_fn, max_mel_length=max_mel_length)
     
+    # Get data path from config
+    train_csv = cfg.get("train_csv", "data/audio/production_asr.csv")
+    
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     

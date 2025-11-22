@@ -80,7 +80,8 @@ def load_asr_models(audio_ckpt_dir, device="cuda"):
     else:
         config_path = "configs/audio_enc_tiny.json"
         if os.path.exists(config_path):
-            cfg = json.load(open(config_path))
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
         else:
             cfg = {
                 "d_model": 192,

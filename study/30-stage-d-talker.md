@@ -42,8 +42,13 @@ Loss: MSE(reconstructed, original)
 ### Part 2: Talker  
 
 **Task:** Predict next speech codes given previous codes  
-**Loss:** Cross-entropy (both base and residual heads)  
+**Loss:** Cross-entropy (both base and residual heads) with padding mask  
 **Target:** Perplexity <15, intelligible speech
+
+**Padding Handling:**
+- Loss calculation masks out padding frames using `mel_lengths`
+- Only valid mel frames contribute to loss
+- Prevents padding from diluting the loss signal
 
 ```
 Input: [[0,0], [42,87], [56,91]]

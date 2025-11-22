@@ -66,7 +66,8 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.makedirs(cfg["save_dir"], exist_ok=True)
+    save_dir = cfg.get("save_dir", "checkpoints/ocr_tiny")
+    os.makedirs(save_dir, exist_ok=True)
     
     # Load dataset
     csv_path = cfg.get("train_csv", "data/ocr/ocr_train.csv")
@@ -198,7 +199,7 @@ def main(cfg):
     # Resume from checkpoint
     step = 0
     step, resume_from = load_checkpoint(
-        cfg["save_dir"], 
+        save_dir, 
         "ocr_step_", 
         device, 
         logger,
@@ -415,7 +416,7 @@ def main(cfg):
             
             # Checkpointing
             if step % checkpoint_freq == 0:
-                checkpoint_path = os.path.join(cfg["save_dir"], f"ocr_step_{step}.pt")
+                checkpoint_path = os.path.join(save_dir, f"ocr_step_{step}.pt")
                 torch.save({
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
@@ -428,7 +429,7 @@ def main(cfg):
                 }, checkpoint_path)
                 
                 # Save final checkpoint
-                final_path = os.path.join(cfg["save_dir"], "ocr.pt")
+                final_path = os.path.join(save_dir, "ocr.pt")
                 torch.save({
                     "model": model.state_dict(),
                     "char_to_idx": train_ds.char_to_idx,
@@ -437,7 +438,7 @@ def main(cfg):
                 }, final_path)
                 
                 logger.info(f"Saved checkpoint: {checkpoint_path}")
-                cleanup_old_checkpoints(cfg["save_dir"], "ocr_step_", keep_last_n=1)
+                cleanup_old_checkpoints(save_dir, "ocr_step_", keep_last_n=1)
             
             if step >= max_steps:
                 logger.info(f"Reached max_steps ({max_steps}), stopping training")

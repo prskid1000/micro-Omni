@@ -28,7 +28,8 @@ def load_model(checkpoint_dir, device="cuda"):
         # Try loading from config file
         config_path = "configs/vision_tiny.json"
         if os.path.exists(config_path):
-            cfg = json.load(open(config_path))
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
         else:
             cfg = {
                 "img_size": 224,

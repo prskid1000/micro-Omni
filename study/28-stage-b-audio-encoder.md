@@ -163,6 +163,7 @@ How CTC works:
 3. Collapses repeated characters
 4. Computes all possible alignments
 5. Optimizes best alignment automatically
+6. **Padding handling:** CTC loss uses `input_lengths` to exclude padding frames from loss calculation, ensuring only valid audio frames contribute to training
 
 Example alignments that CTC considers:
 "hheeellllllooo" → "hello" ✓

@@ -118,6 +118,8 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 - `val_freq`: Every 500-1000 steps or 10% of steps per epoch
 - `checkpoint_freq`: Every 5000-10000 steps or 1 per epoch
 - Data paths: Automatically updated to production files if they exist
+- **Model dimensions:** Validated and fixed for compatibility (OCR vision_d_model, SFT thinker/audio/vision dimensions)
+- **Data paths:** Validated to ensure all training data files exist
 
 **Training step calculation methods:**
 - **Text training (`train_text.py`):** Uses **tokens** for step calculation

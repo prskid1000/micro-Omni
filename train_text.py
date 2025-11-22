@@ -19,12 +19,15 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.makedirs(cfg["save_dir"], exist_ok=True)
-    spm_model = os.path.join(cfg["save_dir"], "tokenizer.model")
+    save_dir = cfg.get("save_dir", "checkpoints/thinker_tiny")
+    os.makedirs(save_dir, exist_ok=True)
+    train_text = cfg.get("train_text", "data/text/production_corpus.txt")
+    vocab_size = cfg.get("vocab_size", 32000)
+    spm_model = os.path.join(save_dir, "tokenizer.model")
     if not os.path.exists(spm_model):
-        print(f"Creating tokenizer from {cfg['train_text']}...")
+        print(f"Creating tokenizer from {train_text}...")
         print(f"  Training tokenizer on entire corpus...")
-        BPETokenizer.train_new(cfg["train_text"], spm_model, vocab_size=cfg["vocab_size"])
+        BPETokenizer.train_new(train_text, spm_model, vocab_size=vocab_size)
         print(f"✓ Tokenizer created: {spm_model}")
     tok = BPETokenizer(spm_model)
     
@@ -34,14 +37,14 @@ def main(cfg):
     use_compile = cfg.get("use_compile", False)
     
     model = ThinkerLM(
-        cfg["vocab_size"], 
-        cfg["n_layers"], 
-        cfg["d_model"], 
-        cfg["n_heads"], 
-        cfg["d_ff"], 
-        cfg["dropout"], 
-        cfg["rope_theta"], 
-        cfg["ctx_len"],
+        vocab_size, 
+        cfg.get("n_layers", 4), 
+        cfg.get("d_model", 256), 
+        cfg.get("n_heads", 4), 
+        cfg.get("d_ff", 1024), 
+        cfg.get("dropout", 0.1), 
+        cfg.get("rope_theta", 10000), 
+        cfg.get("ctx_len", 512),
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
         use_moe=cfg.get("use_moe", False),
@@ -49,7 +52,7 @@ def main(cfg):
         num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
         compile_model=use_compile
     ).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["wd"])
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
     loss_fn = nn.CrossEntropyLoss(ignore_index=0)
     
     # Learning rate scheduler with warmup
@@ -85,9 +88,9 @@ def main(cfg):
     skip_samples = 0  # Will be set after checkpoint loading if resuming
     
     train_ds = TextDataset(
-        cfg["train_text"], 
+        train_text, 
         tok, 
-        cfg["ctx_len"],
+        cfg.get("ctx_len", 512),
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
         seed=seed,
         skip_samples=skip_samples  # Will be updated after checkpoint load
@@ -96,9 +99,9 @@ def main(cfg):
     train_ds._val_mode = False  # Training mode
     
     val_ds = TextDataset(
-        cfg["train_text"], 
+        train_text, 
         tok, 
-        cfg["ctx_len"],
+        cfg.get("ctx_len", 512),
         shuffle_buffer_size=0,  # No shuffling for validation
         seed=seed,  # Same seed for consistent hash-based split
         skip_samples=0  # Don't skip validation samples
@@ -130,7 +133,7 @@ def main(cfg):
     # Resume from checkpoint if available
     step = 0
     step, resume_from = load_checkpoint(
-        cfg["save_dir"], 
+        save_dir, 
         "thinker_step_", 
         device, 
         logger,
@@ -252,7 +255,7 @@ def main(cfg):
                     logger.error("Reloading from last checkpoint...")
                     # Reload from last checkpoint
                     reloaded_step = reload_from_last_checkpoint(
-                        cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
+                        save_dir, "thinker_step_", device, logger, model, opt, scheduler, scaler
                     )
                     if reloaded_step > 0:
                         step = reloaded_step
@@ -338,7 +341,7 @@ def main(cfg):
                     logger.error("  - Disabling mixed precision training")
                     logger.error("  - Checking for gradient explosion")
                     # Try to recover by loading from last checkpoint if available
-                    checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("thinker_step_") and f.endswith(".pt")]
+                    checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith("thinker_step_") and f.endswith(".pt")]
                     if checkpoint_files:
                         step_numbers = []
                         for f in checkpoint_files:
@@ -349,7 +352,7 @@ def main(cfg):
                                 continue
                         if step_numbers:
                             step_numbers.sort(key=lambda x: x[0], reverse=True)
-                            last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                            last_checkpoint = os.path.join(save_dir, step_numbers[0][1])
                             logger.error(f"Attempting to recover from checkpoint: {last_checkpoint}")
                             checkpoint = torch.load(last_checkpoint, map_location=device)
                             if isinstance(checkpoint, dict) and "model" in checkpoint:
@@ -390,7 +393,7 @@ def main(cfg):
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(cfg["save_dir"], f"thinker_step_{step}.pt")
+                checkpoint_path = os.path.join(save_dir, f"thinker_step_{step}.pt")
                 checkpoint_data = {
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
@@ -402,7 +405,7 @@ def main(cfg):
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
                 # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(cfg["save_dir"], "thinker_step_", keep_last_n=1)
+                cleanup_old_checkpoints(save_dir, "thinker_step_", keep_last_n=1)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -447,7 +450,7 @@ def main(cfg):
                                 logger.error("Reloading from last checkpoint...")
                                 # Reload from last checkpoint
                                 reloaded_step = reload_from_last_checkpoint(
-                                    cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
+                                    save_dir, "thinker_step_", device, logger, model, opt, scheduler, scaler
                                 )
                                 if reloaded_step > 0:
                                     step = reloaded_step
@@ -469,7 +472,7 @@ def main(cfg):
                 model.train()
             
             if step >= max_steps:
-                final_path = os.path.join(cfg["save_dir"], "thinker.pt")
+                final_path = os.path.join(save_dir, "thinker.pt")
                 checkpoint_data = {
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
@@ -524,7 +527,7 @@ def main(cfg):
                             logger.error("Reloading from last checkpoint...")
                             # Reload from last checkpoint
                             reloaded_step = reload_from_last_checkpoint(
-                                cfg["save_dir"], "thinker_step_", device, logger, model, opt, scheduler, scaler
+                                save_dir, "thinker_step_", device, logger, model, opt, scheduler, scaler
                             )
                             if reloaded_step > 0:
                                 step = reloaded_step

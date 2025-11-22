@@ -119,7 +119,8 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.makedirs(cfg["save_dir"], exist_ok=True)
+    save_dir = cfg.get("save_dir", "checkpoints/vocoder_tiny")
+    os.makedirs(save_dir, exist_ok=True)
     
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("n_mels", 128)
@@ -257,7 +258,7 @@ def main(cfg):
     # Resume from checkpoint
     step = 0
     step, resume_from = load_checkpoint(
-        cfg["save_dir"], 
+        save_dir, 
         "vocoder_step_", 
         device, 
         logger,
@@ -746,7 +747,7 @@ def main(cfg):
             
             # Checkpointing
             if step % checkpoint_freq == 0:
-                checkpoint_path = os.path.join(cfg["save_dir"], f"vocoder_step_{step}.pt")
+                checkpoint_path = os.path.join(save_dir, f"vocoder_step_{step}.pt")
                 torch.save({
                     "generator": generator.state_dict(),
                     "mpd": mpd.state_dict(),
@@ -760,7 +761,7 @@ def main(cfg):
                 }, checkpoint_path)
                 
                 # Save final checkpoint for inference
-                final_path = os.path.join(cfg["save_dir"], "hifigan.pt")
+                final_path = os.path.join(save_dir, "hifigan.pt")
                 torch.save({
                     "generator": generator.state_dict(),
                     "config": cfg
@@ -770,7 +771,7 @@ def main(cfg):
                 logger.info(f"Saved final checkpoint: {final_path}")
                 
                 # Cleanup old checkpoints
-                cleanup_old_checkpoints(cfg["save_dir"], "vocoder_step_", keep_last_n=1)
+                cleanup_old_checkpoints(save_dir, "vocoder_step_", keep_last_n=1)
             
             if step >= max_steps:
                 logger.info(f"Reached max_steps ({max_steps}), stopping training")

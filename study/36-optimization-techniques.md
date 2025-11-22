@@ -37,6 +37,12 @@ with torch.cuda.amp.autocast():
 }
 ```
 
+**Implementation Details:**
+- Loss is scaled by `1 / accumulation_steps` before backward pass
+- Gradients accumulate over `accumulation_steps` batches
+- Optimizer step occurs only every `accumulation_steps` batches
+- **Step counter increments only when optimizer step occurs** - ensures learning rate scheduler, validation, and checkpointing happen at correct intervals
+
 ### 3. Gradient Checkpointing
 
 **What:** Trade compute for memory  
