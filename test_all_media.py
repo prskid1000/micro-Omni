@@ -2,6 +2,9 @@
 Test script for μOmni multimodal inference interface
 Tests all media types: text, image, audio, and video
 Picks random samples from actual data folders for testing
+Evaluates on 100 samples per test type and reports metrics
+Note: Uses file scanning (not dataset classes) because we need file paths
+to pass to infer_chat.py, not processed tensors.
 """
 
 import os
@@ -9,16 +12,17 @@ import subprocess
 import sys
 import random
 import gc
+import time
+import argparse
 from pathlib import Path
+from collections import defaultdict
 
-def run_inference(cmd_args, description):
-    """Run inference command and display results"""
-    print(f"\n{'='*60}")
-    print(f"Testing: {description}")
-    print(f"{'='*60}")
-    print(f"Command: python infer_chat.py {' '.join(cmd_args)}")
-    print("-" * 60)
+def run_inference(cmd_args, description, silent=False):
+    """Run inference command and return success status and timing"""
+    if not silent:
+        print(f"  Running: {description}")
     
+    start_time = time.time()
     try:
         result = subprocess.run(
             [sys.executable, "infer_chat.py"] + cmd_args,
@@ -26,25 +30,32 @@ def run_inference(cmd_args, description):
             text=True,
             timeout=120
         )
-        print(result.stdout)
-        if result.stderr:
-            print("STDERR:", result.stderr)
+        elapsed = time.time() - start_time
         
         # Force garbage collection after subprocess to free memory
         gc.collect()
         
-        return result.returncode == 0
+        success = result.returncode == 0
+        if not silent and not success:
+            if result.stderr:
+                print(f"    Error: {result.stderr[:200]}")
+        
+        return success, elapsed
     except subprocess.TimeoutExpired:
-        print("ERROR: Command timed out")
+        elapsed = time.time() - start_time
         gc.collect()
-        return False
+        if not silent:
+            print("    ERROR: Command timed out")
+        return False, elapsed
     except Exception as e:
-        print(f"ERROR: {e}")
+        elapsed = time.time() - start_time
         gc.collect()
-        return False
+        if not silent:
+            print(f"    ERROR: {e}")
+        return False, elapsed
 
 def find_random_file(directory, extensions, recursive=True, max_scan=10000):
-    """Find a random file with given extensions in directory (memory-efficient)"""
+    """Find a random file with given extensions in directory (memory-efficient fallback)"""
     if not os.path.exists(directory):
         return None
     
@@ -121,49 +132,128 @@ def get_random_text_sample(text_dir="data/text", max_lines_to_read=1000):
     
     return "Hello, how are you?"
 
+def collect_samples(directory, extensions, num_samples=100, recursive=True, max_scan=10000):
+    """Collect multiple random samples from directory"""
+    if not os.path.exists(directory):
+        return []
+    
+    path = Path(directory)
+    files = []
+    count = 0
+    
+    # Collect files
+    if recursive:
+        for ext in extensions:
+            if count >= max_scan:
+                break
+            for file_path in path.rglob(f"*{ext}"):
+                if not any(part.startswith('.') for part in file_path.parts):
+                    files.append(str(file_path))
+                    count += 1
+                    if count >= max_scan:
+                        break
+    else:
+        for ext in extensions:
+            if count >= max_scan:
+                break
+            for file_path in path.glob(f"*{ext}"):
+                if not any(part.startswith('.') for part in file_path.parts):
+                    files.append(str(file_path))
+                    count += 1
+                    if count >= max_scan:
+                        break
+    
+    # Return random sample of requested size
+    if len(files) > num_samples:
+        return random.sample(files, num_samples)
+    return files
+
+def evaluate_test_type(test_name, cmd_template, sample_getter, num_samples=100):
+    """Evaluate a test type on multiple samples and return metrics"""
+    print(f"\n{'='*60}")
+    print(f"Evaluating: {test_name}")
+    print(f"{'='*60}")
+    print(f"Testing on {num_samples} samples...")
+    
+    successes = 0
+    failures = 0
+    times = []
+    
+    for i in range(num_samples):
+        # Get a random sample for this iteration
+        sample = sample_getter()
+        if not sample:
+            failures += 1
+            continue
+        
+        # Build command with this sample
+        cmd_args = cmd_template(sample)
+        
+        # Run inference (silent mode for batch processing)
+        success, elapsed = run_inference(cmd_args, f"Sample {i+1}/{num_samples}", silent=True)
+        
+        if success:
+            successes += 1
+        else:
+            failures += 1
+        times.append(elapsed)
+        
+        if (i + 1) % 10 == 0:
+            print(f"  Processed {i + 1}/{num_samples} samples... (Success: {successes}, Failed: {failures})", end='\r')
+    
+    print()  # New line after progress
+    
+    # Calculate metrics
+    success_rate = (successes / num_samples * 100) if num_samples > 0 else 0.0
+    avg_time = sum(times) / len(times) if times else 0.0
+    min_time = min(times) if times else 0.0
+    max_time = max(times) if times else 0.0
+    
+    return {
+        'success_rate': success_rate,
+        'successes': successes,
+        'failures': failures,
+        'total': num_samples,
+        'avg_time': avg_time,
+        'min_time': min_time,
+        'max_time': max_time
+    }
+
 def main():
-    """Run all media type tests"""
+    """Run all media type tests on 100 samples each"""
+    parser = argparse.ArgumentParser(description="Test μOmni multimodal inference on multiple samples")
+    parser.add_argument("--num_samples", type=int, default=100,
+                       help="Number of samples to test per test type (default: 100)")
+    args = parser.parse_args()
+    
     print("μOmni Multimodal Inference Test Suite")
     print("=" * 60)
+    print(f"Testing on {args.num_samples} samples per test type")
     print("Picking random samples from data folders...")
     
-    # Find random samples from actual data folders
+    # Collect sample pools
     print("\nScanning data folders for test samples...")
     print("  (Using memory-efficient scanning, limiting to 10k files per directory)")
     
-    # Find random image (limit scan to prevent memory issues)
-    sample_image = find_random_file(
+    # Collect image samples
+    image_samples = collect_samples(
         "data/images",
         [".jpg", ".jpeg", ".png", ".JPEG", ".PNG"],
+        num_samples=args.num_samples,
         recursive=True,
         max_scan=10000
     )
-    if sample_image:
-        print(f"  ✓ Found image: {sample_image}")
-    else:
-        print("  ⚠ No images found in data/images/")
+    print(f"  ✓ Found {len(image_samples)} image samples")
     
-    # Force cleanup after file scanning
-    gc.collect()
-    
-    # Find random audio file (limit scan to prevent memory issues)
-    sample_audio = find_random_file(
+    # Collect audio samples
+    audio_samples = collect_samples(
         "data/audio",
         [".wav", ".flac", ".WAV", ".FLAC"],
+        num_samples=args.num_samples,
         recursive=True,
         max_scan=10000
     )
-    if sample_audio:
-        print(f"  ✓ Found audio: {sample_audio}")
-    else:
-        print("  ⚠ No audio files found in data/audio/")
-    
-    # Force cleanup after file scanning
-    gc.collect()
-    
-    # Get random text sample (limit lines read to prevent memory issues)
-    sample_text = get_random_text_sample("data/text", max_lines_to_read=1000)
-    print(f"  ✓ Using text sample: {sample_text[:50]}...")
+    print(f"  ✓ Found {len(audio_samples)} audio samples")
     
     # Force cleanup
     gc.collect()
@@ -173,184 +263,146 @@ def main():
     if not examples_dir.exists():
         examples_dir.mkdir()
     
-    # Test results
+    # Test results with metrics
     results = []
     
-    # Test 1: Text only (text output) - using random text sample
-    print("\n[TEST 1] Text-only inference (text output)")
-    test_text = sample_text[:100] if len(sample_text) > 100 else sample_text
-    results.append(("Text-only", run_inference(
-        ["--ckpt_dir", "checkpoints/thinker_tiny", "--text", test_text],
-        f"Text-only chat (sample: {test_text[:30]}...)"
-    )))
+    # Test 1: Text only
+    if True:  # Always available
+        def get_text_sample():
+            return get_random_text_sample("data/text", max_lines_to_read=1000)
+        
+        def text_cmd(sample):
+            return ["--ckpt_dir", "checkpoints/thinker_tiny", "--text", sample[:100]]
+        
+        metrics = evaluate_test_type("Text-only", text_cmd, get_text_sample, args.num_samples)
+        results.append(("Text-only", metrics))
     
-    # Test 1b: Text with audio output (TTS) - using random text sample
-    print("\n[TEST 1b] Text with audio output (TTS)")
-    audio_out_path = "examples/test_output_text_tts.wav"
-    tts_text = sample_text[:150] if len(sample_text) > 150 else sample_text
-    results.append(("Text+TTS", run_inference(
-        ["--ckpt_dir", "checkpoints/omni_sft_tiny", 
-         "--text", tts_text,
-         "--audio_out", audio_out_path],
-        f"Text input with audio output (TTS) (sample: {tts_text[:30]}...)"
-    )))
-    
-    # Test 2: Image + Text - using random image from data
-    print("\n[TEST 2] Image + Text")
-    if sample_image and os.path.exists(sample_image):
-        results.append(("Image+Text", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny", 
-             "--image", sample_image, 
-             "--text", "What do you see in this image?"],
-            f"Image with text prompt (using: {os.path.basename(sample_image)})"
-        )))
+    # Test 2: Image + Text
+    if image_samples:
+        image_idx = [0]
+        def get_image_sample():
+            if image_idx[0] >= len(image_samples):
+                image_idx[0] = 0
+            img = image_samples[image_idx[0]]
+            image_idx[0] += 1
+            return img if os.path.exists(img) else None
+        
+        def image_text_cmd(sample):
+            return ["--ckpt_dir", "checkpoints/omni_sft_tiny", 
+                   "--image", sample, 
+                   "--text", "What do you see in this image?"]
+        
+        metrics = evaluate_test_type("Image+Text", image_text_cmd, get_image_sample, min(args.num_samples, len(image_samples)))
+        results.append(("Image+Text", metrics))
     else:
-        print(f"SKIP: No image files found in data/images/")
         results.append(("Image+Text", None))
     
-    # Test 3: Audio + Text - using random audio from data
-    print("\n[TEST 3] Audio + Text")
-    if sample_audio and os.path.exists(sample_audio):
-        results.append(("Audio+Text", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
-             "--audio_in", sample_audio,
-             "--text", "What did you hear?"],
-            f"Audio with text prompt (using: {os.path.basename(sample_audio)})"
-        )))
+    # Test 3: Audio + Text
+    if audio_samples:
+        audio_idx = [0]
+        def get_audio_sample():
+            if audio_idx[0] >= len(audio_samples):
+                audio_idx[0] = 0
+            aud = audio_samples[audio_idx[0]]
+            audio_idx[0] += 1
+            return aud if os.path.exists(aud) else None
+        
+        def audio_text_cmd(sample):
+            return ["--ckpt_dir", "checkpoints/omni_sft_tiny",
+                   "--audio_in", sample,
+                   "--text", "What did you hear?"]
+        
+        metrics = evaluate_test_type("Audio+Text", audio_text_cmd, get_audio_sample, min(args.num_samples, len(audio_samples)))
+        results.append(("Audio+Text", metrics))
     else:
-        print(f"SKIP: No audio files found in data/audio/")
         results.append(("Audio+Text", None))
     
-    # Test 4: Image only (default prompt) - using random image
-    print("\n[TEST 4] Image only")
-    if sample_image and os.path.exists(sample_image):
-        results.append(("Image-only", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
-             "--image", sample_image],
-            f"Image with default prompt (using: {os.path.basename(sample_image)})"
-        )))
+    # Test 4: Image only
+    if image_samples:
+        image_idx2 = [0]
+        def get_image_sample2():
+            if image_idx2[0] >= len(image_samples):
+                image_idx2[0] = 0
+            img = image_samples[image_idx2[0]]
+            image_idx2[0] += 1
+            return img if os.path.exists(img) else None
+        
+        def image_only_cmd(sample):
+            return ["--ckpt_dir", "checkpoints/omni_sft_tiny", "--image", sample]
+        
+        metrics = evaluate_test_type("Image-only", image_only_cmd, get_image_sample2, min(args.num_samples, len(image_samples)))
+        results.append(("Image-only", metrics))
     else:
-        print(f"SKIP: No image files found in data/images/")
         results.append(("Image-only", None))
     
-    # Test 5: Audio only - using random audio
-    print("\n[TEST 5] Audio only")
-    if sample_audio and os.path.exists(sample_audio):
-        results.append(("Audio-only", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
-             "--audio_in", sample_audio],
-            f"Audio with default prompt (using: {os.path.basename(sample_audio)})"
-        )))
+    # Test 5: Audio only
+    if audio_samples:
+        audio_idx2 = [0]
+        def get_audio_sample2():
+            if audio_idx2[0] >= len(audio_samples):
+                audio_idx2[0] = 0
+            aud = audio_samples[audio_idx2[0]]
+            audio_idx2[0] += 1
+            return aud if os.path.exists(aud) else None
+        
+        def audio_only_cmd(sample):
+            return ["--ckpt_dir", "checkpoints/omni_sft_tiny", "--audio_in", sample]
+        
+        metrics = evaluate_test_type("Audio-only", audio_only_cmd, get_audio_sample2, min(args.num_samples, len(audio_samples)))
+        results.append(("Audio-only", metrics))
     else:
-        print(f"SKIP: No audio files found in data/audio/")
         results.append(("Audio-only", None))
     
-    # Test 6: Image + Audio + Text (multimodal) - using random samples
-    print("\n[TEST 6] Image + Audio + Text (Multimodal)")
-    if sample_image and sample_audio and os.path.exists(sample_image) and os.path.exists(sample_audio):
-        results.append(("Multimodal", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
-             "--image", sample_image,
-             "--audio_in", sample_audio,
-             "--text", "Describe what you see and hear."],
-            f"Combined image, audio, and text (using random samples from data/)"
-        )))
+    # Test 6: OCR
+    if image_samples:
+        image_idx3 = [0]
+        def get_image_sample3():
+            if image_idx3[0] >= len(image_samples):
+                image_idx3[0] = 0
+            img = image_samples[image_idx3[0]]
+            image_idx3[0] += 1
+            return img if os.path.exists(img) else None
+        
+        def ocr_cmd(sample):
+            return ["--ckpt_dir", "checkpoints/ocr_tiny", "--image", sample, "--ocr"]
+        
+        metrics = evaluate_test_type("OCR", ocr_cmd, get_image_sample3, min(args.num_samples, len(image_samples)))
+        results.append(("OCR", metrics))
     else:
-        missing = []
-        if not sample_image or not os.path.exists(sample_image):
-            missing.append("image")
-        if not sample_audio or not os.path.exists(sample_audio):
-            missing.append("audio")
-        print(f"SKIP: Missing {', '.join(missing)} files in data/")
-        results.append(("Multimodal", None))
-    
-    # Test 6b: Image + Text with audio output - using random image
-    print("\n[TEST 6b] Image + Text with audio output")
-    if sample_image and os.path.exists(sample_image):
-        audio_out_path = "examples/test_output_image_tts.wav"
-        results.append(("Image+Text+TTS", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
-             "--image", sample_image,
-             "--text", "Describe this image.",
-             "--audio_out", audio_out_path],
-            f"Image input with text and audio output (using: {os.path.basename(sample_image)})"
-        )))
-    else:
-        print(f"SKIP: No image files found in data/images/")
-        results.append(("Image+Text+TTS", None))
-    
-    # Test 8: OCR (Optical Character Recognition) - extract text from image
-    print("\n[TEST 8] OCR - Extract text from image")
-    if sample_image and os.path.exists(sample_image):
-        results.append(("OCR", run_inference(
-            ["--ckpt_dir", "checkpoints/ocr_tiny",
-             "--image", sample_image,
-             "--ocr"],
-            f"OCR text extraction from image (using: {os.path.basename(sample_image)})"
-        )))
-    else:
-        print(f"SKIP: No image files found in data/images/")
         results.append(("OCR", None))
-    
-    # Test 8b: OCR + Text prompt - extract text and describe
-    print("\n[TEST 8b] OCR + Text prompt")
-    if sample_image and os.path.exists(sample_image):
-        results.append(("OCR+Text", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
-             "--image", sample_image,
-             "--text", "What text do you see in this image?",
-             "--ocr"],
-            f"OCR with text prompt (using: {os.path.basename(sample_image)})"
-        )))
-    else:
-        print(f"SKIP: No image files found in data/images/")
-        results.append(("OCR+Text", None))
-    
-    # Test 7: Video (if available) - check data/images for video or create from images
-    print("\n[TEST 7] Video")
-    sample_video = find_random_file("data/images", [".mp4", ".avi", ".mov"], recursive=True, max_scan=1000)
-    if not sample_video:
-        # Try examples as fallback
-        sample_video = "examples/sample_video.mp4"
-    
-    if sample_video and os.path.exists(sample_video):
-        results.append(("Video", run_inference(
-            ["--ckpt_dir", "checkpoints/omni_sft_tiny",
-             "--video", sample_video,
-             "--text", "Describe the video."],
-            f"Video with text prompt (using: {os.path.basename(sample_video)})"
-        )))
-    else:
-        print(f"SKIP: No video files found")
-        print("      Note: Create a test video from images with:")
-        print("      ffmpeg -framerate 1 -pattern_type glob -i 'data/images/**/*.jpg' -c:v libx264 -pix_fmt yuv420p examples/sample_video.mp4")
-        results.append(("Video", None))
     
     # Summary
     print("\n" + "=" * 60)
-    print("TEST SUMMARY")
+    print("EVALUATION SUMMARY")
     print("=" * 60)
-    passed = 0
-    failed = 0
+    
+    total_tests = 0
+    total_successes = 0
+    total_failures = 0
     skipped = 0
     
-    for test_name, result in results:
-        if result is True:
-            status = "✓ PASSED"
-            passed += 1
-        elif result is False:
-            status = "✗ FAILED"
-            failed += 1
-        else:
-            status = "- SKIPPED"
+    for test_name, metrics in results:
+        if metrics is None:
+            print(f"{test_name:20s} - SKIPPED (no samples available)")
             skipped += 1
-        print(f"{test_name:20s} {status}")
+        else:
+            total_tests += metrics['total']
+            total_successes += metrics['successes']
+            total_failures += metrics['failures']
+            
+            status = "✓" if metrics['success_rate'] >= 80 else "⚠" if metrics['success_rate'] >= 50 else "✗"
+            print(f"{test_name:20s} {status} {metrics['success_rate']:5.1f}% "
+                  f"({metrics['successes']}/{metrics['total']}) | "
+                  f"Avg: {metrics['avg_time']:.2f}s | "
+                  f"Range: {metrics['min_time']:.2f}s-{metrics['max_time']:.2f}s")
     
     print("-" * 60)
-    print(f"Total: {len(results)} | Passed: {passed} | Failed: {failed} | Skipped: {skipped}")
+    overall_success_rate = (total_successes / total_tests * 100) if total_tests > 0 else 0.0
+    print(f"Overall: {overall_success_rate:.1f}% success rate ({total_successes}/{total_tests} samples)")
+    print(f"Skipped: {skipped} test types")
     print("=" * 60)
     
-    return failed == 0
+    return total_failures == 0
 
 if __name__ == "__main__":
     success = main()

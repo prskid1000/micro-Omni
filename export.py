@@ -20,20 +20,8 @@ import shutil
 import torch
 from safetensors.torch import save_file
 from pathlib import Path
-from omni.utils import find_checkpoint
+from omni.utils import find_checkpoint, strip_orig_mod
 from typing import Dict
-
-
-def strip_orig_mod_keys(state_dict: Dict) -> Dict:
-    """Strip _orig_mod. prefix from state_dict keys (from torch.compile)"""
-    if state_dict is None:
-        return None
-    new_state_dict = {}
-    for key, value in state_dict.items():
-        # Remove ._orig_mod. from keys (torch.compile adds this)
-        new_key = key.replace("._orig_mod.", ".").replace("._orig_mod", "").replace("_orig_mod.", "")
-        new_state_dict[new_key] = value
-    return new_state_dict
 
 
 def load_checkpoint(path, device="cpu"):
@@ -80,7 +68,7 @@ def merge_model_components(
     if omni_ckpt_dir:
         omni_path, omni_ckpt = find_checkpoint(omni_ckpt_dir, "omni.pt", "omni_step_", device="cpu")
         if omni_ckpt and isinstance(omni_ckpt, dict) and "thinker" in omni_ckpt:
-            thinker_state = strip_orig_mod_keys(omni_ckpt["thinker"])
+            thinker_state = strip_orig_mod(omni_ckpt["thinker"])
             for key, value in thinker_state.items():
                 merged_state[f"thinker.{key}"] = value
             thinker_loaded = True
@@ -91,13 +79,13 @@ def merge_model_components(
         if thinker_ckpt:
             # Handle both dict format and direct state_dict
             if isinstance(thinker_ckpt, dict) and "model" in thinker_ckpt:
-                thinker_state = strip_orig_mod_keys(thinker_ckpt["model"])
+                thinker_state = strip_orig_mod(thinker_ckpt["model"])
             elif isinstance(thinker_ckpt, dict) and "thinker" in thinker_ckpt:
-                thinker_state = strip_orig_mod_keys(thinker_ckpt["thinker"])
+                thinker_state = strip_orig_mod(thinker_ckpt["thinker"])
             elif isinstance(thinker_ckpt, dict):
-                thinker_state = strip_orig_mod_keys(thinker_ckpt)
+                thinker_state = strip_orig_mod(thinker_ckpt)
             else:
-                thinker_state = strip_orig_mod_keys(thinker_ckpt)
+                thinker_state = strip_orig_mod(thinker_ckpt)
             
             for key, value in thinker_state.items():
                 merged_state[f"thinker.{key}"] = value
@@ -112,11 +100,11 @@ def merge_model_components(
         audio_path, audio_ckpt = find_checkpoint(audio_ckpt_dir, "audio_enc.pt", "audio_enc_step_", device="cpu")
         if audio_ckpt:
             if isinstance(audio_ckpt, dict) and "enc" in audio_ckpt:
-                audio_state = strip_orig_mod_keys(audio_ckpt["enc"])
+                audio_state = strip_orig_mod(audio_ckpt["enc"])
             elif isinstance(audio_ckpt, dict) and "model" in audio_ckpt:
-                audio_state = strip_orig_mod_keys(audio_ckpt["model"])
+                audio_state = strip_orig_mod(audio_ckpt["model"])
             else:
-                audio_state = strip_orig_mod_keys(audio_ckpt)
+                audio_state = strip_orig_mod(audio_ckpt)
             
             for key, value in audio_state.items():
                 merged_state[f"audio_encoder.{key}"] = value
@@ -131,11 +119,11 @@ def merge_model_components(
         vision_path, vision_ckpt = find_checkpoint(vision_ckpt_dir, "vision.pt", "vision_step_", device="cpu")
         if vision_ckpt:
             if isinstance(vision_ckpt, dict) and "vit" in vision_ckpt:
-                vision_state = strip_orig_mod_keys(vision_ckpt["vit"])
+                vision_state = strip_orig_mod(vision_ckpt["vit"])
             elif isinstance(vision_ckpt, dict) and "model" in vision_ckpt:
-                vision_state = strip_orig_mod_keys(vision_ckpt["model"])
+                vision_state = strip_orig_mod(vision_ckpt["model"])
             else:
-                vision_state = strip_orig_mod_keys(vision_ckpt)
+                vision_state = strip_orig_mod(vision_ckpt)
             
             for key, value in vision_state.items():
                 merged_state[f"vision_encoder.{key}"] = value
@@ -151,14 +139,14 @@ def merge_model_components(
         if talker_ckpt:
             # Load RVQ
             if isinstance(talker_ckpt, dict) and "rvq" in talker_ckpt:
-                rvq_state = strip_orig_mod_keys(talker_ckpt["rvq"])
+                rvq_state = strip_orig_mod(talker_ckpt["rvq"])
                 for key, value in rvq_state.items():
                     merged_state[f"rvq.{key}"] = value
                 print(f"  ✓ Loaded RVQ from {talker_path}")
             
             # Load Talker
             if isinstance(talker_ckpt, dict) and "talker" in talker_ckpt:
-                talker_state = strip_orig_mod_keys(talker_ckpt["talker"])
+                talker_state = strip_orig_mod(talker_ckpt["talker"])
                 for key, value in talker_state.items():
                     merged_state[f"talker.{key}"] = value
                 print(f"  ✓ Loaded Talker from {talker_path}")
@@ -172,13 +160,13 @@ def merge_model_components(
         omni_path, omni_ckpt = find_checkpoint(omni_ckpt_dir, "omni.pt", "omni_step_", device="cpu")
         if omni_ckpt and isinstance(omni_ckpt, dict):
             if "proj_a" in omni_ckpt:
-                proj_a_state = strip_orig_mod_keys(omni_ckpt["proj_a"])
+                proj_a_state = strip_orig_mod(omni_ckpt["proj_a"])
                 for key, value in proj_a_state.items():
                     merged_state[f"proj_a.{key}"] = value
                 print(f"  ✓ Loaded Audio Projector from {omni_path}")
             
             if "proj_v" in omni_ckpt:
-                proj_v_state = strip_orig_mod_keys(omni_ckpt["proj_v"])
+                proj_v_state = strip_orig_mod(omni_ckpt["proj_v"])
                 for key, value in proj_v_state.items():
                     merged_state[f"proj_v.{key}"] = value
                 print(f"  ✓ Loaded Vision Projector from {omni_path}")
@@ -190,11 +178,11 @@ def merge_model_components(
         ocr_path, ocr_ckpt = find_checkpoint(ocr_ckpt_dir, "ocr.pt", "ocr_step_", device="cpu")
         if ocr_ckpt:
             if isinstance(ocr_ckpt, dict) and "model" in ocr_ckpt:
-                ocr_state = strip_orig_mod_keys(ocr_ckpt["model"])
+                ocr_state = strip_orig_mod(ocr_ckpt["model"])
             elif isinstance(ocr_ckpt, dict):
-                ocr_state = strip_orig_mod_keys(ocr_ckpt)
+                ocr_state = strip_orig_mod(ocr_ckpt)
             else:
-                ocr_state = strip_orig_mod_keys(ocr_ckpt)
+                ocr_state = strip_orig_mod(ocr_ckpt)
             
             for key, value in ocr_state.items():
                 merged_state[f"ocr.{key}"] = value

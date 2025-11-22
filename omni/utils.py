@@ -159,6 +159,112 @@ def find_checkpoint(checkpoint_dir, standard_name, step_prefix, device="cpu"):
     
     return None, None
 
+def strip_orig_mod(state_dict):
+    """Strip _orig_mod prefix from checkpoint keys (from torch.compile)"""
+    if state_dict is None:
+        return None
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        # Replace ._orig_mod. with . and _orig_mod. with empty string
+        new_key = key.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+        new_state_dict[new_key] = value
+    return new_state_dict
+
+def convert_attention_weights(state_dict):
+    """
+    Convert between separate q/k/v weights and combined qkv weights.
+    
+    Handles the case where checkpoint has separate q.weight, k.weight, v.weight
+    and converts them to combined qkv.weight format (used by standard MHA).
+    
+    For nn.Linear(d, 3*d), weight shape is (3*d, d).
+    If we have separate q/k/v Linear(d, d), each weight is (d, d).
+    Concatenating along dim=0 gives (3*d, d) which is correct.
+    
+    Note: This function assumes _orig_mod prefixes have already been stripped.
+    
+    Args:
+        state_dict: State dictionary to convert (should already have _orig_mod stripped)
+        
+    Returns:
+        Converted state dictionary
+    """
+    if state_dict is None:
+        return None
+    
+    new_state_dict = {}
+    processed_keys = set()
+    
+    for key, value in state_dict.items():
+        # Check if this is a q.weight, k.weight, or v.weight that needs conversion
+        if key.endswith('.q.weight') or key.endswith('.k.weight') or key.endswith('.v.weight'):
+            # Extract the base path (e.g., "blocks.0.attn" from "blocks.0.attn.q.weight")
+            base_key = key.rsplit('.', 2)[0]  # Remove ".q.weight" or ".k.weight" or ".v.weight"
+            q_key = f"{base_key}.q.weight"
+            k_key = f"{base_key}.k.weight"
+            v_key = f"{base_key}.v.weight"
+            
+            # Check if we have all three (q, k, v) in the original state_dict
+            if q_key in state_dict and k_key in state_dict and v_key in state_dict:
+                # Only process once per attention layer
+                if base_key not in processed_keys:
+                    # Concatenate q, k, v weights to create qkv.weight
+                    q_weight = state_dict[q_key]
+                    k_weight = state_dict[k_key]
+                    v_weight = state_dict[v_key]
+                    
+                    # For nn.Linear: weight shape is (out_features, in_features)
+                    # q/k/v each: (d, d) -> qkv: (3*d, d) by concatenating along dim=0
+                    qkv_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
+                    
+                    # Create qkv.weight key
+                    qkv_key = f"{base_key}.qkv.weight"
+                    new_state_dict[qkv_key] = qkv_weight
+                    
+                    processed_keys.add(base_key)
+                    processed_keys.add(q_key)
+                    processed_keys.add(k_key)
+                    processed_keys.add(v_key)
+                    continue
+        
+        # Check if this key was already processed (skip q/k/v if we converted them)
+        if key in processed_keys:
+            continue
+        
+        # Keep all other keys as-is
+        new_state_dict[key] = value
+    
+    return new_state_dict
+
+def normalize_state_dict(state_dict, strip_orig_mod_prefix=True, convert_attention=True):
+    """
+    Normalize state dictionary by:
+    1. Stripping _orig_mod prefixes (from torch.compile)
+    2. Converting attention weights (separate q/k/v -> combined qkv)
+    
+    Args:
+        state_dict: State dictionary to normalize
+        strip_orig_mod_prefix: Whether to strip _orig_mod prefixes
+        convert_attention: Whether to convert attention weights
+        
+    Returns:
+        Normalized state dictionary
+    """
+    if state_dict is None:
+        return None
+    
+    result = state_dict
+    
+    # Step 1: Strip _orig_mod prefixes
+    if strip_orig_mod_prefix:
+        result = strip_orig_mod(result)
+    
+    # Step 2: Convert attention weights
+    if convert_attention:
+        result = convert_attention_weights(result)
+    
+    return result
+
 # Training utilities
 def set_seed(seed=42):
     """Set random seed for reproducibility"""
@@ -1031,8 +1137,6 @@ class OCRDataset(IterableDataset):
             reader = csv.DictReader(f)
             for row_idx, row in enumerate(reader):
                 chars.update(row.get("text", "") or row.get("label", "") or row.get("text_label", ""))
-                if (row_idx + 1) % 10000 == 0:
-                    print(f"  Processed {row_idx+1:,} rows...")
         
         # Build vocabulary
         self.char_to_idx = {'<PAD>': 0, '<BOS>': 1, '<EOS>': 2, '<UNK>': 3}

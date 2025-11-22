@@ -26,7 +26,7 @@ from omni.codec import RVQ, NeuralVocoder
 from omni.talker import TalkerTiny
 from omni.tokenizer import BPETokenizer
 from omni.ocr_model import OCRModel
-from omni.utils import find_checkpoint, load_audio
+from omni.utils import find_checkpoint, load_audio, normalize_state_dict
 
 
 # ============================================================================
@@ -34,14 +34,8 @@ from omni.utils import find_checkpoint, load_audio
 # ============================================================================
 
 def strip_orig_mod_keys(state_dict: Dict) -> Dict:
-    """Strip _orig_mod. prefix from state_dict keys (from torch.compile)"""
-    if state_dict is None:
-        return None
-    new_state_dict = {}
-    for key, value in state_dict.items():
-        new_key = key.replace("._orig_mod.", ".").replace("._orig_mod", "").replace("_orig_mod.", "")
-        new_state_dict[new_key] = value
-    return new_state_dict
+    """Strip _orig_mod. prefix from state_dict keys (from torch.compile) - DEPRECATED, use normalize_state_dict"""
+    return normalize_state_dict(state_dict, strip_orig_mod_prefix=True, convert_attention=False)
 
 
 # ============================================================================
@@ -67,10 +61,16 @@ class BaseModelLoader:
         return find_checkpoint(ckpt_dir, prefix, step_prefix, self.device)
     
     def load_state_dict(self, state_dict: Dict, strict: bool = False):
-        """Load state dict with _orig_mod key stripping"""
+        """Load state dict with normalization (only strip _orig_mod, don't convert attention weights)
+        
+        This matches training script behavior - load checkpoints as saved.
+        The model should be initialized with the same config (including use_gqa) as training.
+        """
         if state_dict is None:
             return False
-        state_dict = strip_orig_mod_keys(state_dict)
+        # Only strip _orig_mod, don't convert attention weights (matches training)
+        from omni.utils import strip_orig_mod
+        state_dict = strip_orig_mod(state_dict)
         try:
             self.model.load_state_dict(state_dict, strict=strict)
             return True
@@ -134,13 +134,13 @@ class ThinkerLoader(BaseModelLoader):
             if ckpt is not None:
                 if isinstance(ckpt, dict):
                     if "model" in ckpt:
-                        self.load_state_dict(ckpt["model"])
+                        self.load_state_dict(ckpt["model"], strict=False)
                     elif "thinker" in ckpt:
-                        self.load_state_dict(ckpt["thinker"])
+                        self.load_state_dict(ckpt["thinker"], strict=False)
                     else:
-                        self.load_state_dict(ckpt)
+                        self.load_state_dict(ckpt, strict=False)
                 else:
-                    self.load_state_dict(ckpt)
+                    self.load_state_dict(ckpt, strict=False)
                 print("✓ Loaded Thinker model")
             else:
                 print("⚠ Warning: Thinker checkpoint not found, using untrained model")
@@ -186,13 +186,13 @@ class VisionLoader(BaseModelLoader):
             if ckpt is not None:
                 if isinstance(ckpt, dict):
                     if "vit" in ckpt:
-                        self.load_state_dict(ckpt["vit"])
+                        self.load_state_dict(ckpt["vit"], strict=False)
                     elif "model" in ckpt:
-                        self.load_state_dict(ckpt["model"])
+                        self.load_state_dict(ckpt["model"], strict=False)
                     else:
-                        self.load_state_dict(ckpt)
+                        self.load_state_dict(ckpt, strict=False)
                 else:
-                    self.load_state_dict(ckpt)
+                    self.load_state_dict(ckpt, strict=False)
                 print("✓ Loaded Vision encoder")
             else:
                 print("⚠ Warning: Vision checkpoint not found, using untrained model")
@@ -238,13 +238,13 @@ class AudioLoader(BaseModelLoader):
             if ckpt is not None:
                 if isinstance(ckpt, dict):
                     if "enc" in ckpt:
-                        self.load_state_dict(ckpt["enc"])
+                        self.load_state_dict(ckpt["enc"], strict=False)
                     elif "model" in ckpt:
-                        self.load_state_dict(ckpt["model"])
+                        self.load_state_dict(ckpt["model"], strict=False)
                     else:
-                        self.load_state_dict(ckpt)
+                        self.load_state_dict(ckpt, strict=False)
                 else:
-                    self.load_state_dict(ckpt)
+                    self.load_state_dict(ckpt, strict=False)
                 print("✓ Loaded Audio encoder")
             else:
                 print("⚠ Warning: Audio checkpoint not found, using untrained model")
@@ -303,10 +303,10 @@ class TalkerLoader(BaseModelLoader):
             if ckpt is not None:
                 if isinstance(ckpt, dict):
                     if "rvq" in ckpt:
-                        rvq_state = strip_orig_mod_keys(ckpt["rvq"])
+                        rvq_state = normalize_state_dict(ckpt["rvq"])
                         self.rvq.load_state_dict(rvq_state, strict=False)
                     if "talker" in ckpt:
-                        self.load_state_dict(ckpt["talker"])
+                        self.load_state_dict(ckpt["talker"], strict=False)
                 print("✓ Loaded Talker model")
             else:
                 print("⚠ Warning: Talker checkpoint not found, using untrained model")
@@ -379,11 +379,11 @@ class OCRLoader(BaseModelLoader):
             if ckpt is not None:
                 if isinstance(ckpt, dict):
                     if "model" in ckpt:
-                        self.load_state_dict(ckpt["model"])
+                        self.load_state_dict(ckpt["model"], strict=False)
                     else:
-                        self.load_state_dict(ckpt)
+                        self.load_state_dict(ckpt, strict=False)
                 else:
-                    self.load_state_dict(ckpt)
+                    self.load_state_dict(ckpt, strict=False)
                 print(f"✓ Loaded OCR model (vocab_size={vocab_size})")
             else:
                 print("⚠ Warning: OCR checkpoint not found, using untrained model")
@@ -874,8 +874,9 @@ class InferenceEngine:
                 self.proj_a = nn.Linear(audio_dim, thinker_d_model).to(self.device)
                 self.proj_v = nn.Linear(vision_dim, thinker_d_model).to(self.device)
                 
-                proj_a_state = strip_orig_mod_keys(ckpt["proj_a"])
-                proj_v_state = strip_orig_mod_keys(ckpt["proj_v"])
+                from omni.utils import strip_orig_mod
+                proj_a_state = strip_orig_mod(ckpt["proj_a"])
+                proj_v_state = strip_orig_mod(ckpt["proj_v"])
                 
                 if proj_a_state and proj_v_state:
                     self.proj_a.load_state_dict(proj_a_state, strict=False)
