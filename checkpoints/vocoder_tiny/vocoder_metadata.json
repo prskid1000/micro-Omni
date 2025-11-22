@@ -29,7 +29,7 @@
     "checkpoint_freq": 1000,
     "val_freq": 528,
     "seed": 42,
-    "shuffle_buffer_size": 1000,
-    "max_audio_length": 209152
+    "shuffle_buffer_size": 100,
+    "max_audio_length": 238336
   }
 }

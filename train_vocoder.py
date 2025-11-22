@@ -140,27 +140,29 @@ def main(cfg):
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Audio CSV not found. Expected: {csv_path}")
     
-    # Auto-calculate max_audio_length if not provided (similar to mel length calculation for other models)
-    print("\n🔍 Analyzing vocoder dataset...")
-    audio_percentile = cfg.get("max_audio_length_percentile", 95.0)
-    sample_size = cfg.get("dataset_sample_size", None)  # None = analyze all files
-    
-    max_audio_length_dynamic = analyze_vocoder_dataset(
-        csv_path, 
-        sr=sr, 
-        sample_size=sample_size,
-        audio_percentile=audio_percentile
-    )
-    
-    # Allow override from config, but default to auto-calculated value
-    max_audio_length = cfg.get("max_audio_length", max_audio_length_dynamic)
-    if max_audio_length != max_audio_length_dynamic:
-        print(f"⚠ Warning: Config max_audio_length={max_audio_length} differs from dataset audio length={max_audio_length_dynamic}")
-        print(f"  Using config value: {max_audio_length}")
+    # Load max_audio_length from checkpoint metadata if resuming, otherwise calculate
+    if metadata and "config" in metadata and "max_audio_length" in metadata["config"]:
+        max_audio_length = metadata["config"]["max_audio_length"]
+        print(f"✓ Loaded max_audio_length from checkpoint: {max_audio_length}")
+    elif "max_audio_length" in cfg:
+        max_audio_length = cfg["max_audio_length"]
+        print(f"✓ Using max_audio_length from config: {max_audio_length}")
     else:
-        print(f"✓ Using auto-calculated max_audio_length: {max_audio_length}")
+        # Auto-calculate max_audio_length if not provided (similar to mel length calculation for other models)
+        print("\n🔍 Analyzing vocoder dataset...")
+        audio_percentile = cfg.get("max_audio_length_percentile", 95.0)
+        sample_size = cfg.get("dataset_sample_size", None)  # None = analyze all files
+        
+        max_audio_length = analyze_vocoder_dataset(
+            csv_path, 
+            sr=sr, 
+            sample_size=sample_size,
+            audio_percentile=audio_percentile
+        )
+        print(f"✓ Calculated max_audio_length: {max_audio_length}")
+        print(f"✓ Calculated max_audio_length: {max_audio_length}")
     
-    # Update config with calculated value so it's used by dataset
+    # Update config with the value (whether loaded or calculated)
     cfg["max_audio_length"] = max_audio_length
     
     
