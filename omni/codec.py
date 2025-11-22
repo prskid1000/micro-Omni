@@ -359,12 +359,13 @@ class HiFiGANVocoder(nn.Module):
         except Exception as e:
             warnings.warn(f"Failed to compile HiFiGAN Vocoder: {e}. Continuing without compilation.")
     
-    def forward(self, mel: torch.Tensor) -> torch.Tensor:
+    def forward(self, mel: torch.Tensor, target_length: Optional[int] = None) -> torch.Tensor:
         """
         Convert mel spectrogram to audio waveform.
         
         Args:
             mel: (B, n_mels, T) or (n_mels, T) mel spectrogram
+            target_length: Optional target audio length for fixed-size output (useful for training)
         
         Returns:
             audio: (B, T_audio) or (T_audio,) audio waveform
@@ -411,6 +412,18 @@ class HiFiGANVocoder(nn.Module):
         
         # Remove channel dimension (conv_post outputs (B, 1, T))
         x = x.squeeze(1)  # (B, 1, T_audio) -> (B, T_audio)
+        
+        # Fix output length to target_length if provided (for training with fixed-size batches)
+        # This ensures consistent audio lengths across batches, similar to how audio encoder works
+        if target_length is not None:
+            current_length = x.shape[-1]
+            if current_length > target_length:
+                # Trim to target length
+                x = x[..., :target_length]
+            elif current_length < target_length:
+                # Pad to target length with zeros
+                pad_length = target_length - current_length
+                x = torch.nn.functional.pad(x, (0, pad_length), mode='constant', value=0.0)
         
         # Ensure output is always 2D (B, T) for batch processing
         # Only remove batch dimension if input was originally 2D (single sample, no batch)

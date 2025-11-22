@@ -421,6 +421,12 @@ def main(cfg):
             # Reshape mel for generator: (B, n_mels, T_mel)
             mel_input = mel.transpose(1, 2)  # (B, n_mels, T_mel)
             
+            # Calculate expected audio length from mel length
+            # HiFiGAN upsamples by product of upsample_rates: [8, 8, 2, 2] = 256x
+            # This matches hop_length=256, so T_audio = T_mel * 256
+            # But we want fixed-size output matching max_audio_length for consistent training
+            target_audio_length = max_audio_length
+            
             # Convert to channels_last for better performance (if enabled)
             if device == "cuda" and hasattr(generator, 'memory_format'):
                 try:
@@ -435,14 +441,12 @@ def main(cfg):
             # ========== Train Discriminators ==========
             opt_d.zero_grad()
             
-            # Generate fake audio
+            # Generate fake audio with fixed target length
             with torch.no_grad():
-                audio_fake = generator(mel_input)  # (B, T_audio)
+                audio_fake = generator(mel_input, target_length=target_audio_length)  # (B, T_audio)
             
-            # Ensure same length
-            min_len = min(audio_real.shape[1], audio_fake.shape[1])
-            audio_real = audio_real[:, :min_len]
-            audio_fake = audio_fake[:, :min_len]
+            # Trim real audio to match target length (handles variable-length real audio)
+            audio_real = audio_real[:, :target_audio_length]
             
             # Add channel dimension for discriminators: (B, 1, T)
             audio_real_d = audio_real.unsqueeze(1)
@@ -573,13 +577,11 @@ def main(cfg):
             # ========== Train Generator ==========
             opt_g.zero_grad()
             
-            # Generate fake audio
-            audio_fake = generator(mel_input)  # (B, T_audio)
+            # Generate fake audio with fixed target length
+            audio_fake = generator(mel_input, target_length=target_audio_length)  # (B, T_audio)
             
-            # Ensure same length
-            min_len = min(audio_real.shape[1], audio_fake.shape[1])
-            audio_real = audio_real[:, :min_len]
-            audio_fake = audio_fake[:, :min_len]
+            # Trim real audio to match target length (already done above, but ensure consistency)
+            audio_real = audio_real[:, :target_audio_length]
             audio_fake_d = audio_fake.unsqueeze(1)
             
             # Compute mel spectrogram of generated audio (using pre-created transform)
@@ -814,11 +816,12 @@ def main(cfg):
                             val_audio_lengths = val_audio_lengths.to(device)
                             val_mel_input = val_mel.transpose(1, 2)
                             
-                            # Generate fake audio
-                            val_audio_fake = generator(val_mel_input)
-                            min_len = min(val_audio.shape[1], val_audio_fake.shape[1])
-                            val_audio = val_audio[:, :min_len]
-                            val_audio_fake = val_audio_fake[:, :min_len]
+                            # Generate fake audio with fixed target length
+                            val_audio_fake = generator(val_mel_input, target_length=max_audio_length)
+                            
+                            # Trim real audio to match target length
+                            val_audio = val_audio[:, :max_audio_length]
+                            val_audio_fake = val_audio_fake[:, :max_audio_length]
                             
                             val_audio_real_d = val_audio.unsqueeze(1)
                             val_audio_fake_d = val_audio_fake.unsqueeze(1)
