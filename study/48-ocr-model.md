@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What OCR is and why we need it
 - Architecture: ViT encoder + Transformer decoder with cross-attention
 - How the model extracts text from images
@@ -110,16 +111,19 @@ Text: "STOP"
 ### Component Breakdown
 
 **1. Vision Encoder (ViT-Tiny)**
+
 - Input: Image `(B, 3, 224, 224)`
 - Process: Patch embedding + Transformer layers
 - Output: Grid features `(B, N, 128)` where N = (224/16)² = 196 patches
 - Purpose: Extract visual features from image patches
 
 **2. Image Projection**
+
 - Projects vision features from 128-dim to decoder dimension (256-dim)
 - Aligns vision and text embeddings
 
 **3. Text Decoder**
+
 - Input: Character token IDs `(B, T)`
 - Process: Autoregressive generation with cross-attention
 - Output: Character logits `(B, T, vocab_size)`
@@ -158,21 +162,25 @@ Output: (B, T, 256)
 ### Key Features
 
 **1. Separate Norm Instances**
+
 - Each sub-layer has its own `RMSNorm` instance
 - Prevents parameter sharing across layers
 - Matches Thinker's Block pattern
 
 **2. RoPE for Self-Attention**
+
 - Rotary Position Embedding applied to queries and keys
 - Enables relative position understanding
 - Supports longer sequences than training
 
 **3. Cross-Attention Mechanism**
+
 - Text tokens (query) attend to image features (key/value)
 - Allows decoder to "look" at relevant image regions
 - No RoPE needed (cross-attention doesn't use positional encoding)
 
 **4. Causal Masking**
+
 - Self-attention is causal (can only see previous tokens)
 - Enables autoregressive text generation
 - Prevents information leakage
@@ -202,13 +210,13 @@ Text Embed: (B, T, 256)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 For each decoder layer:
     x = Text Embed (B, T, 256)
-    
+
     # Self-attention (causal)
     x = x + Dropout(SelfAttn(Norm1(x), RoPE))
-    
+
     # Cross-attention
     x = x + Dropout(CrossAttn(Norm2(x), Img Features))
-    
+
     # Feedforward
     x = x + Dropout(MLP(Norm3(x)))
 
@@ -221,6 +229,7 @@ Logits = Linear(x)  # (B, T, vocab_size)
 ### Attention Mechanisms
 
 **Self-Attention (Causal)**
+
 ```
 Query: Q = Text Embeddings (B, T, 256)
 Key:   K = Text Embeddings (B, T, 256)
@@ -232,6 +241,7 @@ Attention = Softmax(QK^T / √d) V
 ```
 
 **Cross-Attention**
+
 ```
 Query: Q = Text Embeddings (B, T, 256)
 Key:   K = Image Features (B, N, 256)
@@ -363,7 +373,7 @@ import torchvision.transforms as T
 
 # Load model
 model = OCRModel(...)
-model.load_state_dict(torch.load("checkpoints/ocr_tiny/ocr.pt"))
+model.load_state_dict(torch.load("checkpoints/ocr_tiny/model.pt")["model"])
 model.eval()
 
 # Process image
@@ -371,7 +381,7 @@ image = Image.open("sign.jpg")
 transform = T.Compose([
     T.Resize((224, 224)),
     T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], 
+    T.Normalize(mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225])
 ])
 img_tensor = transform(image).unsqueeze(0)  # (1, 3, 224, 224)
@@ -399,16 +409,19 @@ print(f"Extracted text: {text}")
 ### Similar to Modern OCR Models
 
 **VISTA-OCR (2024)**
+
 - ✅ ViT encoder + Transformer decoder
 - ✅ Cross-attention from text to image
 - ✅ Autoregressive text generation
 
 **UPOCR (2023)**
+
 - ✅ Vision Transformer encoder
 - ✅ Transformer decoder with cross-attention
 - ✅ Unified image-to-text approach
 
 **Our Implementation**
+
 - ✅ Matches modern OCR architectures
 - ✅ Uses proven components (ViT, Transformer)
 - ✅ Optimized with Flash Attention, RoPE, SwiGLU
@@ -448,7 +461,7 @@ Total Parameters: ~15-20M (depends on vocab size)
 ✅ **Autoregressive generation** with causal masking  
 ✅ **KV caching** for fast inference  
 ✅ **Character-level** vocabulary built from dataset  
-✅ **Modern architecture** aligned with state-of-the-art OCR models  
+✅ **Modern architecture** aligned with state-of-the-art OCR models
 
 ---
 
@@ -464,4 +477,3 @@ Total Parameters: ~15-20M (depends on vocab size)
 ---
 
 [← Previous: Model Export & Deployment](46-model-export-deployment.md) | [Back to Index](00-INDEX.md) | [Next: Future Extensions →](45-future-extensions.md)
-

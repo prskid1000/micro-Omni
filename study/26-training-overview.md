@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - Why μOmni uses a 5-stage training pipeline
 - The purpose and goal of each training stage
 - How modular training works and its benefits
@@ -137,7 +138,7 @@ This is why μOmni uses 5 stages!
 │ Loss: Cross-entropy (next token)           │
 │ Metric: Perplexity (lower = better)        │
 │ Time: ~8-12 hours on 12GB GPU              │
-│ Output: thinker_checkpoints/               │
+│ Output: thinker_checkpoints/model.pt         │
 └──────────────────┬──────────────────────────┘
                    ↓
          Foundation is ready!
@@ -152,7 +153,7 @@ This is why μOmni uses 5 stages!
 │ Loss: CTC (alignment-free)                 │
 │ Metric: WER (Word Error Rate)              │
 │ Time: ~6-10 hours                          │
-│ Output: audio_encoder_checkpoints/         │
+│ Output: audio_encoder_checkpoints/model.pt │
 └──────────────────┬──────────────────────────┘
                    ↓
                    │
@@ -166,7 +167,7 @@ This is why μOmni uses 5 stages!
 │ Loss: Contrastive (InfoNCE)                │
 │ Metric: Contrastive Loss                   │
 │ Time: ~4-8 hours                           │
-│ Output: vision_encoder_checkpoints/        │
+│ Output: vision_encoder_checkpoints/model.pt│
 └──────────────────┬──────────────────────────┘
                    ↓
                    │
@@ -180,7 +181,7 @@ This is why μOmni uses 5 stages!
 │ Loss: MSE (RVQ) + Cross-entropy (Talker)   │
 │ Metric: Reconstruction quality            │
 │ Time: ~10-15 hours                         │
-│ Output: rvq_codec/ + talker_checkpoints/   │
+│ Output: talker_checkpoints/model.pt        │
 └──────────────────┬──────────────────────────┘
                    ↓
       All components ready!
@@ -195,7 +196,7 @@ This is why μOmni uses 5 stages!
 │ Loss: Cross-entropy (response generation)  │
 │ Metric: Task accuracy                      │
 │ Time: ~6-12 hours                          │
-│ Output: omni_final/                        │
+│ Output: omni_final/model.pt                │
 └─────────────────────────────────────────────┘
                    ↓
       μOmni is ready! 🎉
@@ -281,15 +282,15 @@ This progressive approach ensures stable, effective learning!
 
 ### Complete Specifications
 
-| Stage | Component | Primary Task | Data Type | Loss Function | Metric | Target Loss | Est. Time | Dependencies |
-|-------|-----------|--------------|-----------|---------------|---------|-------------|-----------|--------------|
-| **A** | Thinker | Language Modeling | Text | Cross-Entropy | Perplexity | Loss < 2.0, PPL < 8 | 8-12h | None |
-| **B** | Audio Encoder | ASR | Audio + Text | CTC | WER | CTC Loss < 2.0, WER < 20% | 6-10h | None |
-| **C** | Vision Encoder | Contrastive Learning | Images + Captions | Contrastive (InfoNCE) | Contrastive Loss | Loss < 0.3 | 4-8h | None (uses tokenizer from A) |
-| **D** | RVQ + Talker | Speech Gen | Audio (TTS) | MSE + CE | Recon Error | RVQ: < 0.05, Talker: Loss < 2.0, PPL < 10 | 10-15h | None (RVQ), Then Talker needs RVQ |
-| **E** | All (Joint) | Multimodal QA | Mixed Modalities | Cross-Entropy | Task Acc | Loss < 2.0, PPL < 8 | 6-12h | A, B, C, D |
-| **Optional** | OCR | Text Extraction | Images + Text | Cross-Entropy | Character Acc | Loss < 1.0, Acc > 90% | 4-8h | None |
-| **Optional** | HiFi-GAN | Vocoder | Audio (TTS) | Adversarial | Quality | Natural-sounding speech | 2-4h | None |
+| Stage        | Component      | Primary Task         | Data Type         | Loss Function         | Metric           | Target Loss                               | Est. Time | Dependencies                      |
+| ------------ | -------------- | -------------------- | ----------------- | --------------------- | ---------------- | ----------------------------------------- | --------- | --------------------------------- |
+| **A**        | Thinker        | Language Modeling    | Text              | Cross-Entropy         | Perplexity       | Loss < 2.0, PPL < 8                       | 8-12h     | None                              |
+| **B**        | Audio Encoder  | ASR                  | Audio + Text      | CTC                   | WER              | CTC Loss < 2.0, WER < 20%                 | 6-10h     | None                              |
+| **C**        | Vision Encoder | Contrastive Learning | Images + Captions | Contrastive (InfoNCE) | Contrastive Loss | Loss < 0.3                                | 4-8h      | None (uses tokenizer from A)      |
+| **D**        | RVQ + Talker   | Speech Gen           | Audio (TTS)       | MSE + CE              | Recon Error      | RVQ: < 0.05, Talker: Loss < 2.0, PPL < 10 | 10-15h    | None (RVQ), Then Talker needs RVQ |
+| **E**        | All (Joint)    | Multimodal QA        | Mixed Modalities  | Cross-Entropy         | Task Acc         | Loss < 2.0, PPL < 8                       | 6-12h     | A, B, C, D                        |
+| **Optional** | OCR            | Text Extraction      | Images + Text     | Cross-Entropy         | Character Acc    | Loss < 1.0, Acc > 90%                     | 4-8h      | None                              |
+| **Optional** | HiFi-GAN       | Vocoder              | Audio (TTS)       | Adversarial           | Quality          | Natural-sounding speech                   | 2-4h      | None                              |
 
 **Total Estimated Time: 40-60 hours** on single 12GB GPU (tiny model, 25.65M params)
 
@@ -299,17 +300,18 @@ This progressive approach ensures stable, effective learning!
 
 **Quick Reference - Target Loss Values:**
 
-| Component | Loss Target | Metric Target | Status Indicator |
-|-----------|-------------|---------------|------------------|
-| **Thinker** | < 2.0 | Perplexity < 8 | Ready for Stage E |
-| **Audio Encoder** | < 2.0 | WER < 20% | Good performance |
-| **Vision Encoder** | < 0.3 | Contrastive Loss | Good alignment |
-| **RVQ Codec** | < 0.05 | Reconstruction Error | Good compression |
-| **Talker** | < 2.0 | Perplexity < 10 | Intelligible speech |
-| **SFT** | < 2.0 | Perplexity < 8 | Ready for use |
-| **OCR** | < 1.0 | Character Acc > 90% | Good extraction |
+| Component          | Loss Target | Metric Target        | Status Indicator    |
+| ------------------ | ----------- | -------------------- | ------------------- |
+| **Thinker**        | < 2.0       | Perplexity < 8       | Ready for Stage E   |
+| **Audio Encoder**  | < 2.0       | WER < 20%            | Good performance    |
+| **Vision Encoder** | < 0.3       | Contrastive Loss     | Good alignment      |
+| **RVQ Codec**      | < 0.05      | Reconstruction Error | Good compression    |
+| **Talker**         | < 2.0       | Perplexity < 10      | Intelligible speech |
+| **SFT**            | < 2.0       | Perplexity < 8       | Ready for use       |
+| **OCR**            | < 1.0       | Character Acc > 90%  | Good extraction     |
 
 **Loss Interpretation:**
+
 - **Too High (> 5.0):** Model not learning - check learning rate, data quality
 - **Too Low (< 0.1):** Possible overfitting or numerical issues
 - **Normal Range:** 1.0-3.0 for most tasks indicates healthy training
@@ -413,6 +415,7 @@ python scripts/update_configs_from_data.py --dry-run
 ```
 
 **What it does:**
+
 - ✅ Counts tokens in production/synthetic datasets (using BPE tokenizer) for reference
 - ✅ Counts samples for vision/audio/talker/OCR training (these use sample-based step calculation)
 - ✅ Calculates model size from config files (using mathematical formulas)
@@ -429,6 +432,7 @@ python scripts/update_configs_from_data.py --dry-run
 **Performance Note:** Token counting streams files directly line-by-line. For very large files, this may take time but uses minimal memory.
 
 **When to run:**
+
 - After downloading production datasets
 - After generating synthetic test data
 - When switching between different dataset sizes
@@ -443,16 +447,17 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
 
 **Total: 25.65M parameters** - Fits on 12GB GPU
 
-| Component | Config | Parameters |
-|-----------|--------|------------|
-| **Thinker** | d_model=256, n_layers=4, n_heads=4, d_ff=1024 | 20.32M |
-| **Audio Encoder** | d_model=192, n_layers=4, n_heads=3, d_ff=768 | 2.05M |
-| **Vision Encoder** | d_model=128, n_layers=4, n_heads=2, d_ff=512 | 914K |
-| **Talker** | d_model=192, n_layers=4, n_heads=3, d_ff=768 | 2.24M |
+| Component          | Config                                        | Parameters |
+| ------------------ | --------------------------------------------- | ---------- |
+| **Thinker**        | d_model=256, n_layers=4, n_heads=4, d_ff=1024 | 20.32M     |
+| **Audio Encoder**  | d_model=192, n_layers=4, n_heads=3, d_ff=768  | 2.05M      |
+| **Vision Encoder** | d_model=128, n_layers=4, n_heads=2, d_ff=512  | 914K       |
+| **Talker**         | d_model=192, n_layers=4, n_heads=3, d_ff=768  | 2.24M      |
 
 ### Scaling to Larger Models
 
 **Moderate Scale (100-200M params):**
+
 - **GPU:** 24GB VRAM
 - **Changes:** 2x dimensions, 2x layers
 - **Example Thinker:** d_model=512, n_layers=8, n_heads=8, d_ff=2048
@@ -460,6 +465,7 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
 - **Use Case:** Better quality while staying accessible
 
 **Large Scale (500M-1B params):**
+
 - **GPU:** 40GB+ VRAM (A100) or Multi-GPU
 - **Changes:** 3-4x dimensions, 4x layers
 - **Example Thinker:** d_model=768, n_layers=16, n_heads=12, d_ff=3072
@@ -467,6 +473,7 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
 - **Use Case:** Production-quality performance
 
 **Very Large Scale (1B-7B params):**
+
 - **GPU:** Multi-GPU (4-8x A100) or TPU
 - **Changes:** 4x dimensions, 8x layers, enable MoE
 - **Example Thinker:** d_model=1024, n_layers=32, n_heads=16, d_ff=4096, use_moe=true
@@ -475,22 +482,24 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
 
 ### Key Parameters to Scale
 
-| Parameter | Impact | Scaling Rule |
-|-----------|--------|--------------|
-| **d_model** | Quadratic on attention, linear on FFN | 2x d_model ≈ 4x params |
-| **n_layers** | Linear increase | 2x layers = 2x params |
-| **d_ff** | Linear on FFN | Usually 4x d_model |
-| **n_heads** | Minimal | Usually d_model / 64 |
-| **vocab_size** | Only embedding layer | Linear increase |
+| Parameter      | Impact                                | Scaling Rule           |
+| -------------- | ------------------------------------- | ---------------------- |
+| **d_model**    | Quadratic on attention, linear on FFN | 2x d_model ≈ 4x params |
+| **n_layers**   | Linear increase                       | 2x layers = 2x params  |
+| **d_ff**       | Linear on FFN                         | Usually 4x d_model     |
+| **n_heads**    | Minimal                               | Usually d_model / 64   |
+| **vocab_size** | Only embedding layer                  | Linear increase        |
 
 ### Memory Requirements
 
 **Training Memory Formula:**
+
 ```
 Memory ≈ 4 × (model_params × 4 bytes) + (batch_size × ctx_len × d_model × 4 bytes)
 ```
 
 **Examples:**
+
 - **Tiny (25.65M):** ~12GB VRAM ✓
 - **Moderate (150M):** ~24GB VRAM ✓
 - **Large (700M):** ~40GB+ VRAM (A100)
@@ -499,18 +508,21 @@ Memory ≈ 4 × (model_params × 4 bytes) + (batch_size × ctx_len × d_model ×
 ### Scaling Process
 
 1. **Create new config files:**
+
    ```bash
    cp configs/thinker_tiny.json configs/thinker_medium.json
    # Edit parameters in new config
    ```
 
 2. **Adjust training parameters:**
+
    - Reduce `batch_size` if OOM
    - Increase `gradient_accumulation_steps`
    - Increase `max_steps` and `warmup_steps`
    - Always use `use_amp: true`, `use_flash: true`
 
 3. **Update projector dimensions** (for Stage E):
+
    - When scaling Thinker's d_model, update projectors in `sft_omni.py`
    - Vision: `Linear(128 → new_d_model)`
    - Audio: `Linear(192 → new_d_model)`
@@ -538,12 +550,12 @@ Memory ≈ 4 × (model_params × 4 bytes) + (batch_size × ctx_len × d_model ×
 
 **Quick Reference:**
 
-| Scale | Total Params | VRAM | Training Time |
-|-------|--------------|------|---------------|
-| **Tiny** | 25.65M | 12GB | 40-60 hours |
-| **Medium** | ~150M | 24GB | 80-120 hours |
-| **Large** | ~700M | 40GB+ | 200-400 hours |
-| **XL** | ~3B | Multi-GPU | 1000+ hours |
+| Scale      | Total Params | VRAM      | Training Time |
+| ---------- | ------------ | --------- | ------------- |
+| **Tiny**   | 25.65M       | 12GB      | 40-60 hours   |
+| **Medium** | ~150M        | 24GB      | 80-120 hours  |
+| **Large**  | ~700M        | 40GB+     | 200-400 hours |
+| **XL**     | ~3B          | Multi-GPU | 1000+ hours   |
 
 ---
 
@@ -552,6 +564,7 @@ Memory ≈ 4 × (model_params × 4 bytes) + (batch_size × ctx_len × d_model ×
 ### Performance Scaling with Model Size
 
 **Model Size vs Performance (Quality):**
+
 ```
 Performance Score (Normalized)
 100% │                                    ╱───── Plateau
@@ -573,15 +586,16 @@ Performance Score (Normalized)
 
 Key Findings:
 - 25M (Tiny): ~40-50% of max performance
-- 100M (Medium): ~70-80% of max performance  
+- 100M (Medium): ~70-80% of max performance
 - 500M (Large): ~85-90% of max performance
 - 1B+: ~90-95% of max performance (diminishing returns)
 
-Research: Models under 15B params can achieve 90% of 
+Research: Models under 15B params can achieve 90% of
 larger model performance on many tasks.
 ```
 
 **Model Size vs Training Time:**
+
 ```
 Training Time (Hours)
 1000+ │                                    ╱─────
@@ -606,6 +620,7 @@ but larger models need more data and steps.
 ```
 
 **Model Size vs Inference Speed:**
+
 ```
 Tokens per Second (TPS)
  100 │╱─────
@@ -641,7 +656,7 @@ Inference Speed (12GB GPU, batch_size=1):
 | 500M (Large) | ~15-20 | Very Good |
 | 1B+ | ~10-15 | Excellent |
 
-*Lower perplexity = Better*
+_Lower perplexity = Better_
 
 **Multimodal Understanding (Task Accuracy):**
 | Model Size | Image QA | Audio ASR | VQA Score |
@@ -651,7 +666,7 @@ Inference Speed (12GB GPU, batch_size=1):
 | 500M (Large) | ~85% | ~92% | ~80% |
 | 1B+ | ~90%+ | ~95%+ | ~85%+ |
 
-*Note: Actual performance depends on training data quality and duration*
+_Note: Actual performance depends on training data quality and duration_
 
 ### Diminishing Returns Analysis
 
@@ -693,7 +708,7 @@ Diminishing returns become significant after ~500M parameters.
 python train_text.py --config configs/thinker_tiny.json
 
 # Trains Thinker on text corpus
-# Output: checkpoints/thinker_tiny/
+# Output: checkpoints/thinker_tiny/model.pt
 # Expected: Perplexity < 30
 
 # Stage B: Audio Encoder (ASR)
@@ -701,7 +716,7 @@ python train_text.py --config configs/thinker_tiny.json
 python train_audio_enc.py --config configs/audio_enc_tiny.json
 
 # Trains Audio Encoder for speech recognition
-# Output: checkpoints/audio_encoder_tiny/
+# Output: checkpoints/audio_encoder_tiny/model.pt
 # Expected: WER < 30%
 
 # Stage C: Vision Encoder
@@ -709,7 +724,7 @@ python train_audio_enc.py --config configs/audio_enc_tiny.json
 python train_vision.py --config configs/vision_tiny.json
 
 # Trains Vision Encoder for image understanding
-# Output: checkpoints/vision_encoder_tiny/
+# Output: checkpoints/vision_encoder_tiny/model.pt
 # Expected: Accuracy > 70%
 
 # Stage D: Talker + RVQ Codec
@@ -717,19 +732,19 @@ python train_vision.py --config configs/vision_tiny.json
 python train_talker.py --config configs/talker_tiny.json
 
 # Trains RVQ codec and Talker for speech generation
-# Output: checkpoints/rvq_codec/ + checkpoints/talker_tiny/
+# Output: checkpoints/talker_tiny/model.pt
 # Expected: Intelligible speech output
 
 # Stage E: Multimodal SFT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 python sft_omni.py --config configs/omni_sft_tiny.json \
-  --thinker checkpoints/thinker_tiny/final.pt \
-  --audio_encoder checkpoints/audio_encoder_tiny/final.pt \
-  --vision_encoder checkpoints/vision_encoder_tiny/final.pt \
-  --talker checkpoints/talker_tiny/final.pt
+  --thinker checkpoints/thinker_tiny/model.pt \
+  --audio_encoder checkpoints/audio_encoder_tiny/model.pt \
+  --vision_encoder checkpoints/vision_encoder_tiny/model.pt \
+  --talker checkpoints/talker_tiny/model.pt
 
 # Trains all components jointly for multimodal understanding
-# Output: checkpoints/omni_final/
+# Output: checkpoints/omni_final/model.pt
 # Expected: Successful multimodal Q&A
 
 Complete! μOmni is ready for inference! 🎉
@@ -835,28 +850,31 @@ Total wall-clock time: ~25 hours instead of 50!
 
 ## 📊 Training Summary
 
-| Stage | Model | Task | Loss Function | Key Metric |
-|-------|-------|------|---------------|------------|
-| **A** | Thinker | Language Modeling | Cross-Entropy | Perplexity |
-| **B** | Audio Encoder | ASR | CTC | WER |
+| Stage | Model          | Task                      | Loss Function         | Key Metric       |
+| ----- | -------------- | ------------------------- | --------------------- | ---------------- |
+| **A** | Thinker        | Language Modeling         | Cross-Entropy         | Perplexity       |
+| **B** | Audio Encoder  | ASR                       | CTC                   | WER              |
 | **C** | Vision Encoder | Vision-Language Alignment | Contrastive (InfoNCE) | Contrastive Loss |
-| **D** | Talker + RVQ | Speech Generation | Cross-Entropy + MSE | Reconstruction |
-| **E** | All (Joint) | Multimodal | Cross-Entropy | Mixed Accuracy |
+| **D** | Talker + RVQ   | Speech Generation         | Cross-Entropy + MSE   | Reconstruction   |
+| **E** | All (Joint)    | Multimodal                | Cross-Entropy         | Mixed Accuracy   |
 
 ## 🎯 Training Strategy
 
 ### Modularity
+
 - Each stage trains independently
 - Debug issues in isolation
 - Parallel development possible
 
 ### Efficiency
+
 - Small datasets (<5GB per modality)
 - Fits 12GB GPU with gradient accumulation
 - Uses mixed precision (FP16)
 - Gradient checkpointing for memory
 
 ### Progressive Learning
+
 - Start with individual modalities
 - End with joint understanding
 - Specialized encoders preserved
@@ -890,4 +908,3 @@ python sft_omni.py --config configs/omni_sft_tiny.json
 ---
 
 [Back to Index](00-INDEX.md)
-

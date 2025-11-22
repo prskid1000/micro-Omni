@@ -244,36 +244,43 @@ python infer_chat.py --help
 - **Multimodal:** `--ckpt_dir checkpoints/omni_sft_tiny`
 
 The script automatically:
+
 - Loads appropriate configs from checkpoint directory
 - Falls back to default configs if not found
 - Loads tokenizer, encoders, and projectors as needed
-- **Uses step checkpoints automatically**: If standard checkpoints (e.g., `thinker.pt`) are not found, the script automatically searches for and uses the latest step checkpoint (e.g., `thinker_step_10000.pt`). This allows using models even if training was interrupted before creating final checkpoints.
+- **Uses model.pt automatically**: Prioritizes `model.pt` (new standard).
+- **Uses step checkpoints automatically**: If `model.pt` or standard checkpoints (e.g., `thinker.pt`) are not found, the script automatically searches for and uses the latest step checkpoint (e.g., `thinker_step_10000.pt`). This allows using models even if training was interrupted before creating final checkpoints.
 
 ---
 
 ## 💡 Tips & Best Practices
 
 ### Image Processing
+
 ✅ **Supported formats:** `.jpg`, `.jpeg`, `.png`  
 ✅ **Auto-resized** to 224×224  
 ✅ **RGB conversion** handled automatically
 
 ### Audio Processing
+
 ✅ **Sample rate:** Automatically resampled to 16kHz  
 ✅ **Supported formats:** `.wav`, `.flac`  
 ✅ **Mel spectrogram** extraction handled automatically
 
 ### Performance
+
 ✅ **KV caching** enabled by default for faster generation  
 ✅ **Mixed precision (FP16)** used on CUDA devices  
 ✅ **Autoregressive generation** with greedy decoding
 
 ### Data Sources
+
 ✅ **Use random samples** from `data/` folders for testing  
 ✅ **Test script** (`test_all_media.py`) picks random samples automatically  
 ✅ **Production data** from download scripts is ready to use
 
 ### Troubleshooting
+
 ⚠️ **Missing checkpoints:** Script will warn but continue with untrained models  
 ⚠️ **Missing projectors:** Multimodal features won't be used if `omni.pt` not found  
 ⚠️ **Audio output:** Requires vocoder (Griffin-Lim) - will warn if unavailable
@@ -282,21 +289,28 @@ The script automatically:
 
 The inference script (`infer_chat.py`) automatically handles checkpoint loading with intelligent fallback:
 
-1. **First, tries standard checkpoints:**
+1. **First, tries `model.pt` (new standard):**
+
+   - Checks for `model.pt` in the checkpoint directory.
+
+2. **Second, tries legacy standard names:**
+
    - `thinker.pt`, `audio_enc.pt`, `vision.pt`, `talker.pt`, `omni.pt`, `ocr.pt`
 
-2. **If not found, automatically uses latest step checkpoint:**
+3. **If not found, automatically uses latest step checkpoint:**
    - Searches for `thinker_step_*.pt`, `audio_enc_step_*.pt`, etc.
    - Selects the checkpoint with the highest step number
    - Prints which checkpoint is being used: `Using step checkpoint: thinker_step_10000.pt (step 10000)`
 
 **Benefits:**
+
 - ✅ Can use models even if training was interrupted
 - ✅ No manual checkpoint selection needed
 - ✅ Automatically uses the most recent training progress
 - ✅ Works seamlessly with training scripts that save step checkpoints
 
 **Example:**
+
 ```bash
 # Even if thinker.pt doesn't exist, this will work:
 python infer_chat.py --ckpt_dir checkpoints/thinker_tiny --text "Hello"

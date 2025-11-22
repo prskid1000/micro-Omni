@@ -79,6 +79,7 @@
 ### Core Modules (`omni/`)
 
 #### `thinker.py`
+
 ```python
 class ThinkerLM(nn.Module):
     """
@@ -90,6 +91,7 @@ class ThinkerLM(nn.Module):
 ```
 
 #### `audio_encoder.py`
+
 ```python
 class AudioEncoderTiny(nn.Module):
     """
@@ -101,6 +103,7 @@ class AudioEncoderTiny(nn.Module):
 ```
 
 #### `vision_encoder.py`
+
 ```python
 class ViTTiny(nn.Module):
     """
@@ -112,6 +115,7 @@ class ViTTiny(nn.Module):
 ```
 
 #### `talker.py`
+
 ```python
 class TalkerTiny(nn.Module):
     """
@@ -123,6 +127,7 @@ class TalkerTiny(nn.Module):
 ```
 
 #### `codec.py`
+
 ```python
 class RVQ(nn.Module):
     """Residual Vector Quantization"""
@@ -136,18 +141,21 @@ class GriffinLimVocoder:
 ### Training Scripts
 
 #### `train_text.py`
+
 - **Stage A**: Thinker pretraining
 - **Data**: Text corpus
 - **Loss**: Cross-entropy (next-token)
 - **Output**: `checkpoints/thinker_tiny/`
 
 #### `train_audio_enc.py`
+
 - **Stage B**: Audio encoder ASR
 - **Data**: Audio + transcriptions
 - **Loss**: CTC
 - **Output**: `checkpoints/audio_enc_tiny/`
 
 #### `train_vision.py`
+
 - **Stage C**: Vision encoder
 - **Data**: Images + captions
 - **Loss**: Contrastive (InfoNCE) - vision-language alignment
@@ -155,12 +163,14 @@ class GriffinLimVocoder:
 - **Output**: `checkpoints/vision_tiny/`
 
 #### `train_talker.py`
+
 - **Stage D**: Talker + RVQ
 - **Data**: Audio files
 - **Loss**: Cross-entropy + MSE
 - **Output**: `checkpoints/talker_tiny/`
 
 #### `train_vocoder.py`
+
 - **Optional**: HiFi-GAN vocoder training
 - **Data**: Audio files (TTS/ASR CSV)
 - **Loss**: Adversarial (LSGAN) + Feature Matching + Mel Loss
@@ -169,6 +179,7 @@ class GriffinLimVocoder:
 - **Note**: Generator correctly handles tensor dimensions, audio loading has automatic fallback
 
 #### `train_ocr.py`
+
 - **Optional**: OCR model training
 - **Data**: Images + text labels (CSV format)
 - **Architecture**: ViT encoder + Transformer decoder with cross-attention
@@ -177,6 +188,7 @@ class GriffinLimVocoder:
 - **Output**: `checkpoints/ocr_tiny/`
 
 #### `sft_omni.py`
+
 - **Stage E**: Multimodal SFT
 - **Data**: Mixed modalities (text, images, audio)
 - **Loss**: Cross-entropy
@@ -203,6 +215,7 @@ See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
 ## 💡 Code Navigation Tips
 
 ### Find Component Definition
+
 ```bash
 # Thinker architecture
 grep -n "class ThinkerLM" omni/thinker.py
@@ -215,6 +228,7 @@ grep -n "class RVQ" omni/codec.py
 ```
 
 ### Find Training Loop
+
 ```bash
 # Thinker training
 grep -n "def train" train_text.py
@@ -224,6 +238,7 @@ grep -n "def train" sft_omni.py
 ```
 
 ### Find Inference Code
+
 ```bash
 # Generation function
 grep -n "def generate" infer_chat.py
@@ -281,6 +296,7 @@ All training scripts use streaming `IterableDataset` implementations:
 - **JSON files**: Load once, then iterate through items
 
 **Benefits:**
+
 - ✅ No cache files needed - simpler and cleaner
 - ✅ Minimal memory usage - only current item in memory
 - ✅ Efficient resuming via `skip_samples` parameter
@@ -294,7 +310,9 @@ See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for det
 All training scripts share common utilities from `omni/utils.py`:
 
 ### Collate Functions
+
 All collate functions are centralized in `utils.py` for reuse:
+
 - **`collate_mel_fn(batch, max_mel_length=None)`** - Used by `train_talker.py`
   - Pads mel spectrograms to fixed length for CUDA graphs compatibility
 - **`collate_mel_text_fn(batch, max_mel_length=None)`** - Used by `train_audio_enc.py`
@@ -303,21 +321,27 @@ All collate functions are centralized in `utils.py` for reuse:
   - Pads both mel spectrograms and audio waveforms for vocoder training
 
 **Benefits:**
+
 - ✅ Consistent padding logic across all training scripts
 - ✅ Supports fixed-length padding for CUDA graphs
 - ✅ Easy to maintain and update
 
 ### Gradient Handling
+
 All training scripts use consistent gradient handling:
+
 - **Clip first, then check** - Gradients are clipped to `max_grad_norm` before checking for explosion
 - **Robust threshold** - Only skips batches if gradients exceed 100.0 after clipping
 - **Automatic recovery** - Most gradient issues are resolved by clipping, allowing training to continue
 
 ### Checkpoint Management
+
 - **`load_checkpoint()`**: Automatically finds and loads the latest checkpoint
+
+  - Prioritizes `model.pt` + `model_metadata.json` (new system)
+  - Falls back to legacy step checkpoints (`*_step_*.pt`)
   - Handles model, optimizer, scheduler, and scaler state dicts
-  - Returns step number and checkpoint path
-  - Supports legacy checkpoint formats
+  - Returns step number and metadata (including config)
 
 - **`find_checkpoint()`**: Smart checkpoint finder for inference/export
   - First tries standard checkpoint (e.g., `thinker.pt`)
@@ -326,12 +350,15 @@ All training scripts use consistent gradient handling:
   - Used by `infer_chat.py` and `export.py` to handle interrupted training gracefully
 
 ### Resuming Training
+
 - **`setup_resume_data_loading()`**: Configures dataset `skip_samples` for resuming
+
   - Handles `SubsetDataset` wrappers from `random_split`
   - Recreates DataLoader with updated skip_samples
   - Works seamlessly with IterableDataset streaming
 
 - **`calculate_resume_position()`**: Calculates epoch and batch position from global step
+
   - Returns `(start_epoch, start_batch_idx)` tuple
   - Used for progress bar initialization and epoch tracking
 
@@ -341,12 +368,14 @@ All training scripts use consistent gradient handling:
   - Works correctly even if dataset is exhausted mid-epoch
 
 ### Validation
+
 - **`ValidationSkipSamplesContext`**: Context manager for validation loops
   - Temporarily resets `skip_samples` to 0 for validation
   - Ensures validation always processes full validation set
   - Automatically restores original `skip_samples` after validation
 
 **Benefits:**
+
 - ✅ Consistent resuming logic across all training scripts
 - ✅ Automatic checkpoint detection (no `--resume` flag needed)
 - ✅ Proper validation on full dataset regardless of training resumption
@@ -367,4 +396,3 @@ All training scripts use consistent gradient handling:
 ---
 
 [Continue to Chapter 34: Configuration Files →](34-configuration-files.md)
-
