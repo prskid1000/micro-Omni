@@ -80,9 +80,37 @@ def feature_matching_loss(real_feats, fake_feats):
     return loss / max(count, 1)
 
 
-def mel_loss(mel_real, mel_fake):
-    """Compute mel spectrogram loss"""
-    return torch.mean(torch.abs(mel_real - mel_fake))
+def mel_loss(mel_real, mel_fake, mel_lengths=None):
+    """
+    Compute mel spectrogram loss.
+    If mel_lengths is provided, masks out padding frames.
+    
+    Args:
+        mel_real: (B, T, n_mels) real mel spectrogram (may contain padding)
+        mel_fake: (B, T, n_mels) fake mel spectrogram
+        mel_lengths: (B,) optional tensor of actual mel lengths (before padding)
+    
+    Returns:
+        Scalar loss value
+    """
+    if mel_lengths is not None:
+        # Create mask to exclude padding frames
+        B, T, n_mels = mel_real.shape
+        device = mel_real.device
+        mask = torch.arange(T, device=device).unsqueeze(0) < mel_lengths.unsqueeze(1)  # (B, T)
+        mask = mask.unsqueeze(2)  # (B, T, 1) for broadcasting
+        
+        # Compute per-element loss
+        per_element_loss = torch.abs(mel_real - mel_fake)  # (B, T, n_mels)
+        masked_loss = per_element_loss * mask.float()  # (B, T, n_mels)
+        
+        # Average over valid frames only
+        valid_elements = (mel_lengths * n_mels).float().sum().clamp(min=1)
+        loss = masked_loss.sum() / valid_elements
+    else:
+        # Fallback: average over all frames (includes padding)
+        loss = torch.mean(torch.abs(mel_real - mel_fake))
+    return loss
 
 
 def main(cfg):
@@ -323,6 +351,8 @@ def main(cfg):
             
             mel = mel.to(device)  # (B, T_mel, n_mels)
             audio_real = audio_real.to(device)  # (B, T_audio)
+            mel_lengths = mel_lengths.to(device)  # (B,)
+            audio_lengths = audio_lengths.to(device)  # (B,)
             
             # Reshape mel for generator: (B, n_mels, T_mel)
             mel_input = mel.transpose(1, 2)  # (B, n_mels, T_mel)
@@ -475,10 +505,18 @@ def main(cfg):
             mel_fake_batch = melspec(audio_fake.unsqueeze(1))  # (B, 1, n_mels, T_mel)
             # Remove channel dimension and transpose to match mel_real format: (B, T_mel, n_mels)
             mel_fake = mel_fake_batch.squeeze(1).transpose(1, 2)  # (B, T_mel, n_mels)
-            # Match length with mel_real
+            # Match length with mel_real (use actual mel lengths, not padded length)
+            # mel_lengths is the actual length before padding, so we need to match to that
+            # But mel_fake length depends on audio_fake length, which was trimmed to min_len
+            # So we need to match both to the minimum of actual mel length and mel_fake length
             min_mel_len = min(mel.shape[1], mel_fake.shape[1])
+            # Also consider actual mel lengths - don't include padding in loss
+            actual_mel_len = mel_lengths.min().item()  # Minimum actual mel length in batch
+            min_mel_len = min(min_mel_len, actual_mel_len)
             mel_real = mel[:, :min_mel_len, :]  # (B, T_mel, n_mels)
             mel_fake = mel_fake[:, :min_mel_len, :]  # (B, T_mel, n_mels)
+            # Update mel_lengths to match trimmed length for loss calculation
+            mel_lengths_trimmed = torch.clamp(mel_lengths, max=min_mel_len)
             
             if use_amp:
                 with autocast(device_type='cuda'):
@@ -516,8 +554,8 @@ def main(cfg):
                             count_fm += 1
                     loss_fm_msd = loss_fm_msd / max(count_fm, 1)
                     
-                    # Mel spectrogram loss
-                    loss_mel = mel_loss(mel_real, mel_fake)
+                    # Mel spectrogram loss (mask out padding)
+                    loss_mel = mel_loss(mel_real, mel_fake, mel_lengths_trimmed)
                     
                     # Total generator loss
                     loss_g = (
@@ -589,8 +627,8 @@ def main(cfg):
                         count_fm += 1
                 loss_fm_msd = loss_fm_msd / max(count_fm, 1)
                 
-                # Mel spectrogram loss
-                loss_mel = mel_loss(mel_real, mel_fake)
+                # Mel spectrogram loss (mask out padding)
+                loss_mel = mel_loss(mel_real, mel_fake, mel_lengths_trimmed)
                 
                 # Total generator loss
                 loss_g = (
@@ -623,8 +661,7 @@ def main(cfg):
                     opt_g.step()
                     scheduler_g.step()
                     opt_g.zero_grad()
-            
-            step += 1
+                    step += 1  # Increment step counter only when optimizer step occurs
             
             # Logging
             if step % print_freq == 0:
@@ -653,12 +690,14 @@ def main(cfg):
                     val_samples = 0
                     
                     with torch.no_grad():
-                        for val_mel, val_audio in val_dl:
+                        for val_mel, val_audio, val_mel_lengths, val_audio_lengths in val_dl:
                             if val_samples >= 100:  # Limit validation samples
                                 break
                             
                             val_mel = val_mel.to(device)
                             val_audio = val_audio.to(device)
+                            val_mel_lengths = val_mel_lengths.to(device)
+                            val_audio_lengths = val_audio_lengths.to(device)
                             val_mel_input = val_mel.transpose(1, 2)
                             
                             # Generate fake audio

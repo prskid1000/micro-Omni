@@ -20,7 +20,8 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.makedirs(cfg["save_dir"], exist_ok=True)
+    save_dir = cfg.get("save_dir", "checkpoints/talker_tiny")
+    os.makedirs(save_dir, exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("n_mels", 128)
     frame_ms = cfg.get("frame_ms", 80)
@@ -30,22 +31,26 @@ def main(cfg):
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
-    rvq = RVQ(cfg["codebooks"], cfg["codebook_size"], d=64, compile_model=use_compile).to(device)
+    codebooks = cfg.get("codebooks", 2)
+    codebook_size = cfg.get("codebook_size", 128)
+    rvq = RVQ(codebooks, codebook_size, d=64, compile_model=use_compile).to(device)
     talker = TalkerTiny(
-        cfg["d_model"], 
-        cfg["n_layers"], 
-        cfg["n_heads"], 
-        cfg["d_ff"], 
-        cfg["codebooks"], 
-        cfg["codebook_size"], 
-        cfg["dropout"],
+        cfg.get("d_model", 384), 
+        cfg.get("n_layers", 8), 
+        cfg.get("n_heads", 6), 
+        cfg.get("d_ff", 1536), 
+        codebooks, 
+        codebook_size, 
+        cfg.get("dropout", 0.1),
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
         rope_theta=cfg.get("rope_theta", 10000.0),
         compile_model=use_compile
     ).to(device)
-    opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
-    loss_fn = nn.CrossEntropyLoss()
+    opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
+    # Use reduction='none' to get per-element losses, then we'll mask padding manually
+    # Note: RVQ codes are 0-127, so we can't use ignore_index=0 (0 is a valid code)
+    loss_fn = nn.CrossEntropyLoss(reduction='none')  # Get per-element losses for masking
     
     # Learning rate scheduler with warmup
     warmup_steps = cfg.get("warmup_steps", 500)
@@ -69,8 +74,9 @@ def main(cfg):
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     
+    tts_csv = cfg.get("tts_csv", "data/audio/production_tts.csv")
     train_ds = TTSDataset(
-        cfg["tts_csv"], 
+        tts_csv, 
         sr=sr, 
         n_mels=n_mels, 
         frame_ms=frame_ms, 
@@ -83,7 +89,7 @@ def main(cfg):
     train_ds._val_mode = False  # Training mode
     
     val_ds = TTSDataset(
-        cfg["tts_csv"], 
+        tts_csv, 
         sr=sr, 
         n_mels=n_mels, 
         frame_ms=frame_ms, 
@@ -131,7 +137,7 @@ def main(cfg):
     # Resume from checkpoint if available
     step = 0
     step, resume_from = load_checkpoint(
-        cfg["save_dir"], 
+        save_dir, 
         "talker_step_", 
         device, 
         logger,
@@ -162,7 +168,8 @@ def main(cfg):
     if new_train_dl is not None:
         train_dl = new_train_dl
     
-    logger.training_start(cfg["max_steps"], train_size, val_size)
+    max_steps = cfg.get("max_steps", 5000)
+    logger.training_start(max_steps, train_size, val_size)
     
     # Calculate steps per epoch and determine starting epoch/position
     # For IterableDataset, we can't use len() directly, so calculate from dataset size
@@ -200,13 +207,25 @@ def main(cfg):
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
-        for batch_idx, mel in enumerate(pbar, start=enum_start):
+        for batch_idx, batch_data in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
+            
+            # Unpack batch data (now includes mel_lengths)
+            if isinstance(batch_data, tuple) and len(batch_data) == 2:
+                mel, mel_lengths = batch_data
+                mel_lengths = mel_lengths.to(device)
+            else:
+                # Fallback for old collate function that doesn't return lengths
+                mel = batch_data
+                # Estimate lengths from mel energy (fallback)
+                mel_energy = mel.abs().sum(dim=-1)  # (B, T)
+                threshold = mel_energy.max(dim=1, keepdim=True)[0] * 0.01
+                mel_lengths = (mel_energy > threshold).sum(dim=1)  # (B,)
             
             # Update progress bar description
             remaining_epochs = max_epochs - epoch - 1
@@ -217,6 +236,13 @@ def main(cfg):
             if device == "cuda":
                 torch.compiler.cudagraph_mark_step_begin()
             
+            # Create mask to exclude padding frames from loss
+            # mel_lengths: (B,) - actual lengths before padding
+            B, T = mel.shape[0], mel.shape[1]
+            mask = torch.arange(T, device=device).unsqueeze(0) < mel_lengths.unsqueeze(1)  # (B, T)
+            # Exclude first frame (BOS) from loss, only predict from frame 1 onwards
+            mask = mask[:, 1:]  # (B, T-1) - mask for target frames
+            
             # Forward pass with mixed precision
             if use_amp:
                 with autocast(device_type='cuda'):
@@ -224,21 +250,61 @@ def main(cfg):
                     idxs = rvq.encode(mel)  # (B,T,2) - encodes all frames in batch
                     # AR training: predict current codes from previous codes
                     prev = torch.roll(idxs, 1, dims=1); prev[:,0,:]=0
-                    base_logit, res_logit = talker(prev)
-                    loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:,:,0].reshape(-1)) + \
-                           loss_fn(res_logit.reshape(-1, res_logit.size(-1)),  idxs[:,:,1].reshape(-1))
+                    base_logit, res_logit = talker(prev)  # (B, T, codebook_size)
+                    
+                    # Targets: codes shifted by 1 (predict next code)
+                    base_targets = idxs[:, 1:, 0]  # (B, T-1)
+                    res_targets = idxs[:, 1:, 1]    # (B, T-1)
+                    
+                    # Flatten and apply mask
+                    base_logit_flat = base_logit[:, :-1, :].reshape(-1, base_logit.size(-1))  # (B*(T-1), codebook_size)
+                    res_logit_flat = res_logit[:, :-1, :].reshape(-1, res_logit.size(-1))
+                    base_targets_flat = base_targets.reshape(-1)  # (B*(T-1),)
+                    res_targets_flat = res_targets.reshape(-1)
+                    mask_flat = mask.reshape(-1)  # (B*(T-1),)
+                    
+                    # Compute per-element losses
+                    base_loss_per_elem = loss_fn(base_logit_flat, base_targets_flat)  # (B*(T-1),)
+                    res_loss_per_elem = loss_fn(res_logit_flat, res_targets_flat)    # (B*(T-1),)
+                    
+                    # Apply mask: only compute loss on non-padding frames
+                    valid_elements = mask_flat.float().sum().clamp(min=1)
+                    base_loss = (base_loss_per_elem * mask_flat.float()).sum() / valid_elements
+                    res_loss = (res_loss_per_elem * mask_flat.float()).sum() / valid_elements
+                    
+                    loss = base_loss + res_loss
                     # Free intermediate tensors
-                    del base_logit, res_logit, prev
+                    del base_logit, res_logit, prev, mask
             else:
                 # Batch encode all frames at once (optimized)
                 idxs = rvq.encode(mel)  # (B,T,2) - encodes all frames in batch
                 # AR training: predict current codes from previous codes
                 prev = torch.roll(idxs, 1, dims=1); prev[:,0,:]=0
-                base_logit, res_logit = talker(prev)
-                loss = loss_fn(base_logit.reshape(-1, base_logit.size(-1)), idxs[:,:,0].reshape(-1)) + \
-                       loss_fn(res_logit.reshape(-1, res_logit.size(-1)),  idxs[:,:,1].reshape(-1))
+                base_logit, res_logit = talker(prev)  # (B, T, codebook_size)
+                
+                # Targets: codes shifted by 1
+                base_targets = idxs[:, 1:, 0]  # (B, T-1)
+                res_targets = idxs[:, 1:, 1]    # (B, T-1)
+                
+                # Flatten and apply mask
+                base_logit_flat = base_logit[:, :-1, :].reshape(-1, base_logit.size(-1))
+                res_logit_flat = res_logit[:, :-1, :].reshape(-1, res_logit.size(-1))
+                base_targets_flat = base_targets.reshape(-1)
+                res_targets_flat = res_targets.reshape(-1)
+                mask_flat = mask.reshape(-1)
+                
+                # Compute per-element losses
+                base_loss_per_elem = loss_fn(base_logit_flat, base_targets_flat)  # (B*(T-1),)
+                res_loss_per_elem = loss_fn(res_logit_flat, res_targets_flat)    # (B*(T-1),)
+                
+                # Apply mask: only compute loss on non-padding frames
+                valid_elements = mask_flat.float().sum().clamp(min=1)
+                base_loss = (base_loss_per_elem * mask_flat.float()).sum() / valid_elements
+                res_loss = (res_loss_per_elem * mask_flat.float()).sum() / valid_elements
+                
+                loss = base_loss + res_loss
                 # Free intermediate tensors
-                del base_logit, res_logit, prev
+                del base_logit, res_logit, prev, mask
             
             # Scale loss for gradient accumulation
             loss_scaled = loss / accumulation_steps
@@ -305,6 +371,7 @@ def main(cfg):
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping
+                step += 1  # Increment step counter only when optimizer step occurs
             else:
                 # Not accumulation step - just validate loss
                 unscaled_loss = loss_val * accumulation_steps
@@ -314,8 +381,6 @@ def main(cfg):
                     logger.error(f"Step {step}: {e}")
                     logger.error("Skipping this batch due to invalid loss")
                     continue
-            
-            step+=1
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
                 unscaled_loss = loss_val * accumulation_steps
@@ -323,7 +388,7 @@ def main(cfg):
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(cfg["save_dir"], f"talker_step_{step}.pt")
+                checkpoint_path = os.path.join(save_dir, f"talker_step_{step}.pt")
                 checkpoint_data = {
                     "rvq": rvq.state_dict(),
                     "talker": talker.state_dict(),
@@ -336,7 +401,7 @@ def main(cfg):
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
                 # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(cfg["save_dir"], "talker_step_", keep_last_n=1)
+                cleanup_old_checkpoints(save_dir, "talker_step_", keep_last_n=1)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -346,7 +411,23 @@ def main(cfg):
                     val_loss_sum = 0.0
                     val_count = 0
                     with torch.no_grad():
-                        for val_mel in val_dl:
+                        for val_batch_data in val_dl:
+                            # Unpack validation batch (may include mel_lengths)
+                            if isinstance(val_batch_data, tuple) and len(val_batch_data) == 2:
+                                val_mel, val_mel_lengths = val_batch_data
+                                val_mel_lengths = val_mel_lengths.to(device)
+                            else:
+                                val_mel = val_batch_data
+                                # Fallback: estimate lengths
+                                val_mel_energy = val_mel.abs().sum(dim=-1)
+                                threshold = val_mel_energy.max(dim=1, keepdim=True)[0] * 0.01
+                                val_mel_lengths = (val_mel_energy > threshold).sum(dim=1)
+                            
+                            # Create mask for validation
+                            val_B, val_T = val_mel.shape[0], val_mel.shape[1]
+                            val_mask = torch.arange(val_T, device=device).unsqueeze(0) < val_mel_lengths.unsqueeze(1)
+                            val_mask = val_mask[:, 1:]  # (B, T-1)
+                            
                             val_mel = val_mel.to(device)
                             if use_amp:
                                 with autocast(device_type='cuda'):
@@ -354,15 +435,43 @@ def main(cfg):
                                     val_idxs = rvq.encode(val_mel)  # (B,T,2)
                                     val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
                                     val_base_logit, val_res_logit = talker(val_prev)
-                                    val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
-                                               loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                                    
+                                    # Apply masking like in training
+                                    val_base_targets = val_idxs[:, 1:, 0]
+                                    val_res_targets = val_idxs[:, 1:, 1]
+                                    val_base_logit_flat = val_base_logit[:, :-1, :].reshape(-1, val_base_logit.size(-1))
+                                    val_res_logit_flat = val_res_logit[:, :-1, :].reshape(-1, val_res_logit.size(-1))
+                                    val_base_targets_flat = val_base_targets.reshape(-1)
+                                    val_res_targets_flat = val_res_targets.reshape(-1)
+                                    val_mask_flat = val_mask.reshape(-1)
+                                    
+                                    val_base_loss_per_elem = loss_fn(val_base_logit_flat, val_base_targets_flat)
+                                    val_res_loss_per_elem = loss_fn(val_res_logit_flat, val_res_targets_flat)
+                                    val_valid_elements = val_mask_flat.float().sum().clamp(min=1)
+                                    val_base_loss = (val_base_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                                    val_res_loss = (val_res_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                                    val_loss = val_base_loss + val_res_loss
                             else:
                                 # Batch encode all frames at once (optimized)
                                 val_idxs = rvq.encode(val_mel)  # (B,T,2)
                                 val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
                                 val_base_logit, val_res_logit = talker(val_prev)
-                                val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
-                                           loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                                
+                                # Apply masking like in training
+                                val_base_targets = val_idxs[:, 1:, 0]
+                                val_res_targets = val_idxs[:, 1:, 1]
+                                val_base_logit_flat = val_base_logit[:, :-1, :].reshape(-1, val_base_logit.size(-1))
+                                val_res_logit_flat = val_res_logit[:, :-1, :].reshape(-1, val_res_logit.size(-1))
+                                val_base_targets_flat = val_base_targets.reshape(-1)
+                                val_res_targets_flat = val_res_targets.reshape(-1)
+                                val_mask_flat = val_mask.reshape(-1)
+                                
+                                val_base_loss_per_elem = loss_fn(val_base_logit_flat, val_base_targets_flat)
+                                val_res_loss_per_elem = loss_fn(val_res_logit_flat, val_res_targets_flat)
+                                val_valid_elements = val_mask_flat.float().sum().clamp(min=1)
+                                val_base_loss = (val_base_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                                val_res_loss = (val_res_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                                val_loss = val_base_loss + val_res_loss
                             
                             # Validate validation loss
                             try:
@@ -381,8 +490,8 @@ def main(cfg):
                     rvq.train()
                     talker.train()
             
-            if step >= cfg["max_steps"]:
-                final_path = os.path.join(cfg["save_dir"], "talker.pt")
+            if step >= max_steps:
+                final_path = os.path.join(save_dir, "talker.pt")
                 checkpoint_data = {
                     "rvq": rvq.state_dict(),
                     "talker": talker.state_dict(),
@@ -393,7 +502,7 @@ def main(cfg):
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
-                logger.info(f"Final model saved to {cfg['save_dir']}")
+                logger.info(f"Final model saved to {save_dir}")
                 logger.training_end(step)
                 return
         
@@ -404,7 +513,24 @@ def main(cfg):
             val_loss_sum = 0.0
             val_count = 0
             with torch.no_grad():
-                for val_mel in val_dl:
+                for val_batch_data in val_dl:
+                    # Unpack validation batch (may include mel_lengths)
+                    if isinstance(val_batch_data, tuple) and len(val_batch_data) == 2:
+                        val_mel, val_mel_lengths = val_batch_data
+                        val_mel_lengths = val_mel_lengths.to(device)
+                    else:
+                        val_mel = val_batch_data
+                        # Fallback: estimate lengths
+                        val_mel_energy = val_mel.abs().sum(dim=-1)
+                        threshold = val_mel_energy.max(dim=1, keepdim=True)[0] * 0.01
+                        val_mel_lengths = (val_mel_energy > threshold).sum(dim=1)
+                    
+                    # Create mask for validation
+                    val_B, val_T = val_mel.shape[0], val_mel.shape[1]
+                    val_mask = torch.arange(val_T, device=device).unsqueeze(0) < val_mel_lengths.unsqueeze(1)
+                    val_mask = val_mask[:, 1:]  # (B, T-1)
+                    
+                    val_mel = val_mel.to(device)
                     val_mel = val_mel.to(device)
                     if use_amp:
                         with autocast(device_type='cuda'):
@@ -412,15 +538,43 @@ def main(cfg):
                             val_idxs = rvq.encode(val_mel)  # (B,T,2)
                             val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
                             val_base_logit, val_res_logit = talker(val_prev)
-                            val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
-                                       loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                            
+                            # Apply masking like in training
+                            val_base_targets = val_idxs[:, 1:, 0]
+                            val_res_targets = val_idxs[:, 1:, 1]
+                            val_base_logit_flat = val_base_logit[:, :-1, :].reshape(-1, val_base_logit.size(-1))
+                            val_res_logit_flat = val_res_logit[:, :-1, :].reshape(-1, val_res_logit.size(-1))
+                            val_base_targets_flat = val_base_targets.reshape(-1)
+                            val_res_targets_flat = val_res_targets.reshape(-1)
+                            val_mask_flat = val_mask.reshape(-1)
+                            
+                            val_base_loss_per_elem = loss_fn(val_base_logit_flat, val_base_targets_flat)
+                            val_res_loss_per_elem = loss_fn(val_res_logit_flat, val_res_targets_flat)
+                            val_valid_elements = val_mask_flat.float().sum().clamp(min=1)
+                            val_base_loss = (val_base_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                            val_res_loss = (val_res_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                            val_loss = val_base_loss + val_res_loss
                     else:
                         # Batch encode all frames at once (optimized)
                         val_idxs = rvq.encode(val_mel)  # (B,T,2)
                         val_prev = torch.roll(val_idxs, 1, dims=1); val_prev[:,0,:]=0
                         val_base_logit, val_res_logit = talker(val_prev)
-                        val_loss = loss_fn(val_base_logit.reshape(-1, val_base_logit.size(-1)), val_idxs[:,:,0].reshape(-1)) + \
-                                   loss_fn(val_res_logit.reshape(-1, val_res_logit.size(-1)), val_idxs[:,:,1].reshape(-1))
+                        
+                        # Apply masking like in training
+                        val_base_targets = val_idxs[:, 1:, 0]
+                        val_res_targets = val_idxs[:, 1:, 1]
+                        val_base_logit_flat = val_base_logit[:, :-1, :].reshape(-1, val_base_logit.size(-1))
+                        val_res_logit_flat = val_res_logit[:, :-1, :].reshape(-1, val_res_logit.size(-1))
+                        val_base_targets_flat = val_base_targets.reshape(-1)
+                        val_res_targets_flat = val_res_targets.reshape(-1)
+                        val_mask_flat = val_mask.reshape(-1)
+                        
+                        val_base_loss_per_elem = loss_fn(val_base_logit_flat, val_base_targets_flat)
+                        val_res_loss_per_elem = loss_fn(val_res_logit_flat, val_res_targets_flat)
+                        val_valid_elements = val_mask_flat.float().sum().clamp(min=1)
+                        val_base_loss = (val_base_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                        val_res_loss = (val_res_loss_per_elem * val_mask_flat.float()).sum() / val_valid_elements
+                        val_loss = val_base_loss + val_res_loss
                     
                     # Validate validation loss
                     try:
@@ -441,7 +595,7 @@ def main(cfg):
             talker.train()
         
         # Save at end of epoch (checkpoint for resuming)
-        final_path = os.path.join(cfg["save_dir"], "talker.pt")
+        final_path = os.path.join(save_dir, "talker.pt")
         checkpoint_data = {
             "rvq": rvq.state_dict(),
             "talker": talker.state_dict(),
@@ -452,11 +606,11 @@ def main(cfg):
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)
-        logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion
-        if step >= cfg["max_steps"]:
-            logger.info(f"Reached max_steps={cfg['max_steps']}. Training complete.")
+        if step >= max_steps:
+            logger.info(f"Reached max_steps={max_steps}. Training complete.")
             logger.training_end(step)
             return
         

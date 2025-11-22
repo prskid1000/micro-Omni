@@ -52,13 +52,15 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.makedirs(cfg["save_dir"], exist_ok=True)
+    save_dir = cfg.get("save_dir", "checkpoints/omni_sft_tiny")
+    os.makedirs(save_dir, exist_ok=True)
 
     # load components
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
     thinker_cfg = cfg.get("thinker", {})
+    ctx_len = cfg.get("ctx_len", 512)
     think = ThinkerLM(
         thinker_cfg.get("vocab_size", 5000),
         thinker_cfg.get("n_layers", 4),
@@ -67,7 +69,7 @@ def main(cfg):
         thinker_cfg.get("d_ff", 1024),
         thinker_cfg.get("dropout", 0.1),
         thinker_cfg.get("rope_theta", 10000),
-        cfg["ctx_len"],
+        ctx_len,
         use_gqa=thinker_cfg.get("use_gqa", False),
         use_swiglu=thinker_cfg.get("use_swiglu", True),
         use_moe=thinker_cfg.get("use_moe", False),
@@ -75,8 +77,9 @@ def main(cfg):
         num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2),
         compile_model=use_compile
     ).to(device)
-    if os.path.exists(os.path.join(cfg["thinker_ckpt"], "thinker.pt")):
-        thinker_state = torch.load(os.path.join(cfg["thinker_ckpt"], "thinker.pt"), map_location=device)
+    thinker_ckpt = cfg.get("thinker_ckpt", "checkpoints/thinker_tiny")
+    if os.path.exists(os.path.join(thinker_ckpt, "thinker.pt")):
+        thinker_state = torch.load(os.path.join(thinker_ckpt, "thinker.pt"), map_location=device)
         thinker_state = strip_orig_mod(thinker_state)
         think.load_state_dict(thinker_state)
 
@@ -95,8 +98,9 @@ def main(cfg):
         ).to(device)
     else:
         aud = AudioEncoderTiny().to(device)
-    if os.path.exists(os.path.join(cfg["audio_ckpt"], "audio_enc.pt")):
-        audio_state = torch.load(os.path.join(cfg["audio_ckpt"], "audio_enc.pt"), map_location=device)["enc"]
+    audio_ckpt = cfg.get("audio_ckpt", "checkpoints/audio_enc_tiny")
+    if os.path.exists(os.path.join(audio_ckpt, "audio_enc.pt")):
+        audio_state = torch.load(os.path.join(audio_ckpt, "audio_enc.pt"), map_location=device)["enc"]
         audio_state = strip_orig_mod(audio_state)
         aud.load_state_dict(audio_state)
 
@@ -115,8 +119,9 @@ def main(cfg):
         ).to(device)
     else:
         vis = ViTTiny().to(device)
-    if os.path.exists(os.path.join(cfg["vision_ckpt"], "vision.pt")):
-        vision_state = torch.load(os.path.join(cfg["vision_ckpt"], "vision.pt"), map_location=device)["vit"]
+    vision_ckpt = cfg.get("vision_ckpt", "checkpoints/vision_tiny")
+    if os.path.exists(os.path.join(vision_ckpt, "vision.pt")):
+        vision_state = torch.load(os.path.join(vision_ckpt, "vision.pt"), map_location=device)["vit"]
         vision_state = strip_orig_mod(vision_state)
         vis.load_state_dict(vision_state)
 
@@ -126,7 +131,7 @@ def main(cfg):
     thinker_d_model = thinker_cfg.get("d_model", 256)
     proj_a = torch.nn.Linear(audio_dim, thinker_d_model).to(device)
     proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
-    opt = torch.optim.AdamW(list(think.parameters())+list(proj_a.parameters())+list(proj_v.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
+    opt = torch.optim.AdamW(list(think.parameters())+list(proj_a.parameters())+list(proj_v.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
     
     # Learning rate scheduler with warmup
@@ -149,7 +154,7 @@ def main(cfg):
         print(f"Gradient accumulation: {accumulation_steps} steps")
 
     mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=160, win_length=400, n_mels=128).to(device)
-    tok_model = os.path.join(cfg["thinker_ckpt"], "tokenizer.model")
+    tok_model = os.path.join(thinker_ckpt, "tokenizer.model")
     from omni.tokenizer import BPETokenizer
     tok = BPETokenizer(tok_model)
 
@@ -167,12 +172,13 @@ def main(cfg):
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     
+    sft_mix = cfg.get("sft_mix", {})
     train_ds = MixDataset(
-        cfg["sft_mix"]["text_path"], 
-        cfg["sft_mix"]["image_manifest"], 
-        cfg["sft_mix"]["image_root"], 
-        cfg["sft_mix"]["asr_csv"], 
-        cfg["ctx_len"],
+        sft_mix.get("text_path", "data/text/production_text.txt"), 
+        sft_mix.get("image_manifest", "data/vision/production_vision.json"), 
+        sft_mix.get("image_root", "data/vision"), 
+        sft_mix.get("asr_csv", "data/audio/production_asr.csv"), 
+        ctx_len,
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
         seed=seed,
         skip_samples=0
@@ -181,11 +187,11 @@ def main(cfg):
     train_ds._val_mode = False  # Training mode
     
     val_ds = MixDataset(
-        cfg["sft_mix"]["text_path"], 
-        cfg["sft_mix"]["image_manifest"], 
-        cfg["sft_mix"]["image_root"], 
-        cfg["sft_mix"]["asr_csv"], 
-        cfg["ctx_len"],
+        sft_mix.get("text_path", "data/text/production_text.txt"), 
+        sft_mix.get("image_manifest", "data/vision/production_vision.json"), 
+        sft_mix.get("image_root", "data/vision"), 
+        sft_mix.get("asr_csv", "data/audio/production_asr.csv"), 
+        ctx_len,
         shuffle_buffer_size=0,  # No shuffling for validation
         seed=seed,  # Same seed for consistent hash-based split
         skip_samples=0
@@ -292,7 +298,7 @@ def main(cfg):
                             audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
                     
                     # Limit audio length and store
-                    max_audio_tokens = cfg["ctx_len"] // 4
+                    max_audio_tokens = ctx_len // 4
                     for idx, emb in zip(valid_indices, audio_emb_batch):
                         emb_trimmed = emb[:max_audio_tokens, :].unsqueeze(0)  # (1, T_trimmed, thinker_d_model)
                         audio_embeddings.append((idx, emb_trimmed))
@@ -301,7 +307,7 @@ def main(cfg):
         text_embeddings = []
         for b in range(B):
             ans = data["text"][b]
-            x_ids, y_ids = pack_text(prompt, ans, cfg["ctx_len"])
+            x_ids, y_ids = pack_text(prompt, ans, ctx_len)
             x_ids, y_ids = x_ids.to(device), y_ids.to(device)
             text_emb = think.tok_emb(x_ids.unsqueeze(0))  # (1, T_text, thinker_d_model)
             text_embeddings.append((b, text_emb, y_ids))
@@ -333,7 +339,7 @@ def main(cfg):
             
             # Calculate remaining context for text
             multimodal_len = sum(emb.shape[1] for emb in multimodal_emb_list)
-            max_text_len = cfg["ctx_len"] - multimodal_len - 1
+            max_text_len = ctx_len - multimodal_len - 1
             if max_text_len < 1:
                 max_text_len = 1
             
@@ -398,7 +404,7 @@ def main(cfg):
     
     # Resume from checkpoint if available
     step, resume_from = load_checkpoint(
-        cfg["save_dir"], 
+        save_dir, 
         "omni_step_", 
         device, 
         logger,
@@ -430,7 +436,8 @@ def main(cfg):
     if new_train_dl is not None:
         train_dl = new_train_dl
     
-    logger.training_start(cfg["max_steps"], train_size, val_size)
+    max_steps = cfg.get("max_steps", 2000)
+    logger.training_start(max_steps, train_size, val_size)
     
     # Calculate steps per epoch and determine starting epoch/position
     # For IterableDataset, we can't use len() directly, so calculate from dataset size
@@ -500,17 +507,33 @@ def main(cfg):
             try:
                 if use_amp:
                     with autocast(device_type='cuda'):
-                        logits = think(embeddings=batch_emb)  # (B, T, vocab)
-                        # Calculate loss (mask out padding)
+                        # Convert attention mask to (B, T, T) format for ThinkerLM
+                        # batch_mask is (B, T) - 1 for real tokens, 0 for padding
+                        # ThinkerLM expects (B, T, T) or (B, 1, T, T) attention mask
+                        # Create causal attention mask combined with padding mask
+                        B, T = batch_mask.shape
+                        attn_mask = batch_mask.unsqueeze(1) * batch_mask.unsqueeze(2)  # (B, T, T) - both must be 1
+                        # Apply causal mask (lower triangular)
+                        causal_mask = torch.tril(torch.ones(T, T, device=device))
+                        attn_mask = attn_mask * causal_mask.unsqueeze(0)  # (B, T, T)
+                        
+                        logits = think(embeddings=batch_emb, attn_mask=attn_mask)  # (B, T, vocab)
+                        # Calculate loss (ignore_index=0 handles padding in targets)
                         loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
                         # Free logits after loss computation
-                        del logits
+                        del logits, attn_mask
                 else:
-                    logits = think(embeddings=batch_emb)  # (B, T, vocab)
-                    # Calculate loss (mask out padding)
+                    # Convert attention mask to (B, T, T) format for ThinkerLM
+                    B, T = batch_mask.shape
+                    attn_mask = batch_mask.unsqueeze(1) * batch_mask.unsqueeze(2)  # (B, T, T)
+                    causal_mask = torch.tril(torch.ones(T, T, device=device))
+                    attn_mask = attn_mask * causal_mask.unsqueeze(0)  # (B, T, T)
+                    
+                    logits = think(embeddings=batch_emb, attn_mask=attn_mask)  # (B, T, vocab)
+                    # Calculate loss (ignore_index=0 handles padding in targets)
                     loss = loss_fn(logits.view(-1, logits.size(-1)), batch_targets.view(-1))
                     # Free logits after loss computation
-                    del logits
+                    del logits, attn_mask
             except RuntimeError as e:
                 error_msg = str(e)
                 if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
@@ -518,12 +541,12 @@ def main(cfg):
                     logger.error("Reloading from last checkpoint...")
                     # Reload from last checkpoint
                     reloaded_step = reload_from_last_checkpoint(
-                        cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                        save_dir, "omni_step_", device, logger, think, opt, scheduler, scaler
                     )
                     if reloaded_step > 0:
                         step = reloaded_step
                         # Also reload proj_a and proj_v from checkpoint
-                        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                        checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith("omni_step_") and f.endswith(".pt")]
                         if checkpoint_files:
                             step_numbers = []
                             for f in checkpoint_files:
@@ -534,7 +557,7 @@ def main(cfg):
                                     continue
                             if step_numbers:
                                 step_numbers.sort(key=lambda x: x[0], reverse=True)
-                                last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                last_checkpoint = os.path.join(save_dir, step_numbers[0][1])
                                 checkpoint = torch.load(last_checkpoint, map_location=device)
                                 if isinstance(checkpoint, dict):
                                     if "proj_a" in checkpoint:
@@ -616,6 +639,7 @@ def main(cfg):
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping
+                step += 1  # Increment step counter only when optimizer step occurs
             else:
                 # Not accumulation step - just validate loss
                 unscaled_loss = loss_val * accumulation_steps
@@ -625,8 +649,6 @@ def main(cfg):
                     logger.error(f"Step {step}: {e}")
                     logger.error("Skipping this batch due to invalid loss")
                     continue
-            
-            step += 1  # Increment global step counter
             
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
@@ -658,13 +680,19 @@ def main(cfg):
                             # Clone val_emb to avoid CUDAGraphs tensor reuse issues when using torch.compile()
                             if use_compile:
                                 val_emb = val_emb.clone()
+                            # Convert attention mask to (B, T, T) format for ThinkerLM
+                            val_B, val_T = val_mask.shape
+                            val_attn_mask = val_mask.unsqueeze(1) * val_mask.unsqueeze(2)  # (B, T, T)
+                            val_causal_mask = torch.tril(torch.ones(val_T, val_T, device=device))
+                            val_attn_mask = val_attn_mask * val_causal_mask.unsqueeze(0)  # (B, T, T)
+                            
                             try:
                                 if use_amp:
                                     with autocast(device_type='cuda'):
-                                        val_logits = think(embeddings=val_emb)
+                                        val_logits = think(embeddings=val_emb, attn_mask=val_attn_mask)
                                         val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                                 else:
-                                    val_logits = think(embeddings=val_emb)
+                                    val_logits = think(embeddings=val_emb, attn_mask=val_attn_mask)
                                     val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                                 
                                 # Validate validation loss
@@ -680,12 +708,12 @@ def main(cfg):
                                     logger.error("Reloading from last checkpoint...")
                                     # Reload from last checkpoint
                                     reloaded_step = reload_from_last_checkpoint(
-                                        cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                                        save_dir, "omni_step_", device, logger, think, opt, scheduler, scaler
                                     )
                                     if reloaded_step > 0:
                                         step = reloaded_step
                                         # Also reload proj_a and proj_v from checkpoint
-                                        checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                                        checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith("omni_step_") and f.endswith(".pt")]
                                         if checkpoint_files:
                                             step_numbers = []
                                             for f in checkpoint_files:
@@ -696,7 +724,7 @@ def main(cfg):
                                                     continue
                                             if step_numbers:
                                                 step_numbers.sort(key=lambda x: x[0], reverse=True)
-                                                last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                                last_checkpoint = os.path.join(save_dir, step_numbers[0][1])
                                                 checkpoint = torch.load(last_checkpoint, map_location=device)
                                                 if isinstance(checkpoint, dict):
                                                     if "proj_a" in checkpoint:
@@ -725,8 +753,8 @@ def main(cfg):
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(cfg["save_dir"], f"omni_step_{step}.pt")
-                os.makedirs(cfg["save_dir"], exist_ok=True)
+                checkpoint_path = os.path.join(save_dir, f"omni_step_{step}.pt")
+                os.makedirs(save_dir, exist_ok=True)
                 checkpoint_data = {
                     "thinker": think.state_dict(),
                     "proj_a": proj_a.state_dict(),
@@ -740,11 +768,11 @@ def main(cfg):
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
                 # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(cfg["save_dir"], "omni_step_", keep_last_n=1)
+                cleanup_old_checkpoints(save_dir, "omni_step_", keep_last_n=1)
             
-            if step >= cfg["max_steps"]:
-                os.makedirs(cfg["save_dir"], exist_ok=True)
-                final_path = os.path.join(cfg["save_dir"], "omni.pt")
+            if step >= max_steps:
+                os.makedirs(save_dir, exist_ok=True)
+                final_path = os.path.join(save_dir, "omni.pt")
                 checkpoint_data = {
                     "thinker": think.state_dict(),
                     "proj_a": proj_a.state_dict(),
@@ -756,7 +784,7 @@ def main(cfg):
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
-                logger.info(f"Final model saved to {cfg['save_dir']}")
+                logger.info(f"Final model saved to {save_dir}")
                 logger.training_end(step)
                 return
         
@@ -779,13 +807,19 @@ def main(cfg):
                     # Clone val_emb to avoid CUDAGraphs tensor reuse issues when using torch.compile()
                     if use_compile:
                         val_emb = val_emb.clone()
+                    # Convert attention mask to (B, T, T) format for ThinkerLM
+                    val_B, val_T = val_mask.shape
+                    val_attn_mask = val_mask.unsqueeze(1) * val_mask.unsqueeze(2)  # (B, T, T)
+                    val_causal_mask = torch.tril(torch.ones(val_T, val_T, device=device))
+                    val_attn_mask = val_attn_mask * val_causal_mask.unsqueeze(0)  # (B, T, T)
+                    
                     try:
                         if use_amp:
                             with autocast(device_type='cuda'):
-                                val_logits = think(embeddings=val_emb)
+                                val_logits = think(embeddings=val_emb, attn_mask=val_attn_mask)
                                 val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                         else:
-                            val_logits = think(embeddings=val_emb)
+                            val_logits = think(embeddings=val_emb, attn_mask=val_attn_mask)
                             val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_targets.view(-1))
                         
                         # Validate validation loss
@@ -801,12 +835,12 @@ def main(cfg):
                             logger.error("Reloading from last checkpoint...")
                             # Reload from last checkpoint
                             reloaded_step = reload_from_last_checkpoint(
-                                cfg["save_dir"], "omni_step_", device, logger, think, opt, scheduler, scaler
+                                save_dir, "omni_step_", device, logger, think, opt, scheduler, scaler
                             )
                             if reloaded_step > 0:
                                 step = reloaded_step
                                 # Also reload proj_a and proj_v from checkpoint
-                                checkpoint_files = [f for f in os.listdir(cfg["save_dir"]) if f.startswith("omni_step_") and f.endswith(".pt")]
+                                checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith("omni_step_") and f.endswith(".pt")]
                                 if checkpoint_files:
                                     step_numbers = []
                                     for f in checkpoint_files:
@@ -817,7 +851,7 @@ def main(cfg):
                                             continue
                                     if step_numbers:
                                         step_numbers.sort(key=lambda x: x[0], reverse=True)
-                                        last_checkpoint = os.path.join(cfg["save_dir"], step_numbers[0][1])
+                                        last_checkpoint = os.path.join(save_dir, step_numbers[0][1])
                                         checkpoint = torch.load(last_checkpoint, map_location=device)
                                         if isinstance(checkpoint, dict):
                                             if "proj_a" in checkpoint:
@@ -840,8 +874,8 @@ def main(cfg):
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
         
         # Save at end of epoch (checkpoint for resuming)
-        os.makedirs(cfg["save_dir"], exist_ok=True)
-        final_path = os.path.join(cfg["save_dir"], "omni.pt")
+        os.makedirs(save_dir, exist_ok=True)
+        final_path = os.path.join(save_dir, "omni.pt")
         checkpoint_data = {
             "thinker": think.state_dict(),
             "proj_a": proj_a.state_dict(),
@@ -853,11 +887,11 @@ def main(cfg):
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)
-        logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion
-        if step >= cfg["max_steps"]:
-            logger.info(f"Reached max_steps={cfg['max_steps']}. Training complete.")
+        if step >= max_steps:
+            logger.info(f"Reached max_steps={max_steps}. Training complete.")
             logger.training_end(step)
             return
         

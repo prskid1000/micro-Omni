@@ -717,13 +717,141 @@ def update_data_paths(config: Dict, config_path: str = "") -> Dict:
     
     return config
 
+def validate_and_fix_model_dimensions(config: Dict, config_path: str) -> Dict:
+    """
+    Validate and fix model dimension compatibility.
+    
+    Ensures:
+    - OCR: vision_d_model matches between vision encoder and decoder
+    - SFT: audio/vision encoder dimensions are compatible with thinker
+    - All model dimensions are consistent
+    """
+    config_name = os.path.basename(config_path).lower()
+    
+    # OCR config: Ensure vision_d_model is consistent
+    if "ocr" in config_name:
+        vision_d_model = config.get("vision_d_model", 128)
+        # Ensure decoder uses same vision_d_model (OCRDecoder.img_proj expects vision_d_model)
+        if "decoder_d_model" not in config:
+            config["decoder_d_model"] = config.get("d_model", 256)  # Default decoder dim
+        # vision_d_model is already set correctly, decoder will use it via OCRModel
+    
+    # SFT config: Ensure thinker, audio, and vision dimensions are compatible
+    if "omni_sft" in config_name or "sft" in config_name:
+        # Load thinker config to get d_model
+        thinker_cfg_path = "configs/thinker_tiny.json"
+        thinker_d_model = 256  # Default
+        if os.path.exists(thinker_cfg_path):
+            with open(thinker_cfg_path, 'r') as f:
+                thinker_cfg = json.load(f)
+                thinker_d_model = thinker_cfg.get("d_model", 256)
+        
+        # Load audio encoder config
+        audio_cfg_path = "configs/audio_enc_tiny.json"
+        audio_d_model = 192  # Default
+        if os.path.exists(audio_cfg_path):
+            with open(audio_cfg_path, 'r') as f:
+                audio_cfg = json.load(f)
+                audio_d_model = audio_cfg.get("d_model", 192)
+        
+        # Load vision encoder config
+        vision_cfg_path = "configs/vision_tiny.json"
+        vision_d_model = 128  # Default
+        if os.path.exists(vision_cfg_path):
+            with open(vision_cfg_path, 'r') as f:
+                vision_cfg = json.load(f)
+                vision_d_model = vision_cfg.get("d_model", 128)
+        
+        # Ensure thinker config exists in SFT config
+        if "thinker" not in config:
+            config["thinker"] = {}
+        if "d_model" not in config["thinker"]:
+            config["thinker"]["d_model"] = thinker_d_model
+        
+        # Projectors will handle dimension mismatch, but log for verification
+        print(f"  Model dimensions: thinker={thinker_d_model}, audio={audio_d_model}, vision={vision_d_model}")
+        print(f"  → Projectors will map: audio {audio_d_model}→{thinker_d_model}, vision {vision_d_model}→{thinker_d_model}")
+    
+    return config
+
+def validate_data_paths(config: Dict, config_path: str) -> bool:
+    """
+    Validate that all data paths in config exist.
+    
+    Returns:
+        True if all paths are valid, False otherwise
+    """
+    config_name = os.path.basename(config_path).lower()
+    all_valid = True
+    
+    # Check text paths
+    if "train_text" in config:
+        path = config["train_text"]
+        if not os.path.exists(path):
+            print(f"  ⚠ Warning: train_text path does not exist: {path}")
+            all_valid = False
+    
+    # Check image paths
+    if "train_manifest" in config:
+        path = config["train_manifest"]
+        if not os.path.exists(path):
+            print(f"  ⚠ Warning: train_manifest path does not exist: {path}")
+            all_valid = False
+    if "image_root" in config:
+        path = config["image_root"]
+        if not os.path.exists(path):
+            print(f"  ⚠ Warning: image_root path does not exist: {path}")
+            all_valid = False
+    
+    # Check audio paths
+    if "train_csv" in config:
+        path = config["train_csv"]
+        if not os.path.exists(path):
+            print(f"  ⚠ Warning: train_csv path does not exist: {path}")
+            all_valid = False
+    if "tts_csv" in config:
+        path = config["tts_csv"]
+        if not os.path.exists(path):
+            print(f"  ⚠ Warning: tts_csv path does not exist: {path}")
+            all_valid = False
+    
+    # Check OCR paths
+    if "ocr" in config_name and "train_csv" in config:
+        path = config["train_csv"]
+        if not os.path.exists(path):
+            print(f"  ⚠ Warning: OCR train_csv path does not exist: {path}")
+            all_valid = False
+    
+    # Check SFT multimodal paths
+    if "sft_mix" in config:
+        sft = config["sft_mix"]
+        if "text_path" in sft and not os.path.exists(sft["text_path"]):
+            print(f"  ⚠ Warning: sft_mix.text_path does not exist: {sft['text_path']}")
+            all_valid = False
+        if "image_manifest" in sft and not os.path.exists(sft["image_manifest"]):
+            print(f"  ⚠ Warning: sft_mix.image_manifest does not exist: {sft['image_manifest']}")
+            all_valid = False
+        if "asr_csv" in sft and not os.path.exists(sft["asr_csv"]):
+            print(f"  ⚠ Warning: sft_mix.asr_csv does not exist: {sft['asr_csv']}")
+            all_valid = False
+    
+    return all_valid
+
 def update_config_file(
     config_path: str,
     params: Dict,
     preserve_keys: Optional[list] = None,
     update_paths: bool = True
 ):
-    """Update config file with calculated parameters"""
+    """
+    Update config file with calculated parameters and validate compatibility.
+    
+    This function:
+    1. Updates training parameters (max_steps, warmup_steps, etc.)
+    2. Updates data paths if requested
+    3. Validates and fixes model dimension compatibility
+    4. Validates data paths exist
+    """
     if not os.path.exists(config_path):
         print(f"Warning: Config file not found: {config_path}")
         return False
@@ -743,6 +871,9 @@ def update_config_file(
         # Pass config_path to update_data_paths for OCR detection
         config = update_data_paths(config, config_path)
     
+    # Validate and fix model dimensions for compatibility
+    config = validate_and_fix_model_dimensions(config, config_path)
+    
     # Update training parameters
     config["max_steps"] = params["max_steps"]
     config["warmup_steps"] = params["warmup_steps"]
@@ -756,19 +887,29 @@ def update_config_file(
     if "gradient_accumulation_steps" in params:
         config["gradient_accumulation_steps"] = params["gradient_accumulation_steps"]
     
-    # Restore preserved keys (but keep updated paths)
+    # Restore preserved keys (but keep updated paths and fixed dimensions)
     for key in preserved:
         if key in config and isinstance(config[key], dict) and isinstance(preserved[key], dict):
-            # Merge dicts (e.g., sft_mix)
-            config[key].update(preserved[key])
-        else:
+            # Merge dicts (e.g., sft_mix), but preserve updated paths
+            # Only restore non-path keys
+            for subkey, subval in preserved[key].items():
+                if subkey not in ["text_path", "image_manifest", "asr_csv"]:  # Don't overwrite updated paths
+                    config[key][subkey] = subval
+        elif key not in ["train_text", "train_manifest", "train_csv", "tts_csv", "image_root"]:  # Don't overwrite updated paths
             config[key] = preserved[key]
+    
+    # Validate data paths exist
+    paths_valid = validate_data_paths(config, config_path)
+    if not paths_valid:
+        print(f"  ⚠ Some data paths are missing. Config will be saved but training may fail.")
     
     # Save updated config
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
     
     print(f"✓ Updated {config_path}")
+    if paths_valid:
+        print(f"  ✓ All data paths validated")
     return True
 
 def analyze_and_update_all_configs(dry_run: bool = False, configs_to_update: Optional[List[str]] = None,

@@ -422,6 +422,7 @@ def main(cfg):
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping
+                step += 1  # Increment step counter only when optimizer step occurs
             else:
                 # Not accumulation step - just validate loss
                 unscaled_loss = loss_val * accumulation_steps
@@ -431,7 +432,6 @@ def main(cfg):
                     logger.error(f"Step {step}: {e}")
                     logger.error("Skipping this batch due to invalid loss")
                     continue
-            step+=1
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
                 unscaled_loss = loss_val * accumulation_steps

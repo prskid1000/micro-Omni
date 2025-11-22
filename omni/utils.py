@@ -791,7 +791,9 @@ def collate_mel_fn(batch, max_mel_length=None):
         max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
     
     Returns:
-        torch.Tensor: Stacked and padded mel spectrograms of shape (B, T, n_mels)
+        tuple: (padded_mels, mel_lengths) where:
+            - padded_mels is (B, T, n_mels) - padded mel spectrograms
+            - mel_lengths is (B,) tensor of original mel lengths (before padding)
     """
     n_mels = batch[0].shape[1]
     
@@ -802,8 +804,10 @@ def collate_mel_fn(batch, max_mel_length=None):
         max_len = max(m.shape[0] for m in batch)
     
     padded = []
+    mel_lengths = []
     for m in batch:
         current_len = m.shape[0]
+        original_len = current_len  # Store original length before truncation
         if current_len > max_len:
             # Truncate if longer than max (shouldn't happen with proper config)
             m = m[:max_len]
@@ -813,7 +817,9 @@ def collate_mel_fn(batch, max_mel_length=None):
         if pad_len > 0:
             m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
         padded.append(m)
-    return torch.stack(padded)
+        mel_lengths.append(min(original_len, max_len))  # Store actual length used (may be truncated)
+    
+    return torch.stack(padded), torch.tensor(mel_lengths, dtype=torch.long)
 
 def collate_mel_text_fn(batch, max_mel_length=None):
     """
@@ -825,7 +831,10 @@ def collate_mel_text_fn(batch, max_mel_length=None):
         max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
     
     Returns:
-        tuple: (padded_mels, texts) where padded_mels is (B, T, n_mels) and texts is a list
+        tuple: (padded_mels, texts, mel_lengths) where:
+            - padded_mels is (B, T, n_mels) - padded mel spectrograms
+            - texts is a list of text strings
+            - mel_lengths is (B,) tensor of original mel lengths (before padding)
     """
     mels, texts = zip(*batch)
     n_mels = mels[0].shape[1]
@@ -837,8 +846,10 @@ def collate_mel_text_fn(batch, max_mel_length=None):
         max_len = max(m.shape[0] for m in mels)
     
     padded_mels = []
+    mel_lengths = []
     for m in mels:
         current_len = m.shape[0]
+        original_len = current_len  # Store original length before truncation
         if current_len > max_len:
             # Truncate if longer than max (shouldn't happen with proper config)
             m = m[:max_len]
@@ -848,7 +859,9 @@ def collate_mel_text_fn(batch, max_mel_length=None):
         if pad_len > 0:
             m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
         padded_mels.append(m)
-    return torch.stack(padded_mels), list(texts)
+        mel_lengths.append(min(original_len, max_len))  # Store actual length used (may be truncated)
+    
+    return torch.stack(padded_mels), list(texts), torch.tensor(mel_lengths, dtype=torch.long)
 
 def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
     """
@@ -861,7 +874,11 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
         max_audio_length: Fixed maximum audio length to pad to. If None, uses batch max
     
     Returns:
-        tuple: (padded_mels, padded_audios) both as torch.Tensor
+        tuple: (padded_mels, padded_audios, mel_lengths, audio_lengths) where:
+            - padded_mels is (B, T_mel, n_mels) - padded mel spectrograms
+            - padded_audios is (B, T_audio) - padded audio waveforms
+            - mel_lengths is (B,) tensor of original mel lengths (before padding)
+            - audio_lengths is (B,) tensor of original audio lengths (before padding)
     """
     mels, audios = zip(*batch)
     
@@ -873,8 +890,10 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
         max_mel_len = max(m.shape[0] for m in mels)
     
     padded_mels = []
+    mel_lengths = []
     for m in mels:
         current_len = m.shape[0]
+        original_len = current_len  # Store original length before truncation
         if current_len > max_mel_len:
             m = m[:max_mel_len]
             current_len = max_mel_len
@@ -882,6 +901,7 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
         if pad_len > 0:
             m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
         padded_mels.append(m)
+        mel_lengths.append(min(original_len, max_mel_len))  # Store actual length used (may be truncated)
     
     # Pad audio waveforms
     if max_audio_length is not None:
@@ -890,8 +910,10 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
         max_audio_len = max(a.shape[0] for a in audios)
     
     padded_audios = []
+    audio_lengths = []
     for a in audios:
         current_len = a.shape[0]
+        original_len = current_len  # Store original length before truncation
         if current_len > max_audio_len:
             a = a[:max_audio_len].clone()  # Clone to free original if longer
             current_len = max_audio_len
@@ -899,8 +921,14 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
         if pad_len > 0:
             a = torch.cat([a, torch.zeros(pad_len, dtype=a.dtype, device=a.device)], dim=0)
         padded_audios.append(a)
+        audio_lengths.append(min(original_len, max_audio_len))  # Store actual length used (may be truncated)
     
-    return torch.stack(padded_mels), torch.stack(padded_audios)
+    return (
+        torch.stack(padded_mels), 
+        torch.stack(padded_audios),
+        torch.tensor(mel_lengths, dtype=torch.long),
+        torch.tensor(audio_lengths, dtype=torch.long)
+    )
 
 class ValidationSkipSamplesContext:
     """Context manager to temporarily reset skip_samples for validation."""

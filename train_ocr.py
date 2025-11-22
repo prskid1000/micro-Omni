@@ -367,8 +367,7 @@ def main(cfg):
                 
                 scheduler.step()
                 opt.zero_grad()
-            
-            step += 1
+                step += 1  # Increment step counter only when optimizer step occurs
             
             # Logging
             if step % print_freq == 0:

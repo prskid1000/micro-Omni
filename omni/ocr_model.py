@@ -96,7 +96,8 @@ class OCRDecoder(nn.Module):
                  d_ff: int = 1024, vocab_size: int = 128, dropout: float = 0.1,
                  max_seq_len: int = 256, use_gqa: bool = False, kv_groups: int = 1,
                  use_swiglu: bool = True, rope_theta: float = 10000.0,
-                 use_flash: bool = True, compile_model: bool = False) -> None:
+                 use_flash: bool = True, compile_model: bool = False,
+                 vision_dim: int = 128) -> None:
         """
         Initialize OCR decoder.
         
@@ -135,7 +136,8 @@ class OCRDecoder(nn.Module):
         self.head = nn.Linear(d_model, vocab_size, bias=False)
         
         # Image feature projection (from vision encoder output)
-        self.img_proj = nn.Linear(128, d_model)  # ViT outputs 128-dim, project to d_model
+        # vision_dim should match the vision encoder's d_model
+        self.img_proj = nn.Linear(vision_dim, d_model)
         
         # KV cache for autoregressive generation
         self.kv_cache = None
@@ -290,7 +292,8 @@ class OCRModel(nn.Module):
             use_gqa=use_gqa,
             use_swiglu=use_swiglu,
             use_flash=use_flash,
-            compile_model=compile_model
+            compile_model=compile_model,
+            vision_dim=vision_d_model  # Pass vision encoder dimension
         )
     
     def forward(self, image: torch.Tensor, text_ids: torch.Tensor) -> torch.Tensor:
@@ -305,11 +308,11 @@ class OCRModel(nn.Module):
             logits: (B, T, vocab_size) character prediction logits
         """
         # Encode image
-        cls, grid = self.vision_encoder(image)  # cls: (B, 1, 128), grid: (B, N, 128)
+        cls, grid = self.vision_encoder(image)  # cls: (B, 1, vision_d_model), grid: (B, N, vision_d_model)
         
         # Use grid features (spatial patches) for OCR (better for text detection)
         # Can also use CLS token or combine both
-        img_features = grid  # (B, N, 128)
+        img_features = grid  # (B, N, vision_d_model)
         
         # Decode text from image features
         logits = self.decoder(text_ids, img_features)  # (B, T, vocab_size)

@@ -14,7 +14,8 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.makedirs(cfg["save_dir"], exist_ok=True)
+    save_dir = cfg.get("save_dir", "checkpoints/audio_enc_tiny")
+    os.makedirs(save_dir, exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("mel_bins", 128)
     downsample_factor = cfg.get("downsample_time", 8)  # 8x for 12.5 Hz (16000/160/8 = 12.5)
@@ -22,11 +23,11 @@ def main(cfg):
     use_compile = cfg.get("use_compile", False)
     
     model = AudioEncoderTiny(
-        cfg["d_model"], 
-        cfg["n_heads"], 
-        cfg["d_ff"], 
-        cfg["n_layers"], 
-        cfg["dropout"],
+        cfg.get("d_model", 192), 
+        cfg.get("n_heads", 3), 
+        cfg.get("d_ff", 768), 
+        cfg.get("n_layers", 4), 
+        cfg.get("dropout", 0.1),
         downsample_factor=downsample_factor,
         compile_model=use_compile
     ).to(device)
@@ -43,11 +44,12 @@ def main(cfg):
     
     # Use proper vocabulary size instead of toy 64
     vocab = cfg.get("ctc_vocab_size", vocab_size_ctc)  # Proper char vocab size
-    head = nn.Linear(cfg["d_model"], vocab).to(device)
+    d_model = cfg.get("d_model", 192)
+    head = nn.Linear(d_model, vocab).to(device)
     ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True)
     print(f"CTC vocabulary size: {vocab} (includes blank token)")
     print(f"Character vocabulary: {len(char_to_idx)} characters")
-    opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()), lr=cfg["lr"], weight_decay=cfg["wd"])
+    opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.1))
     
     unk_idx = char_to_idx['<UNK>']
     max_text_len = cfg.get("max_text_len", 64)
@@ -102,7 +104,7 @@ def main(cfg):
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     
     train_ds = ASRDataset(
-        cfg["train_csv"], 
+        train_csv, 
         sr=sr, 
         n_mels=n_mels, 
         cfg=cfg,
@@ -114,7 +116,7 @@ def main(cfg):
     train_ds._val_mode = False  # Training mode
     
     val_ds = ASRDataset(
-        cfg["train_csv"], 
+        train_csv, 
         sr=sr, 
         n_mels=n_mels, 
         cfg=cfg,
@@ -151,7 +153,7 @@ def main(cfg):
     # Resume from checkpoint if available
     step = 0
     step, resume_from = load_checkpoint(
-        cfg["save_dir"], 
+        save_dir, 
         "audio_enc_step_", 
         device, 
         logger,
@@ -182,7 +184,8 @@ def main(cfg):
     if new_train_dl is not None:
         train_dl = new_train_dl
     
-    logger.training_start(cfg["max_steps"], train_size, val_size)
+    max_steps = cfg.get("max_steps", 5000)
+    logger.training_start(max_steps, train_size, val_size)
     
     # Calculate steps per epoch and determine starting epoch/position
     # For IterableDataset, we can't use len() directly, so calculate from dataset size
@@ -220,13 +223,25 @@ def main(cfg):
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
-        for batch_idx, (mel, text) in enumerate(pbar, start=enum_start):
+        for batch_idx, batch_data in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
+            
+            # Unpack batch data (now includes mel_lengths)
+            if len(batch_data) == 3:
+                mel, text, mel_lengths = batch_data
+                mel_lengths = mel_lengths.to(device)
+            else:
+                # Fallback for old collate function that doesn't return lengths
+                mel, text = batch_data
+                # Estimate lengths from mel energy (fallback)
+                mel_energy = mel.abs().sum(dim=-1)  # (B, T)
+                threshold = mel_energy.max(dim=1, keepdim=True)[0] * 0.01
+                mel_lengths = (mel_energy > threshold).sum(dim=1)  # (B,)
             
             # Update progress bar description
             remaining_epochs = max_epochs - epoch - 1
@@ -247,16 +262,24 @@ def main(cfg):
                     x = model(mel)  # (B, T', d)
                     logit = head(x)  # (B,T',V)
                     log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
-                    inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
-                    loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+                    # Calculate actual input lengths: original mel length / downsample_factor
+                    # This excludes padding frames from CTC loss calculation
+                    actual_inp_lens = (mel_lengths / downsample_factor).long().clamp(min=1)
+                    # Ensure we don't exceed log_prob length (shouldn't happen, but safety check)
+                    max_log_prob_len = log_prob.size(0)
+                    actual_inp_lens = torch.clamp(actual_inp_lens, max=max_log_prob_len)
+                    loss = ctc_loss(log_prob, tgt, actual_inp_lens, tgt_lens)
                     # Free intermediate tensors
                     del x, logit, log_prob
             else:
                 x = model(mel)  # (B, T', d)
                 logit = head(x)  # (B,T',V)
                 log_prob = logit.log_softmax(-1).transpose(0,1)  # (T',B,V)
-                inp_lens = torch.full((log_prob.size(1),), log_prob.size(0), dtype=torch.long, device=log_prob.device)
-                loss = ctc_loss(log_prob, tgt, inp_lens, tgt_lens)
+                # Calculate actual input lengths: original mel length / downsample_factor
+                actual_inp_lens = (mel_lengths / downsample_factor).long().clamp(min=1)
+                max_log_prob_len = log_prob.size(0)
+                actual_inp_lens = torch.clamp(actual_inp_lens, max=max_log_prob_len)
+                loss = ctc_loss(log_prob, tgt, actual_inp_lens, tgt_lens)
                 # Free intermediate tensors
                 del x, logit, log_prob
             
@@ -325,6 +348,7 @@ def main(cfg):
                     opt.step()
                 scheduler.step()
                 opt.zero_grad()  # Clear gradients after stepping
+                step += 1  # Increment step counter only when optimizer step occurs
             else:
                 # Not accumulation step - just validate loss
                 unscaled_loss = loss_val * accumulation_steps
@@ -335,8 +359,6 @@ def main(cfg):
                     logger.error("Skipping this batch due to invalid loss")
                     # Don't clear gradients here - we're accumulating
                     continue
-            
-            step+=1
             if step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
                 unscaled_loss = loss_val * accumulation_steps
@@ -344,7 +366,7 @@ def main(cfg):
             
             # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(cfg["save_dir"], f"audio_enc_step_{step}.pt")
+                checkpoint_path = os.path.join(save_dir, f"audio_enc_step_{step}.pt")
                 checkpoint_data = {
                     "enc": model.state_dict(),
                     "head": head.state_dict(),
@@ -357,7 +379,7 @@ def main(cfg):
                 torch.save(checkpoint_data, checkpoint_path)
                 logger.checkpoint(step, checkpoint_path)
                 # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(cfg["save_dir"], "audio_enc_step_", keep_last_n=1)
+                cleanup_old_checkpoints(save_dir, "audio_enc_step_", keep_last_n=1)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -368,7 +390,18 @@ def main(cfg):
                     val_count = 0
                     batch_size = cfg.get("batch_size", 4)
                     with torch.no_grad():
-                        for val_mel, val_text in val_dl:
+                        for val_batch_data in val_dl:
+                            # Unpack validation batch (may include mel_lengths)
+                            if len(val_batch_data) == 3:
+                                val_mel, val_text, val_mel_lengths = val_batch_data
+                                val_mel_lengths = val_mel_lengths.to(device)
+                            else:
+                                val_mel, val_text = val_batch_data
+                                # Fallback: estimate lengths
+                                val_mel_energy = val_mel.abs().sum(dim=-1)
+                                threshold = val_mel_energy.max(dim=1, keepdim=True)[0] * 0.01
+                                val_mel_lengths = (val_mel_energy > threshold).sum(dim=1)
+                            
                             # Skip batches that don't match training batch size (CUDA graphs require fixed batch sizes)
                             if use_compile and val_mel.size(0) != batch_size:
                                 continue
@@ -381,14 +414,16 @@ def main(cfg):
                                     val_x = model(val_mel)
                                     val_logit = head(val_x)
                                     val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                                    val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
-                                    val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                                    val_actual_inp_lens = (val_mel_lengths / downsample_factor).long().clamp(min=1)
+                                    val_actual_inp_lens = torch.clamp(val_actual_inp_lens, max=val_log_prob.size(0))
+                                    val_loss = ctc_loss(val_log_prob, val_tgt, val_actual_inp_lens, val_tgt_lens)
                             else:
                                 val_x = model(val_mel)
                                 val_logit = head(val_x)
                                 val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                                val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
-                                val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                                val_actual_inp_lens = (val_mel_lengths / downsample_factor).long().clamp(min=1)
+                                val_actual_inp_lens = torch.clamp(val_actual_inp_lens, max=val_log_prob.size(0))
+                                val_loss = ctc_loss(val_log_prob, val_tgt, val_actual_inp_lens, val_tgt_lens)
                             
                             # Validate validation loss
                             try:
@@ -409,8 +444,8 @@ def main(cfg):
                     model.train()
                     head.train()
             
-            if step >= cfg["max_steps"]:
-                final_path = os.path.join(cfg["save_dir"], "audio_enc.pt")
+            if step >= max_steps:
+                final_path = os.path.join(save_dir, "audio_enc.pt")
                 checkpoint_data = {
                     "enc": model.state_dict(),
                     "head": head.state_dict(),
@@ -421,7 +456,7 @@ def main(cfg):
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
-                logger.info(f"Final model saved to {cfg['save_dir']}")
+                logger.info(f"Final model saved to {save_dir}")
                 logger.training_end(step)
                 return
         
@@ -433,7 +468,18 @@ def main(cfg):
             val_count = 0
             batch_size = cfg.get("batch_size", 4)
             with torch.no_grad():
-                for val_mel, val_text in val_dl:
+                for val_batch_data in val_dl:
+                    # Unpack validation batch (may include mel_lengths)
+                    if len(val_batch_data) == 3:
+                        val_mel, val_text, val_mel_lengths = val_batch_data
+                        val_mel_lengths = val_mel_lengths.to(device)
+                    else:
+                        val_mel, val_text = val_batch_data
+                        # Fallback: estimate lengths
+                        val_mel_energy = val_mel.abs().sum(dim=-1)
+                        threshold = val_mel_energy.max(dim=1, keepdim=True)[0] * 0.01
+                        val_mel_lengths = (val_mel_energy > threshold).sum(dim=1)
+                    
                     # Skip batches that don't match training batch size (CUDA graphs require fixed batch sizes)
                     if use_compile and val_mel.size(0) != batch_size:
                         continue
@@ -446,14 +492,16 @@ def main(cfg):
                             val_x = model(val_mel)
                             val_logit = head(val_x)
                             val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                            val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
-                            val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                            val_actual_inp_lens = (val_mel_lengths / downsample_factor).long().clamp(min=1)
+                            val_actual_inp_lens = torch.clamp(val_actual_inp_lens, max=val_log_prob.size(0))
+                            val_loss = ctc_loss(val_log_prob, val_tgt, val_actual_inp_lens, val_tgt_lens)
                     else:
                         val_x = model(val_mel)
                         val_logit = head(val_x)
                         val_log_prob = val_logit.log_softmax(-1).transpose(0,1)
-                        val_inp_lens = torch.full((val_log_prob.size(1),), val_log_prob.size(0), dtype=torch.long, device=val_log_prob.device)
-                        val_loss = ctc_loss(val_log_prob, val_tgt, val_inp_lens, val_tgt_lens)
+                        val_actual_inp_lens = (val_mel_lengths / downsample_factor).long().clamp(min=1)
+                        val_actual_inp_lens = torch.clamp(val_actual_inp_lens, max=val_log_prob.size(0))
+                        val_loss = ctc_loss(val_log_prob, val_tgt, val_actual_inp_lens, val_tgt_lens)
                     
                     # Validate validation loss
                     try:
@@ -474,7 +522,7 @@ def main(cfg):
             head.train()
         
         # Save at end of epoch (checkpoint for resuming)
-        final_path = os.path.join(cfg["save_dir"], "audio_enc.pt")
+        final_path = os.path.join(save_dir, "audio_enc.pt")
         checkpoint_data = {
             "enc": model.state_dict(),
             "head": head.state_dict(),
@@ -485,11 +533,11 @@ def main(cfg):
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)
-        logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
+        logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion
-        if step >= cfg["max_steps"]:
-            logger.info(f"Reached max_steps={cfg['max_steps']}. Training complete.")
+        if step >= max_steps:
+            logger.info(f"Reached max_steps={max_steps}. Training complete.")
             logger.training_end(step)
             return
         

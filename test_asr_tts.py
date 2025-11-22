@@ -164,6 +164,23 @@ def load_asr_models(audio_ckpt_dir, device="cuda"):
     ctc_head.eval()
     print("✓ Audio Encoder + CTC Head loaded successfully")
     
+    # Diagnostic: Check CTC head weights
+    if head_state is not None:
+        ctc_weight = ctc_head.weight.data
+        ctc_bias = ctc_head.bias.data if ctc_head.bias is not None else None
+        print(f"  CTC head weight stats: mean={ctc_weight.mean():.4f}, std={ctc_weight.std():.4f}, "
+              f"min={ctc_weight.min():.4f}, max={ctc_weight.max():.4f}")
+        if ctc_bias is not None:
+            print(f"  CTC head bias stats: mean={ctc_bias.mean():.4f}, std={ctc_bias.std():.4f}, "
+                  f"min={ctc_bias.min():.4f}, max={ctc_bias.max():.4f}")
+        # Check if blank token (index 0) has unusually high bias
+        if ctc_bias is not None:
+            blank_bias = ctc_bias[0].item()
+            avg_bias = ctc_bias.mean().item()
+            print(f"  Blank token (0) bias: {blank_bias:.4f} (avg bias: {avg_bias:.4f}, diff: {blank_bias - avg_bias:.4f})")
+            if blank_bias > avg_bias + 2.0:
+                print(f"  ⚠ Warning: Blank token bias is unusually high - model may favor blank predictions")
+    
     return audio_encoder, ctc_head, char_to_idx, idx_to_char, cfg
 
 
@@ -410,6 +427,13 @@ def evaluate_asr_tts_roundtrip(audio_encoder, ctc_head, talker, rvq, vocoder, to
                 
                 # ===== STEP 1: ASR (Speech → Text) =====
                 audio_emb = audio_encoder(mel)  # (B, T', d_model)
+                
+                # Debug: Check audio encoder output for first few samples
+                if i < 3:
+                    print(f"    Audio encoder output shape: {audio_emb.shape}")
+                    print(f"    Audio encoder output stats: mean={audio_emb.mean():.4f}, std={audio_emb.std():.4f}, "
+                          f"min={audio_emb.min():.4f}, max={audio_emb.max():.4f}")
+                
                 logits = ctc_head(audio_emb)  # (B, T', vocab_size)
                 
                 # Compute ASR loss (match training format exactly)
@@ -439,11 +463,40 @@ def evaluate_asr_tts_roundtrip(audio_encoder, ctc_head, talker, rvq, vocoder, to
                 
                 # Debug: Print first few samples to see what's happening
                 if i < 3:
-                    print(f"\n  Sample {i}:")
+                    print(f"\n  Sample {i + 1}:")
                     print(f"    Ground truth: '{ground_truth_text}'")
                     print(f"    Predicted: '{predicted_text}'")
                     print(f"    Logits shape: {logits.shape}, max: {logits.max():.2f}, min: {logits.min():.2f}")
-                    print(f"    Top 5 predictions at frame 0: {torch.topk(logits[0, 0, :], 5).indices.tolist()}")
+                    
+                    # Show top predictions at frame 0 with their meanings
+                    top5_vals, top5_indices = torch.topk(logits[0, 0, :], 5)
+                    top5_probs = torch.softmax(logits[0, 0, :], dim=-1)[top5_indices]
+                    print(f"    Top 5 predictions at frame 0:")
+                    for rank, (token_idx, logit_val, prob) in enumerate(zip(top5_indices.tolist(), top5_vals.tolist(), top5_probs.tolist())):
+                        token_char = idx_to_char.get(token_idx, f'<UNK:{token_idx}>')
+                        print(f"      [{rank}] Token {token_idx} ({token_char}): logit={logit_val:.2f}, prob={prob:.4f}")
+                    
+                    # Show raw predictions before CTC collapse
+                    raw_pred_ids = torch.argmax(logits[0], dim=-1).cpu().tolist()  # (T,)
+                    raw_pred_chars = [idx_to_char.get(idx, f'<{idx}>') for idx in raw_pred_ids[:20]]  # First 20 frames
+                    print(f"    Raw predictions (first 20 frames): {raw_pred_ids[:20]}")
+                    print(f"    Raw chars (first 20 frames): {raw_pred_chars}")
+                    
+                    # Count token frequencies
+                    unique, counts = torch.unique(torch.tensor(raw_pred_ids), return_counts=True)
+                    top_tokens = sorted(zip(counts.tolist(), unique.tolist()), reverse=True)[:5]
+                    print(f"    Most frequent tokens: {[(count, idx_to_char.get(idx, f'<{idx}>')) for count, idx in top_tokens]}")
+                    
+                    # Check if blank token bias is causing the issue
+                    if ctc_head.bias is not None:
+                        blank_bias = ctc_head.bias[0].item()
+                        # Check average logit for blank vs other tokens at frame 0
+                        blank_logit = logits[0, 0, 0].item()
+                        non_blank_logits = logits[0, 0, 1:].mean().item()
+                        print(f"    Blank token logit at frame 0: {blank_logit:.4f} (bias: {blank_bias:.4f})")
+                        print(f"    Avg non-blank logit at frame 0: {non_blank_logits:.4f}")
+                        if blank_logit > non_blank_logits + 3.0:
+                            print(f"    ⚠ Blank token logit is much higher than others - model strongly favors blank")
                 
                 # Calculate ASR metrics
                 wer, wer_ed, ref_words = calculate_wer(ground_truth_text, predicted_text)
