@@ -35,6 +35,112 @@ def load_checkpoint(path, device="cpu"):
         return None
 
 
+def discover_checkpoints(base_dir="checkpoints"):
+    """
+    Automatically discover all available checkpoints in common locations.
+    
+    Searches for checkpoints in the base_dir directory by looking for:
+    - Common checkpoint directory names (thinker_tiny, audio_enc_tiny, etc.)
+    - Verifies checkpoints exist using find_checkpoint
+    
+    Args:
+        base_dir: Base directory to search in (default: "checkpoints")
+    
+    Returns:
+        dict with keys: omni_ckpt_dir, thinker_ckpt_dir, audio_ckpt_dir, 
+                       vision_ckpt_dir, talker_ckpt_dir, ocr_ckpt_dir
+    """
+    discovered = {}
+    
+    if not os.path.exists(base_dir):
+        return discovered
+    
+    print(f"Discovering checkpoints in {base_dir}...")
+    
+    # Common checkpoint directory patterns and their corresponding checkpoint files
+    checkpoint_patterns = [
+        # (directory_pattern, checkpoint_file, step_prefix, key_name)
+        ("thinker", "thinker.pt", "thinker_step_", "thinker_ckpt_dir"),
+        ("thinker_tiny", "thinker.pt", "thinker_step_", "thinker_ckpt_dir"),
+        ("audio_enc", "audio_enc.pt", "audio_enc_step_", "audio_ckpt_dir"),
+        ("audio_enc_tiny", "audio_enc.pt", "audio_enc_step_", "audio_ckpt_dir"),
+        ("vision", "vision.pt", "vision_step_", "vision_ckpt_dir"),
+        ("vision_tiny", "vision.pt", "vision_step_", "vision_ckpt_dir"),
+        ("talker", "talker.pt", "talker_step_", "talker_ckpt_dir"),
+        ("talker_tiny", "talker.pt", "talker_step_", "talker_ckpt_dir"),
+        ("omni_sft", "omni.pt", "omni_step_", "omni_ckpt_dir"),
+        ("omni_sft_tiny", "omni.pt", "omni_step_", "omni_ckpt_dir"),
+        ("ocr", "ocr.pt", "ocr_step_", "ocr_ckpt_dir"),
+        ("ocr_tiny", "ocr.pt", "ocr_step_", "ocr_ckpt_dir"),
+    ]
+    
+    # Search for each pattern
+    for dir_pattern, ckpt_file, step_prefix, key_name in checkpoint_patterns:
+        # Skip if we already found this component
+        if key_name in discovered:
+            continue
+            
+        # Check if directory exists
+        ckpt_dir = os.path.join(base_dir, dir_pattern)
+        if os.path.exists(ckpt_dir) and os.path.isdir(ckpt_dir):
+            # Verify checkpoint exists
+            ckpt_path, ckpt_data = find_checkpoint(ckpt_dir, ckpt_file, step_prefix, device="cpu")
+            if ckpt_path and ckpt_data:
+                discovered[key_name] = ckpt_dir
+                print(f"  ✓ Discovered {key_name}: {ckpt_dir}")
+    
+    # Also search for any directory containing the checkpoint files directly
+    try:
+        for item in os.listdir(base_dir):
+            item_path = os.path.join(base_dir, item)
+            if os.path.isdir(item_path):
+                # Check for thinker
+                if "thinker_ckpt_dir" not in discovered:
+                    ckpt_path, ckpt_data = find_checkpoint(item_path, "thinker.pt", "thinker_step_", device="cpu")
+                    if ckpt_path and ckpt_data:
+                        discovered["thinker_ckpt_dir"] = item_path
+                        print(f"  ✓ Discovered thinker_ckpt_dir: {item_path}")
+                
+                # Check for audio encoder
+                if "audio_ckpt_dir" not in discovered:
+                    ckpt_path, ckpt_data = find_checkpoint(item_path, "audio_enc.pt", "audio_enc_step_", device="cpu")
+                    if ckpt_path and ckpt_data:
+                        discovered["audio_ckpt_dir"] = item_path
+                        print(f"  ✓ Discovered audio_ckpt_dir: {item_path}")
+                
+                # Check for vision encoder
+                if "vision_ckpt_dir" not in discovered:
+                    ckpt_path, ckpt_data = find_checkpoint(item_path, "vision.pt", "vision_step_", device="cpu")
+                    if ckpt_path and ckpt_data:
+                        discovered["vision_ckpt_dir"] = item_path
+                        print(f"  ✓ Discovered vision_ckpt_dir: {item_path}")
+                
+                # Check for talker
+                if "talker_ckpt_dir" not in discovered:
+                    ckpt_path, ckpt_data = find_checkpoint(item_path, "talker.pt", "talker_step_", device="cpu")
+                    if ckpt_path and ckpt_data:
+                        discovered["talker_ckpt_dir"] = item_path
+                        print(f"  ✓ Discovered talker_ckpt_dir: {item_path}")
+                
+                # Check for omni
+                if "omni_ckpt_dir" not in discovered:
+                    ckpt_path, ckpt_data = find_checkpoint(item_path, "omni.pt", "omni_step_", device="cpu")
+                    if ckpt_path and ckpt_data:
+                        discovered["omni_ckpt_dir"] = item_path
+                        print(f"  ✓ Discovered omni_ckpt_dir: {item_path}")
+                
+                # Check for OCR
+                if "ocr_ckpt_dir" not in discovered:
+                    ckpt_path, ckpt_data = find_checkpoint(item_path, "ocr.pt", "ocr_step_", device="cpu")
+                    if ckpt_path and ckpt_data:
+                        discovered["ocr_ckpt_dir"] = item_path
+                        print(f"  ✓ Discovered ocr_ckpt_dir: {item_path}")
+    except Exception as e:
+        print(f"  ⚠ Warning: Error while searching {base_dir}: {e}")
+    
+    return discovered
+
+
 def load_checkpoint_paths_from_config(config_path, configs_dir="configs"):
     """
     Load checkpoint paths from the omni config file.
@@ -513,13 +619,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Export all components (auto-detects checkpoint paths from configs/omni_sft_tiny.json)
+  # Export all available components (auto-discovers checkpoints in checkpoints/ directory)
   python export.py
 
-  # Export with custom config file
+  # Export with custom config file (still auto-discovers missing components)
   python export.py --omni_config omni_sft_tiny.json
 
-  # Export with explicit checkpoint paths (overrides config file)
+  # Export with explicit checkpoint paths (overrides auto-discovery)
   python export.py \\
       --omni_ckpt checkpoints/omni_sft_tiny \\
       --thinker_ckpt checkpoints/thinker_tiny \\
@@ -527,9 +633,11 @@ Examples:
       --vision_ckpt checkpoints/vision_tiny \\
       --talker_ckpt checkpoints/talker_tiny
 
-  # Export (only main config.json is created, component configs are not copied)
-
-Note: Config files are always read from the configs/ folder.
+Note: The script automatically discovers and exports ALL available models:
+      - First tries command line arguments
+      - Then tries paths from config file
+      - Finally auto-discovers checkpoints in checkpoints/ directory
+      Config files are always read from the configs/ folder.
       Merged model and export files are saved to the export/ folder by default.
         """
     )
@@ -599,13 +707,18 @@ Note: Config files are always read from the configs/ folder.
     if args.omni_config:
         config_paths = load_checkpoint_paths_from_config(args.omni_config, configs_dir)
     
-    # Use command line arguments if provided, otherwise use paths from config file
-    omni_ckpt_dir = args.omni_ckpt or config_paths.get("omni_ckpt_dir")
-    thinker_ckpt_dir = args.thinker_ckpt or config_paths.get("thinker_ckpt_dir")
-    audio_ckpt_dir = args.audio_ckpt or config_paths.get("audio_ckpt_dir")
-    vision_ckpt_dir = args.vision_ckpt or config_paths.get("vision_ckpt_dir")
-    talker_ckpt_dir = args.talker_ckpt or config_paths.get("talker_ckpt_dir")
-    ocr_ckpt_dir = args.ocr_ckpt or config_paths.get("ocr_ckpt_dir")
+    # Discover checkpoints automatically - always try to find all available models
+    # This ensures we export all available models even if not explicitly specified
+    discovered_paths = discover_checkpoints("checkpoints")
+    
+    # Use command line arguments if provided, otherwise use paths from config file,
+    # otherwise use discovered paths - this ensures all available models are exported
+    omni_ckpt_dir = args.omni_ckpt or config_paths.get("omni_ckpt_dir") or discovered_paths.get("omni_ckpt_dir")
+    thinker_ckpt_dir = args.thinker_ckpt or config_paths.get("thinker_ckpt_dir") or discovered_paths.get("thinker_ckpt_dir")
+    audio_ckpt_dir = args.audio_ckpt or config_paths.get("audio_ckpt_dir") or discovered_paths.get("audio_ckpt_dir")
+    vision_ckpt_dir = args.vision_ckpt or config_paths.get("vision_ckpt_dir") or discovered_paths.get("vision_ckpt_dir")
+    talker_ckpt_dir = args.talker_ckpt or config_paths.get("talker_ckpt_dir") or discovered_paths.get("talker_ckpt_dir")
+    ocr_ckpt_dir = args.ocr_ckpt or config_paths.get("ocr_ckpt_dir") or discovered_paths.get("ocr_ckpt_dir")
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)

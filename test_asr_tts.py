@@ -412,19 +412,38 @@ def evaluate_asr_tts_roundtrip(audio_encoder, ctc_head, talker, rvq, vocoder, to
                 audio_emb = audio_encoder(mel)  # (B, T', d_model)
                 logits = ctc_head(audio_emb)  # (B, T', vocab_size)
                 
-                # Compute ASR loss
+                # Compute ASR loss (match training format exactly)
                 tgt_ids = encode_text(ground_truth_text, char_to_idx, unk_idx).to(device)
                 tgt_len = torch.tensor([len(tgt_ids)], dtype=torch.long, device=device)
-                inp_len = torch.tensor([logits.size(1)], dtype=torch.long, device=device)
                 
+                # Transpose first, then get time dimension (matches training)
                 log_probs = logits.log_softmax(-1).transpose(0, 1)  # (T', B, V)
+                inp_len = torch.tensor([log_probs.size(0)], dtype=torch.long, device=device)  # Time dimension after transpose
+                
+                # CTC loss expects: log_probs (T, N, C), targets (N, S) or flat, input_lengths (N,), target_lengths (N,)
+                # For batch size 1, we can use either format, but let's match training exactly
+                # Training uses flat targets, but for single sample we can use (1, S) format
                 asr_loss = ctc_loss_fn(log_probs, tgt_ids.unsqueeze(0), inp_len, tgt_len)
                 
                 if not torch.isnan(asr_loss) and not torch.isinf(asr_loss):
                     total_asr_loss += asr_loss.item()
                 
                 # Decode: CTC greedy decoding
+                # Check if logits are reasonable (not all zeros or NaNs)
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    print(f"⚠️  Warning: NaN/Inf in logits for sample {i}")
+                if (logits.abs() < 1e-6).all():
+                    print(f"⚠️  Warning: Logits are all near zero for sample {i}")
+                
                 predicted_text = ctc_greedy_decode(logits[0], idx_to_char)
+                
+                # Debug: Print first few samples to see what's happening
+                if i < 3:
+                    print(f"\n  Sample {i}:")
+                    print(f"    Ground truth: '{ground_truth_text}'")
+                    print(f"    Predicted: '{predicted_text}'")
+                    print(f"    Logits shape: {logits.shape}, max: {logits.max():.2f}, min: {logits.min():.2f}")
+                    print(f"    Top 5 predictions at frame 0: {torch.topk(logits[0, 0, :], 5).indices.tolist()}")
                 
                 # Calculate ASR metrics
                 wer, wer_ed, ref_words = calculate_wer(ground_truth_text, predicted_text)
