@@ -18,6 +18,7 @@
   "gradient_accumulation_steps": 1,
   "max_grad_norm": 1.0,
   "use_amp": true,
+  "use_compile": true,
   "lambda_mel": 45.0,
   "lambda_fm": 2.0,
   "lambda_adv": 1.0,

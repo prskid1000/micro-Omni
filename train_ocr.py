@@ -430,7 +430,7 @@ def main(cfg):
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
             
             # Validation
-            if step % val_freq == 0:
+            if step > 0 and step % val_freq == 0:
                 with ValidationSkipSamplesContext(train_ds):
                     model.eval()
                     val_loss_sum = 0.0
@@ -468,7 +468,7 @@ def main(cfg):
                     model.train()
             
             # Checkpointing - save only model file and metadata
-            if step % checkpoint_freq == 0:
+            if step > 0 and step % checkpoint_freq == 0:
                 # Save model weights only (overwrite existing file)
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
                 model_data = {

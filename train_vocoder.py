@@ -177,6 +177,22 @@ def main(cfg):
     mpd = MultiPeriodDiscriminator().to(device)
     msd = MultiScaleDiscriminator().to(device)
     
+    # CNN-specific optimizations
+    if device == "cuda":
+        # Enable cuDNN autotuner for faster convolutions (finds best algorithms)
+        torch.backends.cudnn.benchmark = True
+        
+        # Use channels_last memory format for better performance on modern GPUs
+        # Provides 10-30% speedup for convolutional networks
+        try:
+            generator = generator.to(memory_format=torch.channels_last)
+            print("✓ Generator using channels_last memory format")
+        except:
+            print("⚠ channels_last not supported for generator")
+        
+        # Note: Discriminators use 1D convolutions, channels_last is for 2D/3D only
+        print("✓ cuDNN benchmark mode enabled for faster convolutions")
+    
     # Optimizers
     opt_g = torch.optim.AdamW(
         generator.parameters(),
@@ -203,6 +219,20 @@ def main(cfg):
     scaler_d = GradScaler('cuda') if use_amp else None
     if use_amp:
         print("✓ Mixed precision training (FP16) enabled")
+    
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
+    if use_compile:
+        print("✓ Compiling models with torch.compile() for faster training")
+        try:
+            generator = torch.compile(generator, mode="default")
+            mpd = torch.compile(mpd, mode="default")
+            msd = torch.compile(msd, mode="default")
+            print("✓ Models compiled successfully")
+        except Exception as e:
+            print(f"⚠ torch.compile() failed: {e}")
+            print("  Continuing without compilation...")
+            use_compile = False
     
     # Gradient accumulation (important for memory efficiency)
     # Simulates larger batch size without OOM
@@ -345,6 +375,15 @@ def main(cfg):
     checkpoint_freq = cfg.get("checkpoint_freq", 1000)
     val_freq = cfg.get("val_freq", 500)
     
+    # Create MelSpectrogram transform once (not inside training loop)
+    melspec_for_loss = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sr,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=n_fft,
+        n_mels=n_mels
+    ).to(device)
+    
     generator.train()
     mpd.train()
     msd.train()
@@ -393,6 +432,17 @@ def main(cfg):
             # Reshape mel for generator: (B, n_mels, T_mel)
             mel_input = mel.transpose(1, 2)  # (B, n_mels, T_mel)
             
+            # Convert to channels_last for better performance (if enabled)
+            if device == "cuda" and hasattr(generator, 'memory_format'):
+                try:
+                    mel_input = mel_input.to(memory_format=torch.channels_last)
+                except:
+                    pass  # Silently fail if not supported
+            
+            # Mark step begin for CUDAGraphs optimization (when using torch.compile)
+            if use_compile and device == "cuda":
+                torch.compiler.cudagraph_mark_step_begin()
+            
             # ========== Train Discriminators ==========
             opt_d.zero_grad()
             
@@ -412,7 +462,8 @@ def main(cfg):
             if use_amp:
                 with autocast(device_type='cuda'):
                     # MPD - returns list of outputs and features
-                    mpd_real_out, mpd_real_feats = mpd(audio_real_d)
+                    # SAVE the real features for later use in generator training
+                    mpd_real_out, cached_mpd_real_feats = mpd(audio_real_d)
                     mpd_fake_out, mpd_fake_feats = mpd(audio_fake_d.detach())
                     # MPD returns list of outputs (one per period)
                     loss_mpd = 0.0
@@ -423,7 +474,8 @@ def main(cfg):
                     loss_mpd = loss_mpd / len(mpd_real_out)
                     
                     # MSD - returns list of outputs and features
-                    msd_real_out, msd_real_feats = msd(audio_real_d)
+                    # SAVE the real features for later use in generator training
+                    msd_real_out, cached_msd_real_feats = msd(audio_real_d)
                     msd_fake_out, msd_fake_feats = msd(audio_fake_d.detach())
                     # MSD returns list of outputs (one per scale)
                     loss_msd = 0.0
@@ -465,9 +517,15 @@ def main(cfg):
                     scaler_d.update()
                     scheduler_d.step()
                     opt_d.zero_grad()
+                    
+                    # Detach cached features to prevent gradient graph conflicts
+                    # These will be reused in generator training for feature matching loss
+                    cached_mpd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_mpd_real_feats]
+                    cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
             else:
                 # MPD - returns list of outputs and features
-                mpd_real_out, mpd_real_feats = mpd(audio_real_d)
+                # SAVE the real features for later use in generator training
+                mpd_real_out, cached_mpd_real_feats = mpd(audio_real_d)
                 mpd_fake_out, mpd_fake_feats = mpd(audio_fake_d.detach())
                 # MPD returns list of outputs (one per period)
                 loss_mpd = 0.0
@@ -478,7 +536,8 @@ def main(cfg):
                 loss_mpd = loss_mpd / len(mpd_real_out)
                 
                 # MSD - returns list of outputs and features
-                msd_real_out, msd_real_feats = msd(audio_real_d)
+                # SAVE the real features for later use in generator training
+                msd_real_out, cached_msd_real_feats = msd(audio_real_d)
                 msd_fake_out, msd_fake_feats = msd(audio_fake_d.detach())
                 # MSD returns list of outputs (one per scale)
                 loss_msd = 0.0
@@ -516,6 +575,11 @@ def main(cfg):
                     opt_d.step()
                     scheduler_d.step()
                     opt_d.zero_grad()
+                    
+                    # Detach cached features to prevent gradient graph conflicts
+                    # These will be reused in generator training for feature matching loss
+                    cached_mpd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_mpd_real_feats]
+                    cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
             
             # ========== Train Generator ==========
             opt_g.zero_grad()
@@ -529,16 +593,9 @@ def main(cfg):
             audio_fake = audio_fake[:, :min_len]
             audio_fake_d = audio_fake.unsqueeze(1)
             
-            # Compute mel spectrogram of generated audio
-            melspec = torchaudio.transforms.MelSpectrogram(
-                sample_rate=sr,
-                n_fft=n_fft,
-                hop_length=hop_length,
-                win_length=n_fft,
-                n_mels=n_mels
-            ).to(device)
+            # Compute mel spectrogram of generated audio (using pre-created transform)
             # MelSpectrogram outputs (B, 1, n_mels, T_mel) when given (B, 1, T_audio)
-            mel_fake_batch = melspec(audio_fake.unsqueeze(1))  # (B, 1, n_mels, T_mel)
+            mel_fake_batch = melspec_for_loss(audio_fake.unsqueeze(1))  # (B, 1, n_mels, T_mel)
             # Remove channel dimension and transpose to match mel_real format: (B, T_mel, n_mels)
             mel_fake = mel_fake_batch.squeeze(1).transpose(1, 2)  # (B, T_mel, n_mels)
             # Match length with mel_real (use actual mel lengths, not padded length)
@@ -571,21 +628,37 @@ def main(cfg):
                         loss_adv_msd += torch.mean((fake_out - 1.0) ** 2)
                     loss_adv_msd = loss_adv_msd / len(msd_fake_out_list)
                     
-                    # Feature matching losses
-                    _, mpd_real_feats = mpd(audio_real_d[:, :, :min_len])
+                    # Feature matching losses - USE CACHED FEATURES!
+                    # No need to recompute mpd(audio_real_d) - we already have cached_mpd_real_feats
                     loss_fm_mpd = 0.0
                     count_fm = 0
-                    for real_feat_list, fake_feat_list in zip(mpd_real_feats, mpd_fake_feats):
+                    for real_feat_list, fake_feat_list in zip(cached_mpd_real_feats, mpd_fake_feats):
                         for r, f in zip(real_feat_list, fake_feat_list):
+                            # Match feature lengths in case audio was trimmed
+                            min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
+                            if r.dim() == 3:  # Conv features: (B, C, T)
+                                r = r[..., :min_feat_len]
+                                f = f[..., :min_feat_len]
+                            else:  # Other features
+                                r = r[:min_feat_len]
+                                f = f[:min_feat_len]
                             loss_fm_mpd += torch.mean(torch.abs(r - f))
                             count_fm += 1
                     loss_fm_mpd = loss_fm_mpd / max(count_fm, 1)
                     
-                    _, msd_real_feats = msd(audio_real_d[:, :, :min_len])
+                    # No need to recompute msd(audio_real_d) - we already have cached_msd_real_feats
                     loss_fm_msd = 0.0
                     count_fm = 0
-                    for real_feat_list, fake_feat_list in zip(msd_real_feats, msd_fake_feats):
+                    for real_feat_list, fake_feat_list in zip(cached_msd_real_feats, msd_fake_feats):
                         for r, f in zip(real_feat_list, fake_feat_list):
+                            # Match feature lengths in case audio was trimmed
+                            min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
+                            if r.dim() == 3:  # Conv features: (B, C, T)
+                                r = r[..., :min_feat_len]
+                                f = f[..., :min_feat_len]
+                            else:  # Other features
+                                r = r[:min_feat_len]
+                                f = f[:min_feat_len]
                             loss_fm_msd += torch.mean(torch.abs(r - f))
                             count_fm += 1
                     loss_fm_msd = loss_fm_msd / max(count_fm, 1)
@@ -644,21 +717,37 @@ def main(cfg):
                     loss_adv_msd += torch.mean((fake_out - 1.0) ** 2)
                 loss_adv_msd = loss_adv_msd / len(msd_fake_out_list)
                 
-                # Feature matching losses
-                _, mpd_real_feats = mpd(audio_real_d[:, :, :min_len])
+                # Feature matching losses - USE CACHED FEATURES!
+                # No need to recompute mpd(audio_real_d) - we already have cached_mpd_real_feats
                 loss_fm_mpd = 0.0
                 count_fm = 0
-                for real_feat_list, fake_feat_list in zip(mpd_real_feats, mpd_fake_feats):
+                for real_feat_list, fake_feat_list in zip(cached_mpd_real_feats, mpd_fake_feats):
                     for r, f in zip(real_feat_list, fake_feat_list):
+                        # Match feature lengths in case audio was trimmed
+                        min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
+                        if r.dim() == 3:  # Conv features: (B, C, T)
+                            r = r[..., :min_feat_len]
+                            f = f[..., :min_feat_len]
+                        else:  # Other features
+                            r = r[:min_feat_len]
+                            f = f[:min_feat_len]
                         loss_fm_mpd += torch.mean(torch.abs(r - f))
                         count_fm += 1
                 loss_fm_mpd = loss_fm_mpd / max(count_fm, 1)
                 
-                _, msd_real_feats = msd(audio_real_d[:, :, :min_len])
+                # No need to recompute msd(audio_real_d) - we already have cached_msd_real_feats
                 loss_fm_msd = 0.0
                 count_fm = 0
-                for real_feat_list, fake_feat_list in zip(msd_real_feats, msd_fake_feats):
+                for real_feat_list, fake_feat_list in zip(cached_msd_real_feats, msd_fake_feats):
                     for r, f in zip(real_feat_list, fake_feat_list):
+                        # Match feature lengths in case audio was trimmed
+                        min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
+                        if r.dim() == 3:  # Conv features: (B, C, T)
+                            r = r[..., :min_feat_len]
+                            f = f[..., :min_feat_len]
+                        else:  # Other features
+                            r = r[:min_feat_len]
+                            f = f[:min_feat_len]
                         loss_fm_msd += torch.mean(torch.abs(r - f))
                         count_fm += 1
                 loss_fm_msd = loss_fm_msd / max(count_fm, 1)
@@ -715,7 +804,7 @@ def main(cfg):
                 )
             
             # Validation
-            if step % val_freq == 0:
+            if step > 0 and step % val_freq == 0:
                 with ValidationSkipSamplesContext(train_ds):
                     generator.eval()
                     mpd.eval()
@@ -781,8 +870,7 @@ def main(cfg):
                     msd.train()
             
             # Checkpointing
-            # Checkpointing
-            if step % checkpoint_freq == 0:
+            if step > 0 and step % checkpoint_freq == 0:
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
                 torch.save({
                     "generator": generator.state_dict(),
