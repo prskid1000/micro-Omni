@@ -1472,6 +1472,83 @@ def analyze_ocr_dataset(csv_path, text_percentile=95.0):
     
     return char_to_idx, idx_to_char, vocab_size, max_text_len
 
+def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percentile=95.0):
+    """
+    Analyze vocoder dataset to calculate max audio length using percentile.
+    This helps determine optimal max_audio_length to minimize padding while covering most data.
+    
+    Args:
+        csv_path: Path to vocoder CSV file with 'wav' column
+        sr: Sample rate (default: 16000)
+        sample_size: Number of samples to check (None = all, recommended for large datasets)
+        audio_percentile: Percentile to use for max_audio_length (default: 95.0, covers 95% of data, minimizes padding)
+        
+    Returns:
+        int: Maximum audio length at specified percentile (rounded up to nearest 256 for memory alignment)
+    """
+    import numpy as np
+    
+    audio_lengths = []
+    
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        
+        total = len(rows)
+        
+        # Optionally sample indices
+        audio_indices = set(range(total))
+        if sample_size and sample_size < total:
+            import random
+            audio_indices = set(random.sample(range(total), sample_size))
+        
+        for idx, row in enumerate(rows):
+            # Progress update
+            if (idx + 1) % 100 == 0:
+                print(f"  Analyzing vocoder dataset: {idx + 1}/{total} files...", end='\r')
+            
+            # Process audio length (only for sampled indices if sampling is enabled)
+            if idx in audio_indices:
+                try:
+                    wav_path = row.get("wav", "").strip()
+                    if wav_path and os.path.exists(wav_path):
+                        wav, file_sr = load_audio(wav_path)
+                        if file_sr != sr:
+                            wav = torchaudio.transforms.Resample(file_sr, sr)(wav)
+                        
+                        # Get audio length in samples
+                        if wav.dim() > 1:
+                            wav = wav.mean(dim=0)  # Convert to mono if stereo
+                        audio_len = wav.shape[0]
+                        audio_lengths.append(audio_len)
+                except Exception:
+                    continue
+        
+        if total > 0:
+            print(f"  Analyzed vocoder dataset: {total} files processed")
+    
+    # Calculate max_audio_length using percentile (minimizes padding while covering most data)
+    if audio_lengths:
+        audio_lengths_arr = np.array(audio_lengths)
+        max_audio_len = np.percentile(audio_lengths_arr, audio_percentile)
+        # Round up to nearest 256 for better memory alignment
+        max_audio_len = int(np.ceil(max_audio_len / 256) * 256)
+        
+        # Print statistics for user
+        print(f"\n📊 Audio Length Statistics:")
+        print(f"  • Total files analyzed: {len(audio_lengths)}")
+        print(f"  • Min length: {audio_lengths_arr.min()} samples ({audio_lengths_arr.min()/sr:.2f}s)")
+        print(f"  • Max length: {audio_lengths_arr.max()} samples ({audio_lengths_arr.max()/sr:.2f}s)")
+        print(f"  • Mean length: {audio_lengths_arr.mean():.0f} samples ({audio_lengths_arr.mean()/sr:.2f}s)")
+        print(f"  • Median length: {np.median(audio_lengths_arr):.0f} samples ({np.median(audio_lengths_arr)/sr:.2f}s)")
+        print(f"  • {audio_percentile}th percentile: {np.percentile(audio_lengths_arr, audio_percentile):.0f} samples ({np.percentile(audio_lengths_arr, audio_percentile)/sr:.2f}s)")
+        print(f"  • Recommended max_audio_length: {max_audio_len} samples (~{max_audio_len/sr:.2f}s)")
+        print(f"  • Coverage: ~{audio_percentile:.1f}% of data will fit without truncation")
+    else:
+        max_audio_len = 0
+    
+    return max_audio_len
+
 class ASRDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
     def __init__(self, csv_path, sr=16000, n_mels=128, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):

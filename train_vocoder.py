@@ -11,6 +11,7 @@ import json
 import os
 import torch
 import torchaudio
+from functools import partial
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
@@ -19,7 +20,7 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
-    save_training_metadata, load_training_metadata
+    save_training_metadata, load_training_metadata, analyze_vocoder_dataset
 )
 from tqdm import tqdm
 
@@ -139,6 +140,29 @@ def main(cfg):
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Audio CSV not found. Expected: {csv_path}")
     
+    # Auto-calculate max_audio_length if not provided (similar to mel length calculation for other models)
+    print("\n🔍 Analyzing vocoder dataset...")
+    audio_percentile = cfg.get("max_audio_length_percentile", 95.0)
+    sample_size = cfg.get("dataset_sample_size", None)  # None = analyze all files
+    
+    max_audio_length_dynamic = analyze_vocoder_dataset(
+        csv_path, 
+        sr=sr, 
+        sample_size=sample_size,
+        audio_percentile=audio_percentile
+    )
+    
+    # Allow override from config, but default to auto-calculated value
+    max_audio_length = cfg.get("max_audio_length", max_audio_length_dynamic)
+    if max_audio_length != max_audio_length_dynamic:
+        print(f"⚠ Warning: Config max_audio_length={max_audio_length} differs from dataset audio length={max_audio_length_dynamic}")
+        print(f"  Using config value: {max_audio_length}")
+    else:
+        print(f"✓ Using auto-calculated max_audio_length: {max_audio_length}")
+    
+    # Update config with calculated value so it's used by dataset
+    cfg["max_audio_length"] = max_audio_length
+    
     
     # Initialize models
     generator = HiFiGANVocoder(
@@ -237,13 +261,16 @@ def main(cfg):
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
     # Note: pin_memory=False to reduce RAM usage (vocoder needs both mel+audio, more memory than TTS)
+    # Create collate function with max_audio_length for fixed-size padding
+    collate_fn = partial(collate_mel_audio_fn, max_audio_length=max_audio_length)
+    
     train_dl = DataLoader(
         train_ds, 
         batch_size=cfg.get("batch_size", 2), 
         shuffle=False, 
         num_workers=cfg.get("num_workers", 1),  # Reduced for 12GB VRAM
         drop_last=True,
-        collate_fn=collate_mel_audio_fn,
+        collate_fn=collate_fn,
         pin_memory=False,  # Disabled to reduce RAM usage (vocoder stores mel+audio, not just mel)
     )
     val_dl = DataLoader(
@@ -252,7 +279,7 @@ def main(cfg):
         shuffle=False, 
         num_workers=cfg.get("num_workers", 2), 
         drop_last=cfg.get("drop_last", True),
-        collate_fn=collate_mel_audio_fn,
+        collate_fn=collate_fn,
         pin_memory=False,  # Disabled to reduce RAM usage
     )
     
@@ -330,7 +357,7 @@ def main(cfg):
                 shuffle=False, 
                 num_workers=cfg.get("num_workers", 1),
                 drop_last=True,
-                collate_fn=collate_mel_audio_fn,
+                collate_fn=collate_fn,
                 pin_memory=False  # Disabled to reduce RAM usage
             )
         
@@ -344,7 +371,7 @@ def main(cfg):
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
-        for batch_idx, (mel, audio_real) in enumerate(pbar, start=enum_start):
+        for batch_idx, (mel, audio_real, mel_lengths, audio_lengths) in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
