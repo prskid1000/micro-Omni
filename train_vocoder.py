@@ -165,13 +165,16 @@ def main(cfg):
     # Update config with the value (whether loaded or calculated)
     cfg["max_audio_length"] = max_audio_length
     
+    # torch.compile() support (optional, PyTorch 2.0+)
+    use_compile = cfg.get("use_compile", False)
     
     # Initialize models
     generator = HiFiGANVocoder(
         sample_rate=sr,
         n_mels=n_mels,
         n_fft=n_fft,
-        hop_length=hop_length
+        hop_length=hop_length,
+        compile_model=use_compile
     ).to(device)
     
     mpd = MultiPeriodDiscriminator().to(device)
@@ -219,22 +222,6 @@ def main(cfg):
     scaler_d = GradScaler('cuda') if use_amp else None
     if use_amp:
         print("✓ Mixed precision training (FP16) enabled")
-    
-    # torch.compile() support (optional, PyTorch 2.0+)
-    use_compile = cfg.get("use_compile", False)
-    if use_compile:
-        print("✓ Compiling models with torch.compile() for faster training")
-        try:
-            # Using 'cudagraphs' backend to avoid Triton/LLVM compatibility issues
-            # Provides 10-20% speedup without requiring Triton compilation
-            generator = torch.compile(generator, backend='cudagraphs', mode='default', fullgraph=False)
-            mpd = torch.compile(mpd, backend='cudagraphs', mode='default', fullgraph=False)
-            msd = torch.compile(msd, backend='cudagraphs', mode='default', fullgraph=False)
-            print("✓ Models compiled successfully")
-        except Exception as e:
-            print(f"⚠ torch.compile() failed: {e}")
-            print("  Continuing without compilation...")
-            use_compile = False
     
     # Gradient accumulation (important for memory efficiency)
     # Simulates larger batch size without OOM
