@@ -718,6 +718,7 @@ def main(cfg):
                     scaler_g.update()
                     scheduler_g.step()
                     opt_g.zero_grad()
+                    step += 1
             else:
                 # Adversarial losses
                 mpd_fake_out_list, mpd_fake_feats = mpd(audio_fake_d)
