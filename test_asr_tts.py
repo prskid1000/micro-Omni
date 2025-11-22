@@ -278,9 +278,23 @@ def load_tts_models(talker_ckpt_dir, device="cuda"):
     
     # Load Vocoder
     print("Loading Vocoder...")
+    # Try to find vocoder checkpoint
+    vocoder_ckpt_path = None
+    # Check in talker dir first (common in some setups)
+    v_path, _ = find_checkpoint(talker_ckpt_dir, "vocoder.pt", "vocoder_step_", device)
+    if v_path:
+        vocoder_ckpt_path = v_path
+    else:
+        # Check default locations
+        if os.path.exists("checkpoints/vocoder.pt"):
+            vocoder_ckpt_path = "checkpoints/vocoder.pt"
+        elif os.path.exists("checkpoints/hifigan.pt"):
+            vocoder_ckpt_path = "checkpoints/hifigan.pt"
+            
     vocoder = NeuralVocoder(
         sample_rate=talker_cfg.get("sample_rate", 16000),
-        n_mels=talker_cfg.get("n_mels", 128)
+        n_mels=talker_cfg.get("n_mels", 128),
+        checkpoint_path=vocoder_ckpt_path
     )
     print("✓ Vocoder loaded (NeuralVocoder with HiFi-GAN/Griffin-Lim fallback)")
     

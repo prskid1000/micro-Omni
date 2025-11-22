@@ -457,7 +457,7 @@ for batch in dataloader:
 
 **CUDA Graphs Compatibility:**
 - When using `use_compile: true`, all batches must have uniform shapes
-- Configure `max_mel_length` in config (default: 2048 frames = ~20 seconds)
+- `max_mel_length` is auto-calculated from dataset (95th percentile, typically ~2048 frames = ~20 seconds)
 - All mel spectrograms are padded/truncated to this fixed length
 - Prevents "tensor size mismatch" errors with CUDA graphs compilation
 - See Chapter 34 (Configuration Files) for details
@@ -553,7 +553,7 @@ Audio encoder enabled multimodal understanding! ✓
 | **Layers** | 4 |
 | **Heads** | 3 |
 | **Parameters** | ~2.05M |
-| **max_mel_length** | 2048 frames (default, ~20s) - for CUDA graphs compatibility |
+| **max_mel_length** | Auto-calculated from dataset (95th percentile, ~20s typical) - for CUDA graphs compatibility |
 
 ## 🎓 Training
 

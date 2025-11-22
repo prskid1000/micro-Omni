@@ -19,9 +19,10 @@ from torch.utils.data import DataLoader
 from omni.ocr_model import OCRModel
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, cleanup_old_checkpoints, OCRDataset,
+    check_gradient_explosion, OCRDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext
+    ValidationSkipSamplesContext, analyze_ocr_dataset,
+    save_training_metadata, load_training_metadata
 )
 from tqdm import tqdm
 
@@ -76,10 +77,57 @@ def main(cfg):
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"OCR CSV not found. Expected: {csv_path}")
     
-    # Create a temporary dataset to get vocabulary size
-    temp_ds = OCRDataset(csv_path, image_root, cfg.get("img_size", 224), cfg=cfg, shuffle_buffer_size=0, seed=seed)
-    vocab_size = len(temp_ds.char_to_idx)
-    print(f"Character vocabulary size: {vocab_size}")
+    # Check if metadata exists (contains previously calculated values)
+    model_name = "ocr"
+    metadata = load_training_metadata(save_dir, model_name)
+    
+    if metadata and not cfg.get("recalculate_dataset_stats", False):
+        # Load calculated values from metadata (avoid recalculating)
+        print("Loading dataset statistics from metadata...")
+        char_to_idx = metadata.get("char_to_idx", {})
+        idx_to_char = metadata.get("idx_to_char", {})
+        vocab_size_dynamic = metadata.get("vocab_size", None)
+        max_text_length_dynamic = metadata.get("max_text_length", None)
+        
+        print(f"Character vocabulary size: {vocab_size_dynamic} (from metadata)")
+        print(f"Text length: {max_text_length_dynamic} (from metadata)")
+    else:
+        # Analyze OCR dataset in a single pass: build vocabulary and calculate max text length
+        print("Analyzing OCR dataset (vocabulary, text length)...")
+        # Percentile threshold for minimizing padding (default: 95% coverage)
+        text_percentile = cfg.get("max_text_length_percentile", 95.0)
+        char_to_idx, idx_to_char, vocab_size_dynamic, max_text_length_dynamic = analyze_ocr_dataset(
+            csv_path, text_percentile=text_percentile
+        )
+        
+        print(f"Character vocabulary size: {vocab_size_dynamic}")
+        print(f"Unique characters found: {len(char_to_idx) - 4}")  # Exclude <PAD>, <BOS>, <EOS>, <UNK>
+        print(f"Text length at {text_percentile}th percentile: {max_text_length_dynamic} (covers {text_percentile}% of data, minimizes padding)")
+        print(f"  Note: ~{100 - text_percentile:.1f}% of data will be truncated if longer (acceptable for outliers)")
+        
+        # Save calculated values to metadata (so we don't recalculate next time)
+        training_metadata = {
+            "step": 0,  # Will be updated when we save checkpoints
+            "epoch": 0,
+            "char_to_idx": char_to_idx,
+            "idx_to_char": idx_to_char,
+            "vocab_size": vocab_size_dynamic,
+            "max_text_length": max_text_length_dynamic,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
+        print("✓ Saved dataset statistics to metadata (will be reused on next run)")
+    
+    # Allow override from config, but default to auto-calculated values
+    vocab_size = vocab_size_dynamic  # OCR vocabulary is always dynamic, no override needed
+    print(f"✓ Using dynamic vocabulary size: {vocab_size}")
+    
+    max_text_length = cfg.get("max_text_length", max_text_length_dynamic)
+    if max_text_length != max_text_length_dynamic:
+        print(f"⚠ Warning: Config max_text_length={max_text_length} differs from dataset max length={max_text_length_dynamic}")
+        print(f"  Using config value: {max_text_length}")
+    else:
+        print(f"✓ Using auto-calculated max_text_length: {max_text_length}")
     
     # Initialize model
     use_compile = cfg.get("use_compile", False)
@@ -141,7 +189,9 @@ def main(cfg):
         cfg=cfg,
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
         seed=seed,
-        skip_samples=0
+        skip_samples=0,
+        char_to_idx=char_to_idx,  # Use pre-built vocabulary (avoids rebuilding)
+        idx_to_char=idx_to_char
     )
     train_ds._val_split = val_split
     train_ds._val_mode = False  # Training mode
@@ -153,14 +203,14 @@ def main(cfg):
         cfg=cfg,
         shuffle_buffer_size=0,  # No shuffling for validation
         seed=seed,  # Same seed for consistent hash-based split
-        skip_samples=0
+        skip_samples=0,
+        char_to_idx=char_to_idx,  # Use pre-built vocabulary (avoids rebuilding)
+        idx_to_char=idx_to_char
     )
     val_ds._val_split = val_split
     val_ds._val_mode = True  # Validation mode
     
-    # Fixed maximum text length for uniform batch sizes (required for CUDA graphs)
-    # This ensures all batches have the same shape, preventing CUDA graphs errors
-    max_text_length = cfg.get("max_text_length", 256)  # Default: 256 characters
+    # max_text_length is already calculated above
     if use_compile:
         print(f"Using fixed max_text_length={max_text_length} for CUDA graphs compatibility")
     
@@ -198,9 +248,9 @@ def main(cfg):
     
     # Resume from checkpoint
     step = 0
-    step, resume_from = load_checkpoint(
+    step, metadata = load_checkpoint(
         save_dir, 
-        "ocr_step_", 
+        model_name, 
         device, 
         logger,
         state_dict_loaders={
@@ -210,15 +260,18 @@ def main(cfg):
             "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
         }
     )
-    # Handle scaler and char_to_idx separately if needed
-    if step > 0 and resume_from:
-        checkpoint = torch.load(resume_from, map_location=device)
-        if isinstance(checkpoint, dict):
-            if "scaler" in checkpoint and scaler is not None:
+    # Load scaler from model file if needed
+    if step > 0 and scaler is not None:
+        model_path = os.path.join(save_dir, f"{model_name}.pt")
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and "scaler" in checkpoint:
                 scaler.load_state_dict(checkpoint["scaler"])
-            if "char_to_idx" in checkpoint:
-                train_ds.char_to_idx = checkpoint["char_to_idx"]
-                train_ds.idx_to_char = checkpoint["idx_to_char"]
+    # Load char_to_idx from metadata if available
+    if step > 0 and metadata:
+        if "char_to_idx" in metadata:
+            train_ds.char_to_idx = metadata["char_to_idx"]
+            train_ds.idx_to_char = metadata["idx_to_char"]
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 4)
@@ -414,22 +467,34 @@ def main(cfg):
                     
                     model.train()
             
-            # Checkpointing
+            # Checkpointing - save only model file and metadata
             if step % checkpoint_freq == 0:
-                checkpoint_path = os.path.join(save_dir, f"ocr_step_{step}.pt")
-                torch.save({
+                # Save model weights only (overwrite existing file)
+                model_path = os.path.join(save_dir, f"{model_name}.pt")
+                model_data = {
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "scaler": scaler.state_dict() if scaler else None,
+                }
+                if scaler is not None:
+                    model_data["scaler"] = scaler.state_dict()
+                torch.save(model_data, model_path)
+                
+                # Save training metadata (step, calculated values, etc.)
+                training_metadata = {
                     "step": step,
+                    "epoch": epoch,
                     "char_to_idx": train_ds.char_to_idx,
                     "idx_to_char": train_ds.idx_to_char,
+                    "vocab_size": vocab_size_dynamic,
+                    "max_text_length": max_text_length_dynamic,
                     "config": cfg
-                }, checkpoint_path)
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
+                logger.checkpoint(step, model_path)
                 
-                # Save final checkpoint
-                final_path = os.path.join(save_dir, "ocr.pt")
+                # Save final checkpoint (same as periodic, but for compatibility)
+                final_path = os.path.join(save_dir, f"{model_name}.pt")
                 torch.save({
                     "model": model.state_dict(),
                     "char_to_idx": train_ds.char_to_idx,
@@ -448,13 +513,23 @@ def main(cfg):
             break
     
     # Save final model
-    final_path = os.path.join(cfg["save_dir"], "ocr.pt")
-    torch.save({
+    final_path = os.path.join(save_dir, f"{model_name}.pt")
+    model_data = {
         "model": model.state_dict(),
+    }
+    torch.save(model_data, final_path)
+    
+    # Save final training metadata
+    training_metadata = {
+        "step": step,
+        "epoch": epoch,
         "char_to_idx": train_ds.char_to_idx,
         "idx_to_char": train_ds.idx_to_char,
+        "vocab_size": vocab_size_dynamic,
+        "max_text_length": max_text_length_dynamic,
         "config": cfg
-    }, final_path)
+    }
+    save_training_metadata(save_dir, model_name, training_metadata)
     logger.info(f"Training complete! Final model saved to: {final_path}")
 
 

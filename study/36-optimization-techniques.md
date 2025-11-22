@@ -71,8 +71,9 @@ pip install flash-attn
 ```json
 {
   "use_compile": true,
-  "max_mel_length": 6000,    // For audio training (frames)
-  "max_text_length": 256     // For OCR training (characters)
+  "max_mel_length_percentile": 95.0,    // Optional: For audio training (default: 95.0)
+  "max_text_length_percentile": 95.0    // Optional: For OCR training (default: 95.0)
+  // max_mel_length and max_text_length are auto-calculated - no need to set manually
 }
 ```
 
@@ -81,9 +82,15 @@ pip install flash-attn
 - Variable-length sequences cause "tensor size mismatch" errors
 - Fixed padding ensures all batches have identical shapes
 
+**Auto-Calculation:**
+- `max_mel_length` and `max_text_length` are **automatically calculated** from your dataset
+- Uses **95th percentile** by default to minimize padding while covering 95% of data
+- Automatically rounds up to nearest 256 for better memory alignment
+- ~5% of data will be truncated if longer (acceptable for outliers)
+
 **Implementation:**
-- Audio training: All mel spectrograms padded/truncated to `max_mel_length`
-- OCR training: All text sequences padded/truncated to `max_text_length`
+- Audio training: All mel spectrograms padded/truncated to auto-calculated `max_mel_length`
+- OCR training: All text sequences padded/truncated to auto-calculated `max_text_length`
 - Collate functions in `omni/utils.py` handle padding automatically:
   - `collate_mel_fn()` - For mel-only batches (talker training)
   - `collate_mel_text_fn()` - For mel+text batches (audio encoder training)
@@ -95,16 +102,14 @@ pip install flash-attn
 - But enables CUDA graphs optimization (10-20% faster)
 - Worth it for most use cases
 
-**Determining Optimal Values:**
-```bash
-# Check actual lengths in your dataset
-python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
+**Configuring Percentiles:**
+- **Higher percentile (99.0):** More coverage, more padding, less truncation
+- **Lower percentile (90.0):** Less padding, more truncation, less memory
+- **Default (95.0):** Good balance - covers 95% of data with minimal padding
 
-# Recommendations:
-# - Set to 99.5th percentile to cover most data
-# - Round up to nearest 256 for memory alignment
-# - Default: 2048 frames (~20s) for audio, 256 chars for text
-```
+**Optional Manual Override:**
+- You can manually set `max_mel_length` or `max_text_length` in config to override auto-calculation
+- Useful if you know your dataset characteristics and want specific values
 
 ---
 

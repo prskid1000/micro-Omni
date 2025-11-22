@@ -540,9 +540,10 @@ for batch in dataloader:
 
 **CUDA Graphs Compatibility:**
 - When using `use_compile: true`, all batches must have uniform shapes
-- Configure `max_mel_length` in config (default: 2048 frames)
+- `max_mel_length` is auto-calculated from dataset (95th percentile)
+- Can override manually or adjust `max_mel_length_percentile` if needed
 - Note: Talker uses different frame rate (12.5 Hz with frame_ms=80)
-- For 60 seconds: `max_mel_length: 750` frames (60 × 12.5)
+- For 60 seconds: typically ~750 frames (60 × 12.5)
 - All mel spectrograms are padded/truncated to this fixed length
 - Prevents "tensor size mismatch" errors with CUDA graphs compilation
 - See Chapter 34 (Configuration Files) for details
@@ -672,7 +673,7 @@ Result: Complete text-to-speech system!
 | **Codebooks** | 2 |
 | **Output** | 2 × 128 logits |
 | **Parameters** | ~10.1M |
-| **max_mel_length** | 2048 frames (default) - for CUDA graphs compatibility |
+| **max_mel_length** | Auto-calculated from dataset (95th percentile) - for CUDA graphs compatibility |
 | **Frame rate** | 12.5 Hz (with frame_ms=80) |
 
 ## 🔄 Generation Process

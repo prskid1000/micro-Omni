@@ -530,14 +530,22 @@ class VocoderLoader:
     def load(self, ckpt_dir: str) -> bool:
         """Load vocoder for audio output"""
         try:
-            hifigan_checkpoint = os.path.join(ckpt_dir, "hifigan.pt")
-            if not os.path.exists(hifigan_checkpoint):
-                hifigan_checkpoint = "checkpoints/hifigan.pt"
+            # Try vocoder.pt (new system) first, then hifigan.pt (legacy)
+            vocoder_checkpoint = os.path.join(ckpt_dir, "vocoder.pt")
+            if not os.path.exists(vocoder_checkpoint):
+                vocoder_checkpoint = os.path.join(ckpt_dir, "hifigan.pt")
+            
+            if not os.path.exists(vocoder_checkpoint):
+                # Try default locations
+                if os.path.exists("checkpoints/vocoder.pt"):
+                    vocoder_checkpoint = "checkpoints/vocoder.pt"
+                elif os.path.exists("checkpoints/hifigan.pt"):
+                    vocoder_checkpoint = "checkpoints/hifigan.pt"
             
             self.vocoder = NeuralVocoder(
                 sample_rate=16000,
                 n_mels=128,
-                checkpoint_path=hifigan_checkpoint if os.path.exists(hifigan_checkpoint) else None,
+                checkpoint_path=vocoder_checkpoint if os.path.exists(vocoder_checkpoint) else None,
                 prefer_neural=True
             )
             

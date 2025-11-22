@@ -225,32 +225,43 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 ```json
 {
   "use_compile": true,
-  "max_mel_length": 6000  // Fixed maximum mel spectrogram length (frames)
+  "max_mel_length_percentile": 95.0  // Optional: Percentile for auto-calculation (default: 95.0)
+  // max_mel_length is auto-calculated from dataset - no need to set manually
 }
 ```
 
-**Calculation:**
+**Auto-Calculation:**
+- `max_mel_length` is **automatically calculated** from your dataset during training
+- Uses **95th percentile** by default to minimize padding while covering 95% of data
+- Rounds up to nearest 256 for better memory alignment
+- ~5% of data will be truncated if longer (acceptable for outliers)
+
+**How it works:**
+- Training script analyzes all audio files in your dataset
+- Calculates mel spectrogram lengths for each file
+- Uses 95th percentile to determine optimal `max_mel_length`
+- Ensures minimal padding while covering most of your data
+
+**Frame Rate Reference:**
 - **Audio Encoder:** Frame rate = 16000 Hz / 160 hop_length = 100 frames/second
   - 60 seconds = 6000 frames
-  - 20 seconds = 2000 frames (default: 2048)
+  - 20 seconds = 2000 frames
 - **Talker:** Frame rate = 16000 Hz / 1280 hop_length = 12.5 frames/second (with frame_ms=80)
   - 60 seconds = 750 frames
-  - 20 seconds = 250 frames (default: 2048)
+  - 20 seconds = 250 frames
 
-**Recommendations:**
-- **Short clips (1-10s):** `max_mel_length: 2048` (20.5s for audio encoder, ~164s for talker)
-- **Medium clips (10-30s):** `max_mel_length: 3000-4000`
-- **Long clips (30-60s):** `max_mel_length: 6000` (60s for audio encoder)
-- **Very long clips (>60s):** Increase proportionally or truncate
+**Optional Override:**
+- You can manually set `max_mel_length` in config to override auto-calculation
+- You can adjust `max_mel_length_percentile` (e.g., 99.0 for more coverage, 90.0 for less padding)
 
 **Memory Impact:**
 - Each frame: ~128 mel bins × 4 bytes = 512 bytes
 - Per sample: `max_mel_length × 512 bytes`
 - Per batch: `batch_size × max_mel_length × 512 bytes`
 
-**Check your dataset:**
+**Check your dataset (optional):**
 ```bash
-# Analyze actual mel lengths in your dataset
+# Analyze actual mel lengths in your dataset (for reference)
 python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 ```
 
@@ -259,15 +270,25 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 ```json
 {
   "use_compile": true,
-  "max_text_length": 256  // Fixed maximum text sequence length (characters)
+  "max_text_length_percentile": 95.0  // Optional: Percentile for auto-calculation (default: 95.0)
+  // max_text_length is auto-calculated from dataset - no need to set manually
 }
 ```
 
-**Recommendations:**
-- **Short text (1-50 chars):** `max_text_length: 128`
-- **Medium text (50-200 chars):** `max_text_length: 256` (default)
-- **Long text (200-500 chars):** `max_text_length: 512`
-- **Very long text (>500 chars):** Increase or truncate
+**Auto-Calculation:**
+- `max_text_length` is **automatically calculated** from your dataset during training
+- Uses **95th percentile** by default to minimize padding while covering 95% of data
+- ~5% of data will be truncated if longer (acceptable for outliers)
+
+**How it works:**
+- Training script analyzes all text samples in your dataset
+- Calculates text lengths for each sample
+- Uses 95th percentile to determine optimal `max_text_length`
+- Ensures minimal padding while covering most of your data
+
+**Optional Override:**
+- You can manually set `max_text_length` in config to override auto-calculation
+- You can adjust `max_text_length_percentile` (e.g., 99.0 for more coverage, 90.0 for less padding)
 
 **Why Fixed Length?**
 - CUDA graphs require fixed tensor shapes for optimal performance
@@ -296,14 +317,14 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 
 **Memory issues:**
 - Decrease `batch_size`
-- Reduce `ctx_len` or `max_mel_length` / `max_text_length`
+- Reduce `ctx_len` or adjust percentile thresholds for auto-calculated max lengths
 - Use gradient accumulation
 
 **CUDA graphs compatibility:**
-- Set `max_mel_length` / `max_text_length` based on your dataset
-- Use `scripts/check_mel_lengths.py` to find optimal values
-- Round up to nearest 256 for better memory alignment
-- Consider 99.5th percentile to cover most data without excessive padding
+- `max_mel_length` and `max_text_length` are **auto-calculated** from your dataset
+- Uses 95th percentile by default (configurable via `*_percentile` options)
+- Automatically rounds up to nearest 256 for better memory alignment
+- Adjust percentile if needed: higher (99.0) = more coverage/more padding, lower (90.0) = less padding/more truncation
 
 **Automatic tuning:**
 - Use `scripts/update_configs_from_data.py` to automatically set epochs/steps based on your dataset size and model architecture
@@ -398,7 +419,7 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
   "seed": 42,
   "shuffle_buffer_size": 10000,
   "use_compile": false,
-  "max_text_length": 256
+  "max_text_length_percentile": 95.0  // Auto-calculated, no need to set max_text_length
 }
 ```
 
@@ -425,7 +446,8 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 **Training:**
 - `train_csv`: CSV file with `image,text` columns
 - `image_root`: Root directory for images
-- `max_text_length`: 256 (maximum text sequence length)
+- `max_text_length`: Auto-calculated from dataset (95th percentile), can be overridden
+- `max_text_length_percentile`: Percentile for auto-calculation (default: 95.0)
 - `vocab_size`: Dynamic (built from dataset characters)
 
 **Architecture Notes:**
@@ -545,7 +567,8 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 - `decoder_d_model`, `decoder_layers`, `decoder_heads`: Text decoder architecture
 - `train_csv`: Path to OCR CSV file (format: `image,text`)
 - `image_root`: Root directory for image files
-- `max_text_length`: Fixed maximum text sequence length for CUDA graphs compatibility (default: 256)
+- `max_text_length`: Auto-calculated from dataset (95th percentile), can be overridden
+- `max_text_length_percentile`: Percentile for auto-calculation (default: 95.0)
 
 **Architecture:**
 - Vision Encoder: ViT-Tiny (processes image patches)
@@ -553,7 +576,7 @@ python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
 - Training: Teacher forcing with cross-entropy loss
 
 **CUDA Graphs Compatibility:**
-- `max_text_length`: Required when `use_compile: true` to ensure uniform batch sizes
+- `max_text_length`: Auto-calculated when `use_compile: true` to ensure uniform batch sizes
 - All text sequences are padded/truncated to this fixed length
 - Prevents "tensor size mismatch" errors with CUDA graphs compilation
 

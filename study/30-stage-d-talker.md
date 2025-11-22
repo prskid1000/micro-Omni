@@ -67,17 +67,24 @@ Predict: [67, 103] (next frame)
   "learning_rate": 3e-4,
   
   "use_compile": true,
-  "max_mel_length": 6000,  // Fixed maximum mel length (frames)
+  "max_mel_length_percentile": 95.0  // Optional: Percentile for auto-calculation (default: 95.0)
+  // max_mel_length is auto-calculated from dataset - no need to set manually
   "frame_ms": 80
 }
 ```
 
 **Key Parameters for CUDA Graphs Compatibility:**
 
-**Calculating `max_mel_length` for Talker:**
+**Auto-Calculation:**
+- `max_mel_length` is **automatically calculated** from your dataset during training
+- Uses **95th percentile** by default to minimize padding while covering 95% of data
+- Automatically rounds up to nearest 256 for better memory alignment
+- ~5% of data will be truncated if longer (acceptable for outliers)
+
+**Frame Rate Reference:**
 - Frame rate = sample_rate / hop_length = 16000 / (16000 × 0.08) = 12.5 frames/second
 - For 60 seconds: 60 × 12.5 = 750 frames
-- For 20 seconds: 20 × 12.5 = 250 frames (default: 2048)
+- For 20 seconds: 20 × 12.5 = 250 frames
 
 **Note:** Talker uses different frame rate than audio encoder due to `frame_ms=80` parameter.
 

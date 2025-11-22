@@ -124,14 +124,30 @@ def find_checkpoint(checkpoint_dir, standard_name, step_prefix, device="cpu"):
     if not checkpoint_dir or not os.path.exists(checkpoint_dir):
         return None, None
     
-    # Try standard checkpoint first
+    # Try standard checkpoint first (e.g., "thinker.pt")
     standard_path = os.path.join(checkpoint_dir, standard_name)
     if os.path.exists(standard_path):
         try:
             checkpoint = torch.load(standard_path, map_location=device)
+            print(f"Using standard checkpoint: {standard_name}")
             return standard_path, checkpoint
         except Exception as e:
             print(f"Warning: Could not load {standard_path}: {e}")
+    
+    # Try model.pt (new system) if standard_name wasn't found or failed
+    # This handles cases where standard_name might be specific (e.g. "thinker_best.pt")
+    # but we want to fall back to the main training checkpoint "thinker.pt"
+    # In the new system, standard_name is often passed as "thinker.pt" anyway, so this is a fallback
+    # for when standard_name is something else.
+    if standard_name != "model.pt":
+         model_pt_path = os.path.join(checkpoint_dir, "model.pt")
+         if os.path.exists(model_pt_path):
+            try:
+                checkpoint = torch.load(model_pt_path, map_location=device)
+                print(f"Using standard checkpoint: model.pt")
+                return model_pt_path, checkpoint
+            except Exception as e:
+                print(f"Warning: Could not load {model_pt_path}: {e}")
     
     # Try to find latest step checkpoint
     if step_prefix:
@@ -665,73 +681,117 @@ def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, mod
         logger.error(f"Failed to reload from checkpoint: {e}")
         return 0
 
-def load_checkpoint(save_dir, checkpoint_prefix, device, logger, state_dict_loaders=None):
+def save_training_metadata(save_dir, model_name, metadata):
     """
-    Load checkpoint from save directory and return step number.
+    Save training metadata to a JSON file. This stores all runtime-calculated values
+    and training state so they don't need to be recalculated.
+    
+    Args:
+        save_dir: Directory to save metadata
+        model_name: Name of the model (e.g., "audio_enc", "talker", "ocr")
+        metadata: Dict containing training metadata (step, epoch, calculated values, etc.)
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    metadata_path = os.path.join(save_dir, f"{model_name}_metadata.json")
+    
+    # Convert any non-serializable objects to serializable format
+    serializable_metadata = {}
+    for key, value in metadata.items():
+        if isinstance(value, dict):
+            # Handle nested dicts (like char_to_idx)
+            serializable_metadata[key] = {str(k): v for k, v in value.items()}
+        elif isinstance(value, (int, float, str, bool, list, type(None))):
+            serializable_metadata[key] = value
+        elif isinstance(value, torch.Tensor):
+            serializable_metadata[key] = value.tolist() if value.numel() < 100 else None  # Skip large tensors
+        else:
+            serializable_metadata[key] = str(value)  # Convert to string as fallback
+    
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump(serializable_metadata, f, indent=2, ensure_ascii=False)
+    
+    return metadata_path
+
+def load_training_metadata(save_dir, model_name):
+    """
+    Load training metadata from JSON file.
+    
+    Args:
+        save_dir: Directory containing metadata
+        model_name: Name of the model (e.g., "audio_enc", "talker", "ocr")
+    
+    Returns:
+        dict: Metadata dict, or None if not found
+    """
+    metadata_path = os.path.join(save_dir, f"{model_name}_metadata.json")
+    if not os.path.exists(metadata_path):
+        return None
+    
+    try:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
+        return metadata
+    except Exception as e:
+        print(f"Warning: Could not load metadata from {metadata_path}: {e}")
+        return None
+
+def load_checkpoint(save_dir, model_name, device, logger, state_dict_loaders=None):
+    """
+    Load checkpoint from save directory. Now uses metadata file for training state
+    and only loads model weights from the model file.
     
     Args:
         save_dir: Directory containing checkpoints
-        checkpoint_prefix: Prefix for checkpoint files (e.g., "thinker_step_", "talker_step_")
+        model_name: Name of the model file (e.g., "audio_enc", "talker", "ocr")
         device: Device to load checkpoint on
         logger: Logger instance for logging
         state_dict_loaders: Dict mapping checkpoint keys to (object, load_func) tuples.
-                          Example: {"model": (model, model.load_state_dict), 
+                          Example: {"enc": (model, model.load_state_dict), 
+                                   "head": (head, head.load_state_dict),
                                    "optimizer": (opt, opt.load_state_dict)}
     
     Returns:
-        tuple: (step, checkpoint_path) or (0, None) if no checkpoint found
+        tuple: (step, metadata) or (0, None) if no checkpoint found
     """
     if not os.path.exists(save_dir):
         return 0, None
     
-    checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith(checkpoint_prefix) and f.endswith(".pt")]
-    if not checkpoint_files:
+    # Load metadata file (contains training state and calculated values)
+    metadata = load_training_metadata(save_dir, model_name)
+    if metadata is None:
         return 0, None
     
-    # Extract step numbers and find latest
-    step_numbers = []
-    for f in checkpoint_files:
+    step = metadata.get("step", 0)
+    if step == 0:
+        return 0, None
+    
+    logger.info(f"Found checkpoint at step {step}, loading from metadata")
+    
+    # Load model weights from model file
+    model_path = os.path.join(save_dir, f"{model_name}.pt")
+    if os.path.exists(model_path):
         try:
-            step_num = int(f.replace(checkpoint_prefix, "").replace(".pt", ""))
-            step_numbers.append((step_num, f))
-        except:
-            continue
-    
-    if not step_numbers:
-        return 0, None
-    
-    step_numbers.sort(key=lambda x: x[0], reverse=True)
-    resume_from = os.path.join(save_dir, step_numbers[0][1])
-    step = step_numbers[0][0]
-    logger.info(f"Found checkpoint at step {step}, resuming from: {resume_from}")
-    
-    try:
-        checkpoint = torch.load(resume_from, map_location=device)
-        
-        if isinstance(checkpoint, dict):
-            # Load state dicts using provided loaders
-            if state_dict_loaders:
-                for key, (obj, load_func) in state_dict_loaders.items():
-                    if key in checkpoint:
-                        load_func(checkpoint[key])
+            checkpoint = torch.load(model_path, map_location=device)
             
-            # Get step from checkpoint if available
-            if "step" in checkpoint:
-                step = checkpoint["step"]
+            if isinstance(checkpoint, dict):
+                # Load state dicts using provided loaders
+                if state_dict_loaders:
+                    for key, (obj, load_func) in state_dict_loaders.items():
+                        if key in checkpoint:
+                            try:
+                                load_func(checkpoint[key])
+                            except Exception as e:
+                                logger.warning(f"Failed to load {key}: {e}")
             
-            logger.info(f"Resumed from step {step}")
-        else:
-            # Legacy checkpoint format - try to load as model if only one loader provided
-            if state_dict_loaders and len(state_dict_loaders) == 1:
-                key = list(state_dict_loaders.keys())[0]
-                obj, load_func = state_dict_loaders[key]
-                load_func(checkpoint)
-            logger.info(f"Loaded model weights from checkpoint (legacy format)")
-        
-        return step, resume_from
-    except Exception as e:
-        logger.error(f"Failed to load checkpoint: {e}")
-        return 0, None
+            logger.info(f"Loaded model weights from {model_path}")
+        except Exception as e:
+            logger.error(f"Failed to load model weights: {e}")
+            return 0, None
+    else:
+        logger.warning(f"Model file not found: {model_path}, but metadata exists")
+        return step, metadata  # Return metadata even if model file missing (for resume calculation)
+    
+    return step, metadata
 
 def setup_resume_data_loading(train_ds, step, batch_size, logger, train_dl_kwargs):
     """
@@ -1065,6 +1125,353 @@ def build_char_vocab_from_asr_csv(csv_path):
     
     return char_to_idx, idx_to_char, vocab_size
 
+def calculate_max_text_len_from_asr_csv(csv_path):
+    """
+    Calculate maximum text length from ASR CSV dataset (auto-calculate like build_char_vocab_from_asr_csv).
+    
+    Args:
+        csv_path: Path to ASR CSV file with 'text' column
+        
+    Returns:
+        int: Maximum text length found in the dataset
+    """
+    max_len = 0
+    
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            text = row.get("text", "").strip()
+            if text:
+                max_len = max(max_len, len(text))
+    
+    return max_len
+
+def calculate_max_mel_length_from_asr_csv(csv_path, sr=16000, n_mels=128, sample_size=None):
+    """
+    Calculate maximum mel spectrogram length from ASR CSV dataset (auto-calculate like build_char_vocab_from_asr_csv).
+    
+    Args:
+        csv_path: Path to ASR CSV file with 'wav' column
+        sr: Sample rate (default: 16000)
+        n_mels: Number of mel bins (default: 128)
+        sample_size: Number of samples to check (None = all, recommended for large datasets)
+        
+    Returns:
+        int: Maximum mel length found in the dataset (rounded up to nearest 256 for memory alignment)
+    """
+    import numpy as np
+    
+    melspec = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sr, 
+        n_fft=1024, 
+        hop_length=160, 
+        win_length=400, 
+        n_mels=n_mels
+    )
+    
+    max_len = 0
+    
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        
+        if sample_size and sample_size < len(rows):
+            import random
+            rows = random.sample(rows, sample_size)
+        
+        total = len(rows)
+        for idx, row in enumerate(rows):
+            if (idx + 1) % 100 == 0:
+                print(f"  Calculating mel lengths: {idx + 1}/{total} files...", end='\r')
+            
+            try:
+                wav_path = row.get("wav", "").strip()
+                if not wav_path or not os.path.exists(wav_path):
+                    continue
+                
+                wav, file_sr = load_audio(wav_path)
+                if file_sr != sr:
+                    wav = torchaudio.transforms.Resample(file_sr, sr)(wav)
+                
+                mel = melspec(wav)[0].T  # (T, n_mels)
+                mel_len = mel.shape[0]
+                max_len = max(max_len, mel_len)
+                
+            except Exception:
+                continue
+        
+        if total > 0:
+            print(f"  Calculated mel lengths: {total} files processed")
+    
+    # Round up to nearest 256 for better memory alignment (like check_mel_lengths.py)
+    if max_len > 0:
+        max_len = int(np.ceil(max_len / 256) * 256)
+    
+    return max_len
+
+def analyze_asr_dataset(csv_path, sr=16000, n_mels=128, sample_size=None, text_percentile=95.0, mel_percentile=95.0):
+    """
+    Analyze ASR dataset in a single pass: build vocabulary, calculate max text length, and max mel length.
+    This is more efficient than calling the three functions separately.
+    Uses percentiles to minimize padding while covering most of the data.
+    
+    Args:
+        csv_path: Path to ASR CSV file with 'text' and 'wav' columns
+        sr: Sample rate (default: 16000)
+        n_mels: Number of mel bins (default: 128)
+        sample_size: Number of samples to check for mel length (None = all, recommended for large datasets)
+        text_percentile: Percentile to use for max_text_len (default: 95.0, covers 95% of data, minimizes padding)
+        mel_percentile: Percentile to use for max_mel_length (default: 95.0, covers 95% of data, minimizes padding)
+        
+    Returns:
+        tuple: (char_to_idx, idx_to_char, vocab_size, max_text_len, max_mel_length)
+            - char_to_idx: dict mapping characters to indices
+            - idx_to_char: dict mapping indices to characters
+            - vocab_size: total vocabulary size (includes blank token at index 0)
+            - max_text_len: Text length at specified percentile (rounded up, minimizes padding)
+            - max_mel_length: Mel length at specified percentile (rounded up to nearest 256)
+    """
+    import numpy as np
+    
+    chars = set()
+    text_lengths = []
+    mel_lengths = []
+    
+    melspec = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sr, 
+        n_fft=1024, 
+        hop_length=160, 
+        win_length=400, 
+        n_mels=n_mels
+    )
+    
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        
+        total = len(rows)
+        
+        # For mel length calculation, optionally sample indices
+        mel_indices = set(range(total))
+        if sample_size and sample_size < total:
+            import random
+            mel_indices = set(random.sample(range(total), sample_size))
+        
+        for idx, row in enumerate(rows):
+            # Progress update
+            if (idx + 1) % 100 == 0:
+                print(f"  Analyzing dataset: {idx + 1}/{total} files...", end='\r')
+            
+            # Process text for vocabulary and length collection (always process all rows)
+            text = row.get("text", "").strip()
+            if text:
+                chars.update(text)
+                text_lengths.append(len(text))
+            
+            # Process audio for mel length (only for sampled indices if sampling is enabled)
+            if idx in mel_indices:
+                try:
+                    wav_path = row.get("wav", "").strip()
+                    if wav_path and os.path.exists(wav_path):
+                        wav, file_sr = load_audio(wav_path)
+                        if file_sr != sr:
+                            wav = torchaudio.transforms.Resample(file_sr, sr)(wav)
+                        
+                        mel = melspec(wav)[0].T  # (T, n_mels)
+                        mel_len = mel.shape[0]
+                        mel_lengths.append(mel_len)
+                except Exception:
+                    continue
+        
+        if total > 0:
+            print(f"  Analyzed dataset: {total} files processed")
+    
+    # Build vocabulary: blank token (0) reserved for CTC, then special tokens, then characters
+    char_to_idx = {}
+    idx_to_char = {}
+    
+    # Reserve 0 for CTC blank token
+    char_to_idx['<BLANK>'] = 0
+    idx_to_char[0] = '<BLANK>'
+    
+    # Add special tokens
+    char_to_idx['<UNK>'] = 1
+    idx_to_char[1] = '<UNK>'
+    
+    # Add all unique characters from dataset (sorted for consistency)
+    for char in sorted(chars):
+        if char not in char_to_idx:
+            idx = len(char_to_idx)
+            char_to_idx[char] = idx
+            idx_to_char[idx] = char
+    
+    vocab_size = len(char_to_idx)
+    
+    # Calculate max_text_len using percentile (minimizes padding while covering most data)
+    if text_lengths:
+        text_lengths_arr = np.array(text_lengths)
+        max_text_len = int(np.ceil(np.percentile(text_lengths_arr, text_percentile)))
+    else:
+        max_text_len = 0
+    
+    # Calculate max_mel_length using percentile (minimizes padding while covering most data)
+    if mel_lengths:
+        mel_lengths_arr = np.array(mel_lengths)
+        max_mel_len = np.percentile(mel_lengths_arr, mel_percentile)
+        # Round up to nearest 256 for better memory alignment
+        max_mel_len = int(np.ceil(max_mel_len / 256) * 256)
+    else:
+        max_mel_len = 0
+    
+    return char_to_idx, idx_to_char, vocab_size, max_text_len, max_mel_len
+
+def analyze_tts_dataset(csv_path, sr=16000, n_mels=128, frame_ms=80, sample_size=None, mel_percentile=95.0):
+    """
+    Analyze TTS dataset to calculate max mel length using percentile.
+    Uses TTS-specific mel spectrogram parameters (frame_ms=80 for talker).
+    
+    Args:
+        csv_path: Path to TTS CSV file with 'wav' column
+        sr: Sample rate (default: 16000)
+        n_mels: Number of mel bins (default: 128)
+        frame_ms: Frame duration in milliseconds (default: 80 for talker)
+        sample_size: Number of samples to check (None = all, recommended for large datasets)
+        mel_percentile: Percentile to use for max_mel_length (default: 95.0, covers 95% of data, minimizes padding)
+        
+    Returns:
+        int: Maximum mel length at specified percentile (rounded up to nearest 256)
+    """
+    import numpy as np
+    
+    mel_lengths = []
+    
+    hop_length = int(sr * frame_ms / 1000)
+    win_length = min(1024, hop_length * 4)
+    
+    melspec = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sr, 
+        n_fft=1024, 
+        hop_length=hop_length, 
+        win_length=win_length, 
+        n_mels=n_mels
+    )
+    
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        
+        total = len(rows)
+        
+        # Optionally sample indices
+        mel_indices = set(range(total))
+        if sample_size and sample_size < total:
+            import random
+            mel_indices = set(random.sample(range(total), sample_size))
+        
+        for idx, row in enumerate(rows):
+            # Progress update
+            if (idx + 1) % 100 == 0:
+                print(f"  Analyzing TTS dataset: {idx + 1}/{total} files...", end='\r')
+            
+            # Process audio for mel length (only for sampled indices if sampling is enabled)
+            if idx in mel_indices:
+                try:
+                    wav_path = row.get("wav", "").strip()
+                    if wav_path and os.path.exists(wav_path):
+                        wav, file_sr = load_audio(wav_path)
+                        if file_sr != sr:
+                            wav = torchaudio.transforms.Resample(file_sr, sr)(wav)
+                        
+                        mel = melspec(wav)[0].T  # (T, n_mels)
+                        mel_len = mel.shape[0]
+                        mel_lengths.append(mel_len)
+                except Exception:
+                    continue
+        
+        if total > 0:
+            print(f"  Analyzed TTS dataset: {total} files processed")
+    
+    # Calculate max_mel_length using percentile (minimizes padding while covering most data)
+    if mel_lengths:
+        mel_lengths_arr = np.array(mel_lengths)
+        max_mel_len = np.percentile(mel_lengths_arr, mel_percentile)
+        # Round up to nearest 256 for better memory alignment
+        max_mel_len = int(np.ceil(max_mel_len / 256) * 256)
+    else:
+        max_mel_len = 0
+    
+    return max_mel_len
+
+def analyze_ocr_dataset(csv_path, text_percentile=95.0):
+    """
+    Analyze OCR dataset in a single pass: build vocabulary and calculate max text length.
+    Uses percentile to minimize padding while covering most of the data.
+    
+    Args:
+        csv_path: Path to OCR CSV file with 'text' or 'label' or 'text_label' column
+        text_percentile: Percentile to use for max_text_length (default: 95.0, covers 95% of data, minimizes padding)
+        
+    Returns:
+        tuple: (char_to_idx, idx_to_char, vocab_size, max_text_len)
+            - char_to_idx: dict mapping characters to indices
+            - idx_to_char: dict mapping indices to characters
+            - vocab_size: total vocabulary size (includes special tokens)
+            - max_text_len: Maximum text length at specified percentile (rounded up)
+    """
+    import numpy as np
+    
+    chars = set()
+    text_lengths = []
+    
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for idx, row in enumerate(reader):
+            # Progress update
+            if (idx + 1) % 1000 == 0:
+                print(f"  Analyzing OCR dataset: {idx + 1} rows...", end='\r')
+            
+            # OCR datasets may use different column names
+            text = row.get("text", "") or row.get("label", "") or row.get("text_label", "")
+            if text:
+                chars.update(text)
+                text_lengths.append(len(text))
+        
+        total = idx + 1 if idx >= 0 else 0
+        if total > 0:
+            print(f"  Analyzed OCR dataset: {total} rows processed")
+    
+    # Build vocabulary: special tokens first, then characters
+    char_to_idx = {}
+    idx_to_char = {}
+    
+    # Add special tokens (same as OCRDataset._build_vocab)
+    char_to_idx['<PAD>'] = 0
+    idx_to_char[0] = '<PAD>'
+    char_to_idx['<BOS>'] = 1
+    idx_to_char[1] = '<BOS>'
+    char_to_idx['<EOS>'] = 2
+    idx_to_char[2] = '<EOS>'
+    char_to_idx['<UNK>'] = 3
+    idx_to_char[3] = '<UNK>'
+    
+    # Add all unique characters from dataset (sorted for consistency)
+    for char in sorted(chars):
+        if char not in char_to_idx:
+            idx = len(char_to_idx)
+            char_to_idx[char] = idx
+            idx_to_char[idx] = char
+    
+    vocab_size = len(char_to_idx)
+    
+    # Calculate max_text_length using percentile (minimizes padding while covering most data)
+    if text_lengths:
+        text_lengths_arr = np.array(text_lengths)
+        max_text_len = int(np.ceil(np.percentile(text_lengths_arr, text_percentile)))
+    else:
+        max_text_len = 0
+    
+    return char_to_idx, idx_to_char, vocab_size, max_text_len
+
 class ASRDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
     def __init__(self, csv_path, sr=16000, n_mels=128, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):
@@ -1186,13 +1593,18 @@ class ASRDataset(IterableDataset):
 
 class OCRDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
-    def __init__(self, csv_path, image_root, img_size=224, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+    def __init__(self, csv_path, image_root, img_size=224, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0, char_to_idx=None, idx_to_char=None):
         self.csv_path, self.image_root, self.img_size = csv_path, image_root, img_size
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
-        self.char_to_idx, self.idx_to_char = {}, {}
         self._num_rows = None
-        self._build_vocab(csv_path)
+        # Use provided vocabulary if available, otherwise build it
+        if char_to_idx is not None and idx_to_char is not None:
+            self.char_to_idx = char_to_idx
+            self.idx_to_char = idx_to_char
+        else:
+            self.char_to_idx, self.idx_to_char = {}, {}
+            self._build_vocab(csv_path)
     
     def get_length(self):
         """Count CSV rows (expensive, cached after first call)"""

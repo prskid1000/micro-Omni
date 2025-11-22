@@ -372,16 +372,21 @@ audio_encoder.load_state_dict(checkpoint['enc'])
 ```json
 {
   "use_compile": true,
-  "max_mel_length": 6000,  // Fixed maximum mel length (frames)
-  "sample_rate": 16000,
-  "frame_hop": 160
+  "max_mel_length_percentile": 95.0  // Optional: Percentile for auto-calculation (default: 95.0)
+  // max_mel_length is auto-calculated from dataset - no need to set manually
 }
 ```
 
-**Calculating `max_mel_length`:**
+**Auto-Calculation:**
+- `max_mel_length` is **automatically calculated** from your dataset during training
+- Uses **95th percentile** by default to minimize padding while covering 95% of data
+- Automatically rounds up to nearest 256 for better memory alignment
+- ~5% of data will be truncated if longer (acceptable for outliers)
+
+**Frame Rate Reference:**
 - Frame rate = sample_rate / hop_length = 16000 / 160 = 100 frames/second
 - For 60 seconds: 60 × 100 = 6000 frames
-- For 20 seconds: 20 × 100 = 2000 frames (default: 2048)
+- For 20 seconds: 20 × 100 = 2000 frames
 
 **Why Fixed Length?**
 - CUDA graphs require uniform batch shapes

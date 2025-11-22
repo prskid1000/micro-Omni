@@ -7,9 +7,10 @@ from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, TextDataset,
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
+    check_gradient_explosion, reload_from_last_checkpoint, TextDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext
+    ValidationSkipSamplesContext, save_training_metadata, load_training_metadata
 )
 from tqdm import tqdm
 
@@ -23,6 +24,11 @@ def main(cfg):
     os.makedirs(save_dir, exist_ok=True)
     train_text = cfg.get("train_text", "data/text/production_corpus.txt")
     vocab_size = cfg.get("vocab_size", 32000)
+    
+    # Check for existing metadata to avoid re-tokenizing if possible (though tokenizer check handles this)
+    model_name = "thinker"
+    metadata = load_training_metadata(save_dir, model_name)
+    
     spm_model = os.path.join(save_dir, "tokenizer.model")
     if not os.path.exists(spm_model):
         print(f"Creating tokenizer from {train_text}...")
@@ -132,9 +138,11 @@ def main(cfg):
     
     # Resume from checkpoint if available
     step = 0
-    step, resume_from = load_checkpoint(
+    # Resume from checkpoint if available
+    step = 0
+    step, metadata = load_checkpoint(
         save_dir, 
-        "thinker_step_", 
+        model_name, 
         device, 
         logger,
         state_dict_loaders={
@@ -145,10 +153,13 @@ def main(cfg):
         }
     )
     # Handle scaler separately if needed
-    if step > 0 and resume_from and scaler is not None:
-        checkpoint = torch.load(resume_from, map_location=device)
-        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
-            scaler.load_state_dict(checkpoint["scaler"])
+    # Handle scaler separately if needed
+    if step > 0 and scaler is not None:
+        model_path = os.path.join(save_dir, f"{model_name}.pt")
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 8)
@@ -392,20 +403,27 @@ def main(cfg):
                     logger.info(f"Perplexity: {perplexity:.2f}")
             
             # Periodic checkpointing
+            # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(save_dir, f"thinker_step_{step}.pt")
+                # Save model weights only (overwrite existing file)
+                model_path = os.path.join(save_dir, f"{model_name}.pt")
                 checkpoint_data = {
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
-                torch.save(checkpoint_data, checkpoint_path)
-                logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(save_dir, "thinker_step_", keep_last_n=1)
+                torch.save(checkpoint_data, model_path)
+                
+                # Save training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
+                logger.checkpoint(step, model_path)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -472,16 +490,23 @@ def main(cfg):
                 model.train()
             
             if step >= max_steps:
-                final_path = os.path.join(save_dir, "thinker.pt")
+                final_path = os.path.join(save_dir, f"{model_name}.pt")
                 checkpoint_data = {
                     "model": model.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
+                
+                # Save final training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {cfg['save_dir']}")
                 logger.training_end(step)
                 return
@@ -546,16 +571,24 @@ def main(cfg):
         model.train()
         
         # Save at end of epoch (checkpoint for resuming)
-        final_path = os.path.join(cfg["save_dir"], "thinker.pt")
+        # Save at end of epoch (checkpoint for resuming)
+        final_path = os.path.join(save_dir, f"{model_name}.pt")
         checkpoint_data = {
             "model": model.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "step": step
         }
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)
+        
+        # Save training metadata
+        training_metadata = {
+            "step": step,
+            "epoch": epoch,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion

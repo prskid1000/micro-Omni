@@ -8,9 +8,10 @@ from omni.codec import RVQ
 from omni.talker import TalkerTiny
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, cleanup_old_checkpoints, TTSDataset,
+    check_gradient_explosion, TTSDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, collate_mel_fn
+    ValidationSkipSamplesContext, collate_mel_fn, analyze_tts_dataset,
+    save_training_metadata, load_training_metadata
 )
 from tqdm import tqdm
 
@@ -71,10 +72,57 @@ def main(cfg):
     if accumulation_steps > 1:
         print(f"Gradient accumulation: {accumulation_steps} steps")
 
+    # Get TTS CSV path
+    tts_csv = cfg.get("tts_csv", "data/audio/production_tts.csv")
+    
+    # Check if metadata exists (contains previously calculated values)
+    model_name = "talker"
+    metadata = load_training_metadata(save_dir, model_name)
+    
+    if metadata and not cfg.get("recalculate_dataset_stats", False):
+        # Load calculated values from metadata (avoid recalculating)
+        print("Loading dataset statistics from metadata...")
+        max_mel_length_dynamic = metadata.get("max_mel_length", None)
+        print(f"Mel length: {max_mel_length_dynamic} frames (from metadata)")
+    else:
+        # Auto-calculate max_mel_length from dataset using percentile (minimizes padding)
+        print("Analyzing TTS dataset for mel length...")
+        # Sample a subset for mel length calculation (optional, can be configured)
+        sample_size = cfg.get("max_mel_length_sample_size", None)  # None = check all files
+        # Percentile threshold for minimizing padding (default: 95% coverage)
+        mel_percentile = cfg.get("max_mel_length_percentile", 95.0)
+        max_mel_length_dynamic = analyze_tts_dataset(
+            tts_csv, sr=sr, n_mels=n_mels, frame_ms=frame_ms, 
+            sample_size=sample_size, mel_percentile=mel_percentile
+        )
+        frame_rate = sr / int(sr * frame_ms / 1000)  # frames/sec for talker
+        print(f"Mel length at {mel_percentile}th percentile: {max_mel_length_dynamic} frames (~{max_mel_length_dynamic / frame_rate:.2f} seconds, covers {mel_percentile}% of data, minimizes padding)")
+        print(f"  Note: ~{100 - mel_percentile:.1f}% of data will be truncated if longer (acceptable for outliers)")
+        
+        # Save calculated values to metadata (so we don't recalculate next time)
+        training_metadata = {
+            "step": 0,  # Will be updated when we save checkpoints
+            "epoch": 0,
+            "max_mel_length": max_mel_length_dynamic,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
+        print("✓ Saved dataset statistics to metadata (will be reused on next run)")
+    
+    # Allow override from config, but default to auto-calculated value
+    max_mel_length = cfg.get("max_mel_length", max_mel_length_dynamic)
+    if max_mel_length != max_mel_length_dynamic:
+        print(f"⚠ Warning: Config max_mel_length={max_mel_length} differs from dataset max length={max_mel_length_dynamic}")
+        print(f"  Using config value: {max_mel_length}")
+    else:
+        print(f"✓ Using auto-calculated max_mel_length: {max_mel_length}")
+    
+    if use_compile:
+        print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
+    
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     
-    tts_csv = cfg.get("tts_csv", "data/audio/production_tts.csv")
     train_ds = TTSDataset(
         tts_csv, 
         sr=sr, 
@@ -100,12 +148,6 @@ def main(cfg):
     )
     val_ds._val_split = val_split
     val_ds._val_mode = True  # Validation mode
-    
-    # Fixed maximum mel length for uniform batch sizes (required for CUDA graphs)
-    # This ensures all batches have the same shape, preventing CUDA graphs errors
-    max_mel_length = cfg.get("max_mel_length", 2048)  # Default: 2048 frames (~20s at 100Hz)
-    if use_compile:
-        print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
     
     # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
     collate_fn_with_max = partial(collate_mel_fn, max_mel_length=max_mel_length)
@@ -136,9 +178,9 @@ def main(cfg):
     
     # Resume from checkpoint if available
     step = 0
-    step, resume_from = load_checkpoint(
+    step, metadata = load_checkpoint(
         save_dir, 
-        "talker_step_", 
+        model_name, 
         device, 
         logger,
         state_dict_loaders={
@@ -149,11 +191,13 @@ def main(cfg):
             "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
         }
     )
-    # Remove None scaler entry if present
-    if step > 0 and resume_from:
-        checkpoint = torch.load(resume_from, map_location=device)
-        if isinstance(checkpoint, dict) and "scaler" in checkpoint and scaler is not None:
-            scaler.load_state_dict(checkpoint["scaler"])
+    # Load scaler from model file if needed
+    if step > 0 and scaler is not None:
+        model_path = os.path.join(save_dir, f"{model_name}.pt")
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 4)
@@ -386,22 +430,29 @@ def main(cfg):
                 unscaled_loss = loss_val * accumulation_steps
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
             
-            # Periodic checkpointing
+            # Periodic checkpointing - save only model file and metadata
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(save_dir, f"talker_step_{step}.pt")
-                checkpoint_data = {
+                # Save model weights only (overwrite existing file)
+                model_path = os.path.join(save_dir, f"{model_name}.pt")
+                model_data = {
                     "rvq": rvq.state_dict(),
                     "talker": talker.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
-                    checkpoint_data["scaler"] = scaler.state_dict()
-                torch.save(checkpoint_data, checkpoint_path)
-                logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(save_dir, "talker_step_", keep_last_n=1)
+                    model_data["scaler"] = scaler.state_dict()
+                torch.save(model_data, model_path)
+                
+                # Save training metadata (step, calculated values, etc.)
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "max_mel_length": max_mel_length_dynamic,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
+                logger.checkpoint(step, model_path)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -491,17 +542,26 @@ def main(cfg):
                     talker.train()
             
             if step >= max_steps:
-                final_path = os.path.join(save_dir, "talker.pt")
-                checkpoint_data = {
+                # Save final model weights
+                final_path = os.path.join(save_dir, f"{model_name}.pt")
+                model_data = {
                     "rvq": rvq.state_dict(),
                     "talker": talker.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
-                    checkpoint_data["scaler"] = scaler.state_dict()
-                torch.save(checkpoint_data, final_path)
+                    model_data["scaler"] = scaler.state_dict()
+                torch.save(model_data, final_path)
+                
+                # Save final training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "max_mel_length": max_mel_length_dynamic,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {save_dir}")
                 logger.training_end(step)
                 return
@@ -595,17 +655,25 @@ def main(cfg):
             talker.train()
         
         # Save at end of epoch (checkpoint for resuming)
-        final_path = os.path.join(save_dir, "talker.pt")
-        checkpoint_data = {
+        final_path = os.path.join(save_dir, f"{model_name}.pt")
+        model_data = {
             "rvq": rvq.state_dict(),
             "talker": talker.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "step": step
         }
         if scaler is not None:
-            checkpoint_data["scaler"] = scaler.state_dict()
-        torch.save(checkpoint_data, final_path)
+            model_data["scaler"] = scaler.state_dict()
+        torch.save(model_data, final_path)
+        
+        # Save training metadata
+        training_metadata = {
+            "step": step,
+            "epoch": epoch,
+            "max_mel_length": max_mel_length_dynamic,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion

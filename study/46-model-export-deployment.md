@@ -65,7 +65,7 @@ python export.py \
 - `--configs_dir`: Directory containing config JSON files (default: `configs`)
 - `--skip_component_configs`: Skip copying individual component configs (minimal export, only main config.json)
 
-**Note:** The export script automatically uses step checkpoints if standard checkpoints are not found. For example, if `thinker.pt` doesn't exist, it will automatically find and use the latest `thinker_step_*.pt` checkpoint.
+**Note:** The export script prioritizes `model.pt` (the new standard). If not found, it falls back to legacy `*_step_*.pt` checkpoints.
 
 ### What Gets Merged
 
@@ -89,6 +89,7 @@ The merge script automatically copies all necessary support files to the output 
 ### Required Files
 
 1. **Main Configuration** (Hugging Face format):
+
    - `config.json` - Main model configuration (at root, not in subdirectory)
    - `tokenizer_config.json` - Tokenizer configuration
    - `generation_config.json` - Generation parameters
@@ -96,6 +97,7 @@ The merge script automatically copies all necessary support files to the output 
    - `preprocessor_config.json` - Multimodal preprocessor settings
 
 2. **Component Config JSON files** (`configs/` subdirectory) - **OPTIONAL**:
+
    - `thinker_tiny.json` - Thinker model configuration (optional, for backward compatibility)
    - `audio_enc_tiny.json` - Audio encoder configuration (optional)
    - `vision_tiny.json` - Vision encoder configuration (optional)
@@ -103,10 +105,11 @@ The merge script automatically copies all necessary support files to the output 
    - `omni_sft_tiny.json` - Overall training configuration (optional)
    - `ocr_tiny.json` - OCR model configuration (optional)
    - `vocoder_tiny.json` - Vocoder configuration (optional)
-   
+
    **Note:** These are optional. The main `config.json` at root contains all necessary information for Hugging Face. Component configs are only included for backward compatibility with our inference script.
 
 3. **Tokenizer**:
+
    - `tokenizer.model` - SentencePiece BPE tokenizer model file
    - **Note:** We use SentencePiece, so we don't need `vocab.json` or `merges.txt` (those are for GPT-2 style BPE tokenizers)
 
@@ -115,7 +118,8 @@ The merge script automatically copies all necessary support files to the output 
 
 ### Optional Files
 
-- `hifigan.pt` - HiFi-GAN neural vocoder checkpoint (for better TTS quality)
+- `vocoder.pt` - Neural vocoder checkpoint (preferred, for better TTS quality)
+- `hifigan.pt` - Legacy vocoder checkpoint (fallback)
 - `ocr.pt` - OCR checkpoint with char mappings (for OCR functionality)
 
 ### Directory Structure
@@ -132,7 +136,8 @@ merged_model/
 ├── preprocessor_config.json   # Multimodal preprocessor - REQUIRED
 ├── model_info.json            # Component metadata (optional)
 ├── tokenizer.model            # SentencePiece tokenizer (single file) - REQUIRED
-├── hifigan.pt                 # Vocoder (optional)
+├── vocoder.pt                 # Vocoder (optional, preferred)
+├── hifigan.pt                 # Legacy Vocoder (optional)
 ├── ocr.pt                     # OCR checkpoint (optional)
 └── configs/                   # Component-specific configs (OPTIONAL)
     ├── thinker_tiny.json      # Optional - for backward compatibility
@@ -147,6 +152,7 @@ merged_model/
 **Important Notes:**
 
 1. **Tokenizer files:** We use SentencePiece, which only requires `tokenizer.model`. We do NOT need:
+
    - ❌ `vocab.json` (used by GPT-2 style BPE tokenizers)
    - ❌ `merges.txt` (used by GPT-2 style BPE tokenizers)
 
@@ -189,17 +195,20 @@ state_dict = load_file("merged_model/model.safetensors")
 ### Example Usage
 
 **Text-only chat:**
+
 ```bash
 cd merged_model
 python infer_standalone.py --text "Your question here"
 ```
 
 **Using transformers directly:**
+
 ```bash
 python -c "from transformers import AutoTokenizer; tokenizer = AutoTokenizer.from_pretrained('merged_model'); print(tokenizer.encode('Hello'))"
 ```
 
 **Multimodal (image + text):**
+
 ```bash
 cd merged_model
 python infer_standalone.py \
@@ -208,6 +217,7 @@ python infer_standalone.py \
 ```
 
 **Text-to-speech:**
+
 ```bash
 cd merged_model
 python infer_standalone.py \
@@ -216,6 +226,7 @@ python infer_standalone.py \
 ```
 
 **Audio input:**
+
 ```bash
 cd merged_model
 python infer_standalone.py \
@@ -232,13 +243,14 @@ To upload your merged model to Hugging Face:
 1. **Create a model repository** on Hugging Face Hub
 
 2. **Upload the merged model directory**:
+
    ```bash
    # Install huggingface_hub if needed
    pip install huggingface_hub
-   
+
    # Login
    huggingface-cli login
-   
+
    # Upload
    huggingface-cli upload your-username/muomni-tiny \
        merged_model/ \
@@ -246,6 +258,7 @@ To upload your merged model to Hugging Face:
    ```
 
 3. **Required files for Hugging Face**:
+
    - `model.safetensors` - Model weights
    - `config.json` - Main model configuration (at root) - **REQUIRED**
    - `tokenizer_config.json` - Tokenizer configuration - **REQUIRED**
@@ -253,14 +266,16 @@ To upload your merged model to Hugging Face:
    - `tokenizer.model` - SentencePiece tokenizer model - **REQUIRED**
    - `README.md` - Model card (create this)
    - `LICENSE` - License file (if applicable)
-   
+
    **Optional files:**
+
    - `configs/*.json` - Component-specific configs (not needed for HF, included for backward compatibility)
    - `preprocessor_config.json` - Multimodal preprocessor (recommended)
    - `chat_template.json` - Chat template (recommended)
 
 4. **Optional but recommended**:
-   - `hifigan.pt` - Vocoder checkpoint
+   - `vocoder.pt` - Vocoder checkpoint
+   - `hifigan.pt` - Legacy vocoder checkpoint
    - Example usage code in README
 
 ---
@@ -351,4 +366,3 @@ else:
 [Continue to Chapter 47: Quick Start Export →](47-quick-start-export.md)
 
 ---
-

@@ -5,7 +5,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, cleanup_old_checkpoints, ValidationSkipSamplesContext, collate_mel_text_fn, build_char_vocab_from_asr_csv
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata
 from tqdm import tqdm
 
 def main(cfg):
@@ -25,20 +25,85 @@ def main(cfg):
     # Get data path from config (needed for vocabulary building)
     train_csv = cfg.get("train_csv", "data/audio/production_asr.csv")
     
-    # Build dynamic character vocabulary from dataset (like OCR approach)
-    # This supports any Unicode characters present in your data
-    print("Building character vocabulary from ASR dataset...")
-    char_to_idx, idx_to_char, vocab_size_dynamic = build_char_vocab_from_asr_csv(train_csv)
-    print(f"Character vocabulary size: {vocab_size_dynamic} (includes blank token at index 0)")
-    print(f"Unique characters found: {len(char_to_idx) - 2}")  # Exclude <BLANK> and <UNK>
+    # Check if metadata exists (contains previously calculated values)
+    model_name = "audio_enc"
+    metadata = load_training_metadata(save_dir, model_name)
     
-    # Allow override from config, but default to dynamic vocabulary
+    if metadata and not cfg.get("recalculate_dataset_stats", False):
+        # Load calculated values from metadata (avoid recalculating)
+        print("Loading dataset statistics from metadata...")
+        char_to_idx = metadata.get("char_to_idx", {})
+        idx_to_char = metadata.get("idx_to_char", {})
+        vocab_size_dynamic = metadata.get("vocab_size", None)
+        max_text_len_dynamic = metadata.get("max_text_len", None)
+        max_mel_length_dynamic = metadata.get("max_mel_length", None)
+        
+        # Convert string keys back to original types if needed
+        if char_to_idx and isinstance(list(char_to_idx.keys())[0], str):
+            # Already in correct format from JSON
+            pass
+        
+        print(f"Character vocabulary size: {vocab_size_dynamic} (from metadata)")
+        print(f"Text length: {max_text_len_dynamic} (from metadata)")
+        print(f"Mel length: {max_mel_length_dynamic} frames (from metadata)")
+    else:
+        # Analyze dataset in a single pass: build vocabulary, calculate max text length, and max mel length
+        # This is more efficient than calling the three functions separately
+        # Uses percentiles to minimize padding while covering most of the data
+        print("Analyzing ASR dataset (vocabulary, text length, mel length)...")
+        # Sample a subset for mel length calculation (optional, can be configured)
+        sample_size = cfg.get("max_mel_length_sample_size", None)  # None = check all files
+        # Percentile thresholds for minimizing padding (default: 95% coverage)
+        text_percentile = cfg.get("max_text_len_percentile", 95.0)
+        mel_percentile = cfg.get("max_mel_length_percentile", 95.0)
+        char_to_idx, idx_to_char, vocab_size_dynamic, max_text_len_dynamic, max_mel_length_dynamic = analyze_asr_dataset(
+            train_csv, sr=sr, n_mels=n_mels, sample_size=sample_size, 
+            text_percentile=text_percentile, mel_percentile=mel_percentile
+        )
+        
+        print(f"Character vocabulary size: {vocab_size_dynamic} (includes blank token at index 0)")
+        print(f"Unique characters found: {len(char_to_idx) - 2}")  # Exclude <BLANK> and <UNK>
+        print(f"Text length at {text_percentile}th percentile: {max_text_len_dynamic} (covers {text_percentile}% of data, minimizes padding)")
+        print(f"  Note: ~{100 - text_percentile:.1f}% of data will be truncated if longer (acceptable for outliers)")
+        frame_rate = sr / 160  # 100 frames/sec for hop_length=160
+        print(f"Mel length at {mel_percentile}th percentile: {max_mel_length_dynamic} frames (~{max_mel_length_dynamic / frame_rate:.2f} seconds, covers {mel_percentile}% of data, minimizes padding)")
+        print(f"  Note: ~{100 - mel_percentile:.1f}% of data will be truncated if longer (acceptable for outliers)")
+        
+        # Save calculated values to metadata (so we don't recalculate next time)
+        training_metadata = {
+            "step": 0,  # Will be updated when we save checkpoints
+            "epoch": 0,
+            "char_to_idx": char_to_idx,
+            "idx_to_char": idx_to_char,
+            "vocab_size": vocab_size_dynamic,
+            "max_text_len": max_text_len_dynamic,
+            "max_mel_length": max_mel_length_dynamic,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
+        print("✓ Saved dataset statistics to metadata (will be reused on next run)")
+    
+    # Allow override from config, but default to auto-calculated values
     vocab = cfg.get("ctc_vocab_size", vocab_size_dynamic)
     if vocab != vocab_size_dynamic:
         print(f"⚠ Warning: Config ctc_vocab_size={vocab} differs from dataset vocabulary size={vocab_size_dynamic}")
         print(f"  Using config value: {vocab}")
     else:
         print(f"✓ Using dynamic vocabulary size: {vocab}")
+    
+    max_text_len = cfg.get("max_text_len", max_text_len_dynamic)
+    if max_text_len != max_text_len_dynamic:
+        print(f"⚠ Warning: Config max_text_len={max_text_len} differs from dataset max length={max_text_len_dynamic}")
+        print(f"  Using config value: {max_text_len}")
+    else:
+        print(f"✓ Using auto-calculated max_text_len: {max_text_len}")
+    
+    max_mel_length = cfg.get("max_mel_length", max_mel_length_dynamic)
+    if max_mel_length != max_mel_length_dynamic:
+        print(f"⚠ Warning: Config max_mel_length={max_mel_length} differs from dataset max length={max_mel_length_dynamic}")
+        print(f"  Using config value: {max_mel_length}")
+    else:
+        print(f"✓ Using auto-calculated max_mel_length: {max_mel_length}")
     
     d_model = cfg.get("d_model", 192)
     
@@ -59,7 +124,6 @@ def main(cfg):
     opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.1))
     
     unk_idx = char_to_idx.get('<UNK>', 1)  # Default to 1 if not found
-    max_text_len = cfg.get("max_text_len", 64)
     head.char_to_idx = char_to_idx
     head.idx_to_char = idx_to_char
     head.unk_idx = unk_idx
@@ -101,7 +165,7 @@ def main(cfg):
 
     # Fixed maximum mel length for uniform batch sizes (required for CUDA graphs)
     # This ensures all batches have the same shape, preventing CUDA graphs errors
-    max_mel_length = cfg.get("max_mel_length", 2048)  # Default: 2048 frames (~20s at 100Hz)
+    # max_mel_length is now auto-calculated above
     if use_compile:
         print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
     
@@ -160,9 +224,9 @@ def main(cfg):
     
     # Resume from checkpoint if available
     step = 0
-    step, resume_from = load_checkpoint(
+    step, metadata = load_checkpoint(
         save_dir, 
-        "audio_enc_step_", 
+        model_name, 
         device, 
         logger,
         state_dict_loaders={
@@ -173,11 +237,13 @@ def main(cfg):
             "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
         }
     )
-    # Handle scaler separately if needed
-    if step > 0 and resume_from and scaler is not None:
-        checkpoint = torch.load(resume_from, map_location=device)
-        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
-            scaler.load_state_dict(checkpoint["scaler"])
+    # Load scaler from model file if needed
+    if step > 0 and scaler is not None:
+        model_path = os.path.join(save_dir, f"{model_name}.pt")
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 4)
@@ -372,25 +438,33 @@ def main(cfg):
                 unscaled_loss = loss_val * accumulation_steps
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
             
-            # Periodic checkpointing
+            # Periodic checkpointing - save only model file and metadata
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(save_dir, f"audio_enc_step_{step}.pt")
-                checkpoint_data = {
+                # Save model weights only (overwrite existing file)
+                model_path = os.path.join(save_dir, f"{model_name}.pt")
+                model_data = {
                     "enc": model.state_dict(),
                     "head": head.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "char_to_idx": char_to_idx,
-                    "idx_to_char": idx_to_char,
-                    "config": cfg
                 }
                 if scaler is not None:
-                    checkpoint_data["scaler"] = scaler.state_dict()
-                torch.save(checkpoint_data, checkpoint_path)
-                logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(save_dir, "audio_enc_step_", keep_last_n=1)
+                    model_data["scaler"] = scaler.state_dict()
+                torch.save(model_data, model_path)
+                
+                # Save training metadata (step, calculated values, etc.)
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "char_to_idx": char_to_idx,
+                    "idx_to_char": idx_to_char,
+                    "vocab_size": vocab_size_dynamic,
+                    "max_text_len": max_text_len_dynamic,
+                    "max_mel_length": max_mel_length_dynamic,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
+                logger.checkpoint(step, model_path)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -456,20 +530,30 @@ def main(cfg):
                     head.train()
             
             if step >= max_steps:
-                final_path = os.path.join(save_dir, "audio_enc.pt")
-                checkpoint_data = {
+                # Save final model weights
+                final_path = os.path.join(save_dir, f"{model_name}.pt")
+                model_data = {
                     "enc": model.state_dict(),
                     "head": head.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "char_to_idx": char_to_idx,
-                    "idx_to_char": idx_to_char,
-                    "config": cfg
                 }
                 if scaler is not None:
-                    checkpoint_data["scaler"] = scaler.state_dict()
-                torch.save(checkpoint_data, final_path)
+                    model_data["scaler"] = scaler.state_dict()
+                torch.save(model_data, final_path)
+                
+                # Save final training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "char_to_idx": char_to_idx,
+                    "idx_to_char": idx_to_char,
+                    "vocab_size": vocab_size_dynamic,
+                    "max_text_len": max_text_len_dynamic,
+                    "max_mel_length": max_mel_length_dynamic,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {save_dir}")
                 logger.training_end(step)
                 return
@@ -536,20 +620,29 @@ def main(cfg):
             head.train()
         
         # Save at end of epoch (checkpoint for resuming)
-        final_path = os.path.join(save_dir, "audio_enc.pt")
-        checkpoint_data = {
+        final_path = os.path.join(save_dir, f"{model_name}.pt")
+        model_data = {
             "enc": model.state_dict(),
             "head": head.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "step": step,
-            "char_to_idx": char_to_idx,
-            "idx_to_char": idx_to_char,
-            "config": cfg
         }
         if scaler is not None:
-            checkpoint_data["scaler"] = scaler.state_dict()
-        torch.save(checkpoint_data, final_path)
+            model_data["scaler"] = scaler.state_dict()
+        torch.save(model_data, final_path)
+        
+        # Save training metadata
+        training_metadata = {
+            "step": step,
+            "epoch": epoch,
+            "char_to_idx": char_to_idx,
+            "idx_to_char": idx_to_char,
+            "vocab_size": vocab_size_dynamic,
+            "max_text_len": max_text_len_dynamic,
+            "max_mel_length": max_mel_length_dynamic,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion

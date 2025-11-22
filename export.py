@@ -72,6 +72,8 @@ def discover_checkpoints(base_dir="checkpoints"):
         ("omni_sft_tiny", "omni.pt", "omni_step_", "omni_ckpt_dir"),
         ("ocr", "ocr.pt", "ocr_step_", "ocr_ckpt_dir"),
         ("ocr_tiny", "ocr.pt", "ocr_step_", "ocr_ckpt_dir"),
+        ("vocoder", "vocoder.pt", "vocoder_step_", "vocoder_ckpt_dir"),
+        ("vocoder_tiny", "vocoder.pt", "vocoder_step_", "vocoder_ckpt_dir"),
     ]
     
     # Search for each pattern
@@ -135,6 +137,13 @@ def discover_checkpoints(base_dir="checkpoints"):
                     if ckpt_path and ckpt_data:
                         discovered["ocr_ckpt_dir"] = item_path
                         print(f"  ✓ Discovered ocr_ckpt_dir: {item_path}")
+                
+                # Check for Vocoder
+                if "vocoder_ckpt_dir" not in discovered:
+                    ckpt_path, ckpt_data = find_checkpoint(item_path, "vocoder.pt", "vocoder_step_", device="cpu")
+                    if ckpt_path and ckpt_data:
+                        discovered["vocoder_ckpt_dir"] = item_path
+                        print(f"  ✓ Discovered vocoder_ckpt_dir: {item_path}")
     except Exception as e:
         print(f"  ⚠ Warning: Error while searching {base_dir}: {e}")
     
@@ -180,6 +189,8 @@ def load_checkpoint_paths_from_config(config_path, configs_dir="configs"):
             paths["talker_ckpt_dir"] = config["talker_ckpt"]
         if "ocr_ckpt" in config:
             paths["ocr_ckpt_dir"] = config["ocr_ckpt"]
+        if "vocoder_ckpt" in config:
+            paths["vocoder_ckpt_dir"] = config["vocoder_ckpt"]
         
         print(f"Loaded checkpoint paths from {full_config_path}")
         return paths
@@ -195,7 +206,9 @@ def merge_model_components(
     audio_ckpt_dir=None,
     vision_ckpt_dir=None,
     talker_ckpt_dir=None,
+    talker_ckpt_dir=None,
     ocr_ckpt_dir=None,
+    vocoder_ckpt_dir=None,
     output_path="model.safetensors",
     include_optimizer=False
 ):
@@ -209,6 +222,7 @@ def merge_model_components(
         vision_ckpt_dir: Directory containing vision.pt
         talker_ckpt_dir: Directory containing talker.pt
         ocr_ckpt_dir: Optional directory containing ocr.pt
+        vocoder_ckpt_dir: Optional directory containing vocoder.pt (not merged, but used for copy)
         output_path: Path to save the merged safetensors file
         include_optimizer: Whether to include optimizer/scheduler states
     """
@@ -372,7 +386,9 @@ def copy_support_files(
     audio_ckpt_dir,
     vision_ckpt_dir,
     talker_ckpt_dir,
+    talker_ckpt_dir,
     ocr_ckpt_dir,
+    vocoder_ckpt_dir,
     output_dir,
     configs_dir="configs"
 ):
@@ -408,17 +424,26 @@ def copy_support_files(
     if not tokenizer_copied:
         print("  ⚠ Warning: tokenizer.model not found")
     
-    # Copy HiFi-GAN vocoder if available
+    # Copy HiFi-GAN / Vocoder if available
     hifigan_paths = [
+        os.path.join(vocoder_ckpt_dir, "vocoder.pt") if vocoder_ckpt_dir else None,
+        os.path.join(vocoder_ckpt_dir, "hifigan.pt") if vocoder_ckpt_dir else None,
         os.path.join(talker_ckpt_dir, "hifigan.pt") if talker_ckpt_dir else None,
         os.path.join(omni_ckpt_dir, "hifigan.pt") if omni_ckpt_dir else None,
+        "checkpoints/vocoder.pt",
         "checkpoints/hifigan.pt",
     ]
     
     for hifigan_path in hifigan_paths:
         if hifigan_path and os.path.exists(hifigan_path):
-            shutil.copy2(hifigan_path, os.path.join(output_dir, "hifigan.pt"))
-            print(f"  ✓ Copied hifigan.pt from {hifigan_path}")
+            # Determine destination name (prefer vocoder.pt if source is vocoder.pt, else hifigan.pt)
+            # Actually, infer_chat.py looks for vocoder.pt first, so let's standardize on that if possible?
+            # But let's keep original name if it's hifigan.pt to avoid confusion.
+            # Or just copy to both? No, that's wasteful.
+            # Let's copy to the same basename as source, but infer_chat.py handles both.
+            dest_name = os.path.basename(hifigan_path)
+            shutil.copy2(hifigan_path, os.path.join(output_dir, dest_name))
+            print(f"  ✓ Copied {dest_name} from {hifigan_path}")
             break
     
     # Copy OCR checkpoint if available (contains char mappings)
@@ -673,6 +698,12 @@ Note: The script automatically discovers and exports ALL available models:
         help="Optional: Path to OCR checkpoint directory (contains ocr.pt)"
     )
     parser.add_argument(
+        "--vocoder_ckpt",
+        type=str,
+        default=None,
+        help="Optional: Path to Vocoder checkpoint directory (contains vocoder.pt)"
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="export",
@@ -719,6 +750,7 @@ Note: The script automatically discovers and exports ALL available models:
     vision_ckpt_dir = args.vision_ckpt or config_paths.get("vision_ckpt_dir") or discovered_paths.get("vision_ckpt_dir")
     talker_ckpt_dir = args.talker_ckpt or config_paths.get("talker_ckpt_dir") or discovered_paths.get("talker_ckpt_dir")
     ocr_ckpt_dir = args.ocr_ckpt or config_paths.get("ocr_ckpt_dir") or discovered_paths.get("ocr_ckpt_dir")
+    vocoder_ckpt_dir = args.vocoder_ckpt or config_paths.get("vocoder_ckpt_dir") or discovered_paths.get("vocoder_ckpt_dir")
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -732,6 +764,7 @@ Note: The script automatically discovers and exports ALL available models:
         vision_ckpt_dir=vision_ckpt_dir,
         talker_ckpt_dir=talker_ckpt_dir,
         ocr_ckpt_dir=ocr_ckpt_dir,
+        vocoder_ckpt_dir=vocoder_ckpt_dir,
         output_path=output_path
     )
     
@@ -743,6 +776,7 @@ Note: The script automatically discovers and exports ALL available models:
         vision_ckpt_dir=vision_ckpt_dir,
         talker_ckpt_dir=talker_ckpt_dir,
         ocr_ckpt_dir=ocr_ckpt_dir,
+        vocoder_ckpt_dir=vocoder_ckpt_dir,
         output_dir=args.output_dir,
         configs_dir=configs_dir
     )

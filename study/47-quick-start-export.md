@@ -57,7 +57,7 @@ All components are merged with prefixed keys:
 
 - `thinker.*` - LLM weights
 - `audio_encoder.*` - Audio encoder
-- `vision_encoder.*` - Vision encoder  
+- `vision_encoder.*` - Vision encoder
 - `talker.*` - TTS model
 - `rvq.*` - Audio codec
 - `proj_a.*` / `proj_v.*` - Multimodal projectors
@@ -68,11 +68,14 @@ All components are merged with prefixed keys:
 ## ✅ Support Files Required
 
 **Required:**
+
 - Config JSON files (in `configs/`)
 - `tokenizer.model`
 
 **Optional:**
-- `hifigan.pt` (vocoder)
+
+- `vocoder.pt` (vocoder, preferred)
+- `hifigan.pt` (legacy vocoder)
 - `ocr.pt` (for OCR char mappings)
 
 ---
@@ -89,6 +92,7 @@ All components are merged with prefixed keys:
 ## 🔗 For More Details
 
 See [Chapter 46: Model Export and Deployment](46-model-export-deployment.md) for:
+
 - Detailed explanation of the merge process
 - Troubleshooting guide
 - Hugging Face upload instructions
@@ -108,4 +112,3 @@ See [Chapter 46: Model Export and Deployment](46-model-export-deployment.md) for
 [Back to Index](00-INDEX.md)
 
 ---
-

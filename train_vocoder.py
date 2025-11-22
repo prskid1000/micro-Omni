@@ -16,9 +16,10 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator
 from omni.utils import (
-    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, cleanup_old_checkpoints, VocoderDataset,
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn
+    ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
+    save_training_metadata, load_training_metadata
 )
 from tqdm import tqdm
 
@@ -121,6 +122,9 @@ def main(cfg):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_dir = cfg.get("save_dir", "checkpoints/vocoder_tiny")
     os.makedirs(save_dir, exist_ok=True)
+    
+    model_name = "vocoder"
+    metadata = load_training_metadata(save_dir, model_name)
     
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("n_mels", 128)
@@ -257,9 +261,11 @@ def main(cfg):
     
     # Resume from checkpoint
     step = 0
-    step, resume_from = load_checkpoint(
+    # Resume from checkpoint if available
+    step = 0
+    step, metadata = load_checkpoint(
         save_dir, 
-        "vocoder_step_", 
+        model_name, 
         device, 
         logger,
         state_dict_loaders={
@@ -746,8 +752,9 @@ def main(cfg):
                     msd.train()
             
             # Checkpointing
+            # Checkpointing
             if step % checkpoint_freq == 0:
-                checkpoint_path = os.path.join(save_dir, f"vocoder_step_{step}.pt")
+                model_path = os.path.join(save_dir, f"{model_name}.pt")
                 torch.save({
                     "generator": generator.state_dict(),
                     "mpd": mpd.state_dict(),
@@ -756,22 +763,17 @@ def main(cfg):
                     "opt_d": opt_d.state_dict(),
                     "scheduler_g": scheduler_g.state_dict(),
                     "scheduler_d": scheduler_d.state_dict(),
+                }, model_path)
+                
+                # Save training metadata
+                training_metadata = {
                     "step": step,
+                    "epoch": epoch,
                     "config": cfg
-                }, checkpoint_path)
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
                 
-                # Save final checkpoint for inference
-                final_path = os.path.join(save_dir, "hifigan.pt")
-                torch.save({
-                    "generator": generator.state_dict(),
-                    "config": cfg
-                }, final_path)
-                
-                logger.info(f"Saved checkpoint: {checkpoint_path}")
-                logger.info(f"Saved final checkpoint: {final_path}")
-                
-                # Cleanup old checkpoints
-                cleanup_old_checkpoints(save_dir, "vocoder_step_", keep_last_n=1)
+                logger.info(f"Saved checkpoint: {model_path}")
             
             if step >= max_steps:
                 logger.info(f"Reached max_steps ({max_steps}), stopping training")
@@ -781,11 +783,25 @@ def main(cfg):
             break
     
     # Save final model
-    final_path = os.path.join(cfg["save_dir"], "hifigan.pt")
+    # Save final model
+    final_path = os.path.join(cfg["save_dir"], f"{model_name}.pt")
     torch.save({
         "generator": generator.state_dict(),
-        "config": cfg
+        "mpd": mpd.state_dict(),
+        "msd": msd.state_dict(),
+        "opt_g": opt_g.state_dict(),
+        "opt_d": opt_d.state_dict(),
+        "scheduler_g": scheduler_g.state_dict(),
+        "scheduler_d": scheduler_d.state_dict(),
     }, final_path)
+    
+    # Save final training metadata
+    training_metadata = {
+        "step": step,
+        "epoch": epoch if 'epoch' in locals() else 0,
+        "config": cfg
+    }
+    save_training_metadata(save_dir, model_name, training_metadata)
     logger.info(f"Training complete! Final model saved to: {final_path}")
 
 

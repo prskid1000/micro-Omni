@@ -33,7 +33,7 @@
   "sample_rate": 16000,
   "n_mels": 128,
   "frame_ms": 80,
-  "max_mel_length": 3600,
   "tts_csv": "data/audio/production_tts.csv",
-  "save_dir": "checkpoints/talker_tiny"
+  "save_dir": "checkpoints/talker_tiny",
+  "max_mel_length_percentile": 95.0
 }

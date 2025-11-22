@@ -28,10 +28,11 @@ python train_text.py --config configs/thinker_tiny.json
 
 # Expected time: 8-12 hours
 # Expected result: Perplexity < 10
-# Output: checkpoints/thinker_tiny/thinker_step_*.pt (every 1000 steps)
+# Output: checkpoints/thinker_tiny/model.pt + model_metadata.json
 ```
 
 **Monitor:**
+
 ```bash
 # Watch GPU
 watch -n 1 nvidia-smi
@@ -47,14 +48,15 @@ python train_audio_enc.py --config configs/audio_enc_tiny.json
 
 # Time: 6-10 hours
 # Target: WER < 20%
-# Output: checkpoints/audio_enc_tiny/audio_enc.pt
+# Output: checkpoints/audio_enc_tiny/model.pt + model_metadata.json
 ```
 
 **Configuration Note:**
-- If using `use_compile: true`, ensure `max_mel_length` is set appropriately
-- Default: 2048 frames (~20 seconds)
-- For longer audio: Increase `max_mel_length` (e.g., 6000 for 60 seconds)
-- Check your dataset: `python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv`
+
+- `max_mel_length` is **auto-calculated** from your dataset (95th percentile)
+- No manual configuration needed - training script analyzes dataset automatically
+- Can override with `max_mel_length` or adjust `max_mel_length_percentile` if needed
+- Optional: Check your dataset: `python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv`
 
 ### Stage C: Vision Encoder
 
@@ -63,10 +65,11 @@ python train_vision.py --config configs/vision_tiny.json
 
 # Time: 4-8 hours
 # Target: Low contrastive loss (good vision-language alignment)
-# Output: checkpoints/vision_tiny/vision.pt
+# Output: checkpoints/vision_tiny/model.pt + model_metadata.json
 ```
 
 **Configuration Note:**
+
 - Uses trained tokenizer from Stage A (`thinker_ckpt/tokenizer.model`)
 - Configurable text encoding: `use_thinker_for_text` (default: true)
   - `true`: Uses frozen Thinker model for contextual embeddings (recommended)
@@ -80,14 +83,15 @@ python train_talker.py --config configs/talker_tiny.json
 
 # Time: 10-15 hours
 # Target: Intelligible speech
-# Output: checkpoints/talker_tiny/talker.pt + rvq_codec.pt
+# Output: checkpoints/talker_tiny/model.pt + model_metadata.json
 ```
 
 **Configuration Note:**
-- If using `use_compile: true`, ensure `max_mel_length` is set appropriately
+
+- `max_mel_length` is **auto-calculated** from your dataset (95th percentile)
+- No manual configuration needed - training script analyzes dataset automatically
 - Talker uses different frame rate (12.5 fps with frame_ms=80) than audio encoder (100 fps)
-- For 60 seconds: `max_mel_length: 750` frames
-- Default: 2048 frames (covers ~164 seconds for talker)
+- Can override with `max_mel_length` or adjust `max_mel_length_percentile` if needed
 
 ### Stage E: Multimodal SFT
 
@@ -96,7 +100,7 @@ python sft_omni.py --config configs/omni_sft_tiny.json
 
 # Time: 6-12 hours
 # Target: Good multimodal Q&A
-# Output: checkpoints/omni_sft_tiny/omni_final.pt
+# Output: checkpoints/omni_sft_tiny/model.pt + model_metadata.json
 ```
 
 ### Optional: HiFi-GAN Vocoder Training
@@ -107,16 +111,18 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 
 # Time: 2-4 hours (on 12GB GPU)
 # Target: Natural-sounding speech
-# Output: checkpoints/vocoder_tiny/hifigan.pt
+# Output: checkpoints/vocoder_tiny/model.pt + model_metadata.json
 # Note: Falls back to Griffin-Lim if checkpoint not available
 ```
 
 **When to train:**
+
 - After Stage D (Talker) is complete
 - If you want higher quality speech output
 - Griffin-Lim works fine for basic TTS, but HiFi-GAN is better
 
 **Implementation Notes:**
+
 - ✅ Generator correctly handles tensor dimensions (outputs `(B, T_audio)` for batches)
 - ✅ Audio loading automatically falls back to `torchaudio.load()` if torchcodec unavailable
 - ✅ Discriminator inputs properly shaped as `(B, 1, T)` automatically
@@ -130,16 +136,20 @@ python train_ocr.py --config configs/ocr_tiny.json
 
 # Time: 4-8 hours (on 12GB GPU)
 # Target: Accurate text extraction from images
-# Output: checkpoints/ocr_tiny/ocr.pt
+# Output: checkpoints/ocr_tiny/model.pt + model_metadata.json
 # Note: Can be used with --ocr flag in inference
 ```
 
 **Configuration Note:**
-- If using `use_compile: true`, ensure `max_text_length` is set appropriately
+
+- `max_text_length` is **auto-calculated** from your dataset (95th percentile)
+- No manual configuration needed - training script analyzes dataset automatically
+- Can override with `max_text_length` or adjust `max_text_length_percentile` if needed
 - Default: 256 characters
 - Adjust based on your text lengths (short: 128, long: 512)
 
 **When to train:**
+
 - If you need text extraction from images
 - For document processing, scene text recognition
 - Can be combined with multimodal understanding in Stage E
@@ -151,26 +161,31 @@ python train_ocr.py --config configs/ocr_tiny.json
 ### Key Metrics to Watch
 
 **Stage A (Thinker):**
+
 - Loss decreasing steadily
 - Perplexity < 10 (target)
 - No NaN/Inf values
 
 **Stage B (Audio):**
+
 - CTC loss decreasing
 - WER improving (lower is better)
 - Target: WER < 20%
 
 **Stage C (Vision):**
+
 - Accuracy increasing
 - Loss decreasing
 - Target: Accuracy > 70%
 
 **Stage D (Talker):**
+
 - Reconstruction error < 0.05
 - Speech codes perplexity < 15
 - Generated speech intelligible
 
 **Stage E (SFT):**
+
 - All modalities improving
 - Cross-modal accuracy increasing
 - Target: >60% on mixed tasks
@@ -186,24 +201,28 @@ python train_ocr.py --config configs/ocr_tiny.json
 python train_text.py --config configs/thinker_tiny.json
 
 # The script automatically:
-# ✅ Finds latest checkpoint in save_dir
+# The script automatically:
+# ✅ Finds `model.pt` and `model_metadata.json` in save_dir
 # ✅ Loads all states (model, optimizer, scheduler, scaler)
+# ✅ Loads training state (step, epoch, config) from metadata
 # ✅ Skips already-processed samples via skip_samples
 # ✅ Continues from correct epoch and batch position
 # ✅ Shows accurate progress bar
 ```
 
 **What happens during resume:**
-1. Script scans `save_dir` for checkpoints (e.g., `thinker_step_*.pt`)
-2. Selects checkpoint with highest step number
-3. Loads model weights, optimizer state, scheduler state, and scaler (if using AMP)
+
+1. Script checks `save_dir` for `model.pt` and `model_metadata.json`
+2. Loads training metadata (step, epoch, config) from JSON file
+3. Loads model weights, optimizer state, scheduler state, and scaler from `model.pt`
 4. Calculates `skip_samples = step * batch_size` and sets on dataset
 5. Recreates DataLoader so workers pick up the new `skip_samples` value
-6. Calculates starting epoch and batch index: `start_epoch = step // steps_per_epoch`, `start_batch_idx = step % steps_per_epoch`
+6. Calculates starting epoch and batch index based on metadata
 7. Initializes progress bar at correct position
 8. Training continues seamlessly from where it stopped
 
 **Epoch completion:**
+
 - Training continues through all epochs until `max_steps` is reached
 - Model is saved at the end of each epoch for checkpointing
 - Training only stops when `max_steps` is reached or manually interrupted
@@ -215,11 +234,13 @@ python train_text.py --config configs/thinker_tiny.json
 The training scripts handle three scenarios gracefully:
 
 1. **Dataset exceeds max_steps:**
+
    - Training stops when `max_steps` is reached (checked after each epoch)
    - All available data is processed up to the step limit
    - Model is saved at the final checkpoint
 
 2. **Dataset smaller than one epoch:**
+
    - Processes all available batches in the epoch
    - Dataset automatically resets `skip_samples` to 0 after iteration completes
    - Next epoch starts from the beginning of the dataset
@@ -232,12 +253,14 @@ The training scripts handle three scenarios gracefully:
    - Useful for small datasets that need multiple passes
 
 **Automatic skip_samples reset:**
+
 - All `IterableDataset` classes automatically reset `skip_samples` to 0 after the first iteration completes
 - This happens in the dataset's `__iter__` method when the generator is exhausted
 - Ensures subsequent epochs always start from the beginning of the dataset
 - Works correctly even if the dataset is exhausted mid-epoch
 
 **Validation during resume:**
+
 - Validation always processes the full validation set
 - `skip_samples` is temporarily reset to 0 during validation
 - Original `skip_samples` is restored after validation

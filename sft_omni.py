@@ -13,9 +13,9 @@ from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, reload_from_last_checkpoint, cleanup_old_checkpoints, MixDataset,
+    check_gradient_explosion, reload_from_last_checkpoint, MixDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, load_audio
+    ValidationSkipSamplesContext, load_audio, save_training_metadata, load_training_metadata
 )
 
 def mix_collate_fn(batch):
@@ -54,6 +54,9 @@ def main(cfg):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_dir = cfg.get("save_dir", "checkpoints/omni_sft_tiny")
     os.makedirs(save_dir, exist_ok=True)
+    
+    model_name = "omni"
+    metadata = load_training_metadata(save_dir, model_name)
 
     # load components
     # torch.compile() support (optional, PyTorch 2.0+)
@@ -403,9 +406,11 @@ def main(cfg):
     step = 0  # Global step counter (not per-epoch)
     
     # Resume from checkpoint if available
-    step, resume_from = load_checkpoint(
+    # Resume from checkpoint if available
+    step = 0
+    step, metadata = load_checkpoint(
         save_dir, 
-        "omni_step_", 
+        model_name, 
         device, 
         logger,
         state_dict_loaders={
@@ -418,10 +423,13 @@ def main(cfg):
         }
     )
     # Handle scaler separately if needed
-    if step > 0 and resume_from and scaler is not None:
-        checkpoint = torch.load(resume_from, map_location=device)
-        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
-            scaler.load_state_dict(checkpoint["scaler"])
+    # Handle scaler separately if needed
+    if step > 0 and scaler is not None:
+        model_path = os.path.join(save_dir, f"{model_name}.pt")
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 2)
@@ -752,8 +760,10 @@ def main(cfg):
                     proj_v.train()
             
             # Periodic checkpointing
+            # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(save_dir, f"omni_step_{step}.pt")
+                # Save model weights only (overwrite existing file)
+                model_path = os.path.join(save_dir, f"{model_name}.pt")
                 os.makedirs(save_dir, exist_ok=True)
                 checkpoint_data = {
                     "thinker": think.state_dict(),
@@ -761,29 +771,41 @@ def main(cfg):
                     "proj_v": proj_v.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
-                torch.save(checkpoint_data, checkpoint_path)
-                logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(save_dir, "omni_step_", keep_last_n=1)
+                torch.save(checkpoint_data, model_path)
+                
+                # Save training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
+                logger.checkpoint(step, model_path)
             
             if step >= max_steps:
                 os.makedirs(save_dir, exist_ok=True)
-                final_path = os.path.join(save_dir, "omni.pt")
+                final_path = os.path.join(save_dir, f"{model_name}.pt")
                 checkpoint_data = {
                     "thinker": think.state_dict(),
                     "proj_a": proj_a.state_dict(),
                     "proj_v": proj_v.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
+                
+                # Save final training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {save_dir}")
                 logger.training_end(step)
                 return
@@ -875,18 +897,25 @@ def main(cfg):
         
         # Save at end of epoch (checkpoint for resuming)
         os.makedirs(save_dir, exist_ok=True)
-        final_path = os.path.join(save_dir, "omni.pt")
+        final_path = os.path.join(save_dir, f"{model_name}.pt")
         checkpoint_data = {
             "thinker": think.state_dict(),
             "proj_a": proj_a.state_dict(),
             "proj_v": proj_v.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "step": step
         }
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)
+        
+        # Save training metadata
+        training_metadata = {
+            "step": step,
+            "epoch": epoch,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion

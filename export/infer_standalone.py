@@ -105,6 +105,17 @@ def load_model_with_transformers(model_dir, device="cuda"):
     state_dict = load_file(str(safetensors_path), device=device)
     print(f"  Loaded {len(state_dict)} parameter tensors")
     
+    # Check for vocoder checkpoint (separate file)
+    vocoder_path = model_dir / "vocoder.pt"
+    if vocoder_path.exists():
+        print(f"✓ Found vocoder checkpoint: {vocoder_path.name}")
+    else:
+        hifigan_path = model_dir / "hifigan.pt"
+        if hifigan_path.exists():
+            print(f"✓ Found vocoder checkpoint: {hifigan_path.name} (legacy)")
+        else:
+            print("⚠ No vocoder checkpoint found (vocoder.pt or hifigan.pt)")
+    
     # Extract component info
     components = {}
     prefixes = ["thinker", "vision_encoder", "audio_encoder", "talker", "rvq", "proj_a", "proj_v", "ocr"]

@@ -8,9 +8,9 @@ from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, cleanup_old_checkpoints, ImgCapDataset,
+    check_gradient_explosion, ImgCapDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, find_checkpoint
+    ValidationSkipSamplesContext, find_checkpoint, save_training_metadata, load_training_metadata
 )
 from tqdm import tqdm
 
@@ -25,6 +25,10 @@ def main(cfg):
     os.makedirs(save_dir, exist_ok=True)
     train_manifest = cfg.get("train_manifest", "data/images/production_annotations.json")
     image_root = cfg.get("image_root", "data/images")
+    
+    model_name = "vision"
+    metadata = load_training_metadata(save_dir, model_name)
+    
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
@@ -238,9 +242,11 @@ def main(cfg):
     
     # Resume from checkpoint if available
     step = 0
-    step, resume_from = load_checkpoint(
+    # Resume from checkpoint if available
+    step = 0
+    step, metadata = load_checkpoint(
         save_dir, 
-        "vision_step_", 
+        model_name, 
         device, 
         logger,
         state_dict_loaders={
@@ -253,10 +259,13 @@ def main(cfg):
         }
     )
     # Handle scaler separately if needed
-    if step > 0 and resume_from and scaler is not None:
-        checkpoint = torch.load(resume_from, map_location=device)
-        if isinstance(checkpoint, dict) and "scaler" in checkpoint:
-            scaler.load_state_dict(checkpoint["scaler"])
+    # Handle scaler separately if needed
+    if step > 0 and scaler is not None:
+        model_path = os.path.join(save_dir, f"{model_name}.pt")
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 8)
@@ -443,22 +452,29 @@ def main(cfg):
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
             
             # Periodic checkpointing
+            # Periodic checkpointing
             if step % checkpoint_freq == 0 and step > 0:
-                checkpoint_path = os.path.join(save_dir, f"vision_step_{step}.pt")
+                # Save model weights only (overwrite existing file)
+                model_path = os.path.join(save_dir, f"{model_name}.pt")
                 checkpoint_data = {
                     "vit": vit.state_dict(),
                     "img_proj": img_proj.state_dict(),
                     "text_proj": text_proj.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
-                torch.save(checkpoint_data, checkpoint_path)
-                logger.checkpoint(step, checkpoint_path)
-                # Clean up old checkpoints (keep only last one)
-                cleanup_old_checkpoints(save_dir, "vision_step_", keep_last_n=1)
+                torch.save(checkpoint_data, model_path)
+                
+                # Save training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
+                logger.checkpoint(step, model_path)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -521,18 +537,25 @@ def main(cfg):
                     # Thinker remains in eval mode (frozen)
             
             if step >= cfg["max_steps"]:
-                final_path = os.path.join(save_dir, "vision.pt")
+                final_path = os.path.join(save_dir, f"{model_name}.pt")
                 checkpoint_data = {
                     "vit": vit.state_dict(),
                     "img_proj": img_proj.state_dict(),
                     "text_proj": text_proj.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
+                
+                # Save final training metadata
+                training_metadata = {
+                    "step": step,
+                    "epoch": epoch,
+                    "config": cfg
+                }
+                save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {cfg['save_dir']}")
                 logger.training_end(step)
                 return
@@ -595,18 +618,26 @@ def main(cfg):
             # Thinker remains in eval mode (frozen)
         
         # Save at end of epoch (checkpoint for resuming)
-        final_path = os.path.join(cfg["save_dir"], "vision.pt")
+        # Save at end of epoch (checkpoint for resuming)
+        final_path = os.path.join(cfg["save_dir"], f"{model_name}.pt")
         checkpoint_data = {
             "vit": vit.state_dict(),
             "img_proj": img_proj.state_dict(),
             "text_proj": text_proj.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "step": step
         }
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)
+        
+        # Save training metadata
+        training_metadata = {
+            "step": step,
+            "epoch": epoch,
+            "config": cfg
+        }
+        save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {cfg['save_dir']} at end of epoch {epoch}, step {step}")
         
         # Check if we've reached max_steps after epoch completion
