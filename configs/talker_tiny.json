@@ -29,7 +29,7 @@
   "checkpoint_freq": 1000,
   "max_grad_norm": 1.0,
   "seed": 42,
-  "shuffle_buffer_size": 10000,
+  "shuffle_buffer_size": 1000,
   "sample_rate": 16000,
   "n_mels": 128,
   "frame_ms": 80,

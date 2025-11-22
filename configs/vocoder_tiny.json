@@ -5,10 +5,10 @@
   "n_mels": 128,
   "n_fft": 1024,
   "hop_length": 256,
-  "batch_size": 4,
+  "batch_size": 1,
   "num_workers": 0,
   "drop_last": true,
-  "max_audio_length_percentile": 95.0,
+  "max_audio_length_percentile": 60.0,
   "lr_g": 0.0002,
   "lr_d": 0.0002,
   "wd": 1e-06,
@@ -26,5 +26,5 @@
   "checkpoint_freq": 1000,
   "val_freq": 528,
   "seed": 42,
-  "shuffle_buffer_size": 10000
+  "shuffle_buffer_size": 1000
 }

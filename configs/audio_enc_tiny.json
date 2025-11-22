@@ -28,7 +28,7 @@
   "checkpoint_freq": 1000,
   "max_grad_norm": 1.0,
   "seed": 42,
-  "shuffle_buffer_size": 10000,
+  "shuffle_buffer_size": 1000,
   "train_csv": "data/audio/production_asr.csv",
   "save_dir": "checkpoints/audio_enc_tiny",
   "max_text_len_percentile": 95.0,

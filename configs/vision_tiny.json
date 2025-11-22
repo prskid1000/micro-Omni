@@ -24,7 +24,7 @@
   "checkpoint_freq": 1000,
   "max_grad_norm": 1.0,
   "seed": 42,
-  "shuffle_buffer_size": 10000,
+  "shuffle_buffer_size": 1000,
   "train_manifest": "data/images/production_annotations.json",
   "image_root": "data/images",
   "embed_dim": 128,
