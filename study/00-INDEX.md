@@ -115,13 +115,14 @@
 
 ---
 
-### **Part 9: Deployment and Export (Chapters 46-48)**
+### **Part 9: Deployment and Export (Chapters 46-49)**
 
 | Chapter | Title | Description |
 |---------|-------|-------------|
 | [46](46-model-export-deployment.md) | Model Export and Deployment | Merging components into safetensors for deployment |
 | [47](47-quick-start-export.md) | Quick Start Export Guide | Fast reference for exporting models |
 | [48](48-ocr-model.md) | OCR Model - Text Extraction | Extracting text from images with ViT + Transformer decoder |
+| [49](49-testing-scripts.md) | Testing Scripts - Model Evaluation | Comprehensive testing and validation of all model components |
 
 ---
 
@@ -137,10 +138,13 @@ Start with: Chapters 4-5 → 13-18 → 19-25 → 26-31 → 32-37
 Focus on: Chapters 19-25 → 32-37 → 43-45
 
 ### **Quick Start Path (Just want to run it)**
-Essential chapters: 19 → 38 → 39 → 40 → 47
+Essential chapters: 19 → 38 → 39 → 40 → 47 → 49
 
 ### **Deployment Path (Ready to deploy)**
-Essential chapters: 39 → 46 → 47
+Essential chapters: 39 → 46 → 47 → 49
+
+### **Testing Path (Validating models)**
+Essential chapters: 39 → 49
 
 ---
 

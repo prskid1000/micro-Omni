@@ -1,0 +1,15 @@
+{
+  "image_processor": {
+    "size": {
+      "height": 224,
+      "width": 224
+    },
+    "resample": "bilinear"
+  },
+  "audio_processor": {
+    "sample_rate": 16000,
+    "n_fft": 1024,
+    "hop_length": 160,
+    "n_mels": 128
+  }
+}

@@ -1,6 +1,6 @@
 # Chapter 40: Inference Examples
 
-[← Previous: Running Training](39-running-training.md) | [Back to Index](00-INDEX.md) | [Next: Customization →](41-customization-guide.md)
+[← Previous: Running Training](39-running-training.md) | [Back to Index](00-INDEX.md) | [Next: Customization →](41-customization-guide.md) | [Testing →](49-testing-scripts.md)
 
 ---
 
@@ -355,7 +355,17 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny
 
 ---
 
-## 🔗 Related: Model Export
+## 🔗 Related: Testing and Export
+
+### Testing Your Models
+
+Before deploying, test your models to ensure they work correctly:
+
+- **Component Testing**: See [Chapter 49: Testing Scripts](49-testing-scripts.md) for comprehensive testing of all model components
+- **Integration Testing**: Use `test_all_media.py` to test the complete multimodal pipeline
+- **Quick Test**: Run individual test scripts after each training stage
+
+### Model Export
 
 After training and testing, you may want to export your model for deployment:
 

@@ -18,6 +18,13 @@ from torch.amp import autocast
 from torchvision import transforms
 import torchvision.io as tvio
 
+try:
+    from safetensors.torch import load_file as load_safetensors
+    SAFETENSORS_AVAILABLE = True
+except ImportError:
+    SAFETENSORS_AVAILABLE = False
+    print("Warning: safetensors not available. Install with: pip install safetensors")
+
 # Model imports
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
@@ -32,6 +39,51 @@ from omni.utils import find_checkpoint, load_audio, normalize_state_dict
 # ============================================================================
 # Utility Functions
 # ============================================================================
+
+def load_merged_safetensors(ckpt_dir: str, device: str = "cuda") -> Optional[Dict]:
+    """Load merged safetensors file if it exists"""
+    if not SAFETENSORS_AVAILABLE:
+        return None
+    
+    safetensors_path = os.path.join(ckpt_dir, "model.safetensors")
+    if not os.path.exists(safetensors_path):
+        # Try alternative names
+        for alt_name in ["muomni.safetensors", "omni.safetensors"]:
+            alt_path = os.path.join(ckpt_dir, alt_name)
+            if os.path.exists(alt_path):
+                safetensors_path = alt_path
+                break
+        else:
+            return None
+    
+    try:
+        print(f"Loading merged model from {safetensors_path}...")
+        state_dict = load_safetensors(safetensors_path, device=device)
+        print(f"  ✓ Loaded {len(state_dict)} parameter tensors from merged model")
+        return state_dict
+    except Exception as e:
+        print(f"Warning: Could not load safetensors: {e}")
+        return None
+
+def extract_component_from_merged(merged_state: Dict, prefix: str) -> Optional[Dict]:
+    """Extract component weights from merged state dict by prefix"""
+    if merged_state is None:
+        return None
+    
+    component_state = {}
+    prefix_with_dot = prefix + "."
+    
+    for key, value in merged_state.items():
+        if key.startswith(prefix_with_dot):
+            # Remove prefix to get the original key
+            component_key = key[len(prefix_with_dot):]
+            component_state[component_key] = value
+    
+    if component_state:
+        print(f"  ✓ Extracted {len(component_state)} parameters for {prefix}")
+        return component_state
+    
+    return None
 
 def strip_orig_mod_keys(state_dict: Dict) -> Dict:
     """Strip _orig_mod. prefix from state_dict keys (from torch.compile) - DEPRECATED, use normalize_state_dict"""
@@ -60,6 +112,12 @@ class BaseModelLoader:
         """Load checkpoint using find_checkpoint utility"""
         return find_checkpoint(ckpt_dir, prefix, step_prefix, self.device)
     
+    def load_from_merged(self, merged_state: Dict, component_prefix: str) -> Optional[Dict]:
+        """Load component weights from merged safetensors state dict"""
+        if merged_state is None:
+            return None
+        return extract_component_from_merged(merged_state, component_prefix)
+    
     def load_state_dict(self, state_dict: Dict, strict: bool = False):
         """Load state dict with normalization (only strip _orig_mod, don't convert attention weights)
         
@@ -86,7 +144,7 @@ class ThinkerLoader(BaseModelLoader):
         super().__init__(device)
         self.tokenizer = None
     
-    def load(self, ckpt_dir: str, config: Dict) -> bool:
+    def load(self, ckpt_dir: str, config: Dict, merged_state: Optional[Dict] = None) -> bool:
         """Load Thinker model and tokenizer"""
         try:
             # Load config
@@ -122,7 +180,17 @@ class ThinkerLoader(BaseModelLoader):
             
             self.tokenizer = BPETokenizer(tok_path)
             
-            # Load checkpoint
+            # Try to load from merged safetensors first
+            if merged_state is not None:
+                thinker_state = self.load_from_merged(merged_state, "thinker")
+                if thinker_state is not None:
+                    if self.load_state_dict(thinker_state, strict=False):
+                        print("✓ Loaded Thinker model from merged safetensors")
+                        self.model.eval()
+                        self.loaded = True
+                        return True
+            
+            # Fall back to individual checkpoint file
             thinker_ckpt_dir = ckpt_dir
             if "thinker_ckpt" in config:
                 thinker_ckpt_dir = config["thinker_ckpt"]
@@ -156,7 +224,7 @@ class ThinkerLoader(BaseModelLoader):
 class VisionLoader(BaseModelLoader):
     """Loader for Vision encoder"""
     
-    def load(self, ckpt_dir: str, config: Dict) -> bool:
+    def load(self, ckpt_dir: str, config: Dict, merged_state: Optional[Dict] = None) -> bool:
         """Load Vision encoder"""
         try:
             # Load config
@@ -176,7 +244,17 @@ class VisionLoader(BaseModelLoader):
                 dropout=vision_cfg.get("dropout", 0.1)
             ).to(self.device)
             
-            # Load checkpoint
+            # Try to load from merged safetensors first
+            if merged_state is not None:
+                vision_state = self.load_from_merged(merged_state, "vision_encoder")
+                if vision_state is not None:
+                    if self.load_state_dict(vision_state, strict=False):
+                        print("✓ Loaded Vision encoder from merged safetensors")
+                        self.model.eval()
+                        self.loaded = True
+                        return True
+            
+            # Fall back to individual checkpoint file
             vision_ckpt_dir = ckpt_dir
             if "vision_ckpt" in config:
                 vision_ckpt_dir = config["vision_ckpt"]
@@ -208,7 +286,7 @@ class VisionLoader(BaseModelLoader):
 class AudioLoader(BaseModelLoader):
     """Loader for Audio encoder"""
     
-    def load(self, ckpt_dir: str, config: Dict) -> bool:
+    def load(self, ckpt_dir: str, config: Dict, merged_state: Optional[Dict] = None) -> bool:
         """Load Audio encoder"""
         try:
             # Load config
@@ -228,7 +306,17 @@ class AudioLoader(BaseModelLoader):
                 downsample_factor=downsample_factor
             ).to(self.device)
             
-            # Load checkpoint
+            # Try to load from merged safetensors first
+            if merged_state is not None:
+                audio_state = self.load_from_merged(merged_state, "audio_encoder")
+                if audio_state is not None:
+                    if self.load_state_dict(audio_state, strict=False):
+                        print("✓ Loaded Audio encoder from merged safetensors")
+                        self.model.eval()
+                        self.loaded = True
+                        return True
+            
+            # Fall back to individual checkpoint file
             audio_ckpt_dir = ckpt_dir
             if "audio_ckpt" in config:
                 audio_ckpt_dir = config["audio_ckpt"]
@@ -264,7 +352,7 @@ class TalkerLoader(BaseModelLoader):
         super().__init__(device)
         self.rvq = None
     
-    def load(self, ckpt_dir: str, config: Dict) -> bool:
+    def load(self, ckpt_dir: str, config: Dict, merged_state: Optional[Dict] = None) -> bool:
         """Load Talker and RVQ"""
         try:
             # Load config
@@ -293,7 +381,30 @@ class TalkerLoader(BaseModelLoader):
                 rope_theta=talker_cfg.get("rope_theta", 10000.0)
             ).to(self.device)
             
-            # Load checkpoint
+            # Try to load from merged safetensors first
+            if merged_state is not None:
+                rvq_state = self.load_from_merged(merged_state, "rvq")
+                talker_state = self.load_from_merged(merged_state, "talker")
+                
+                loaded = False
+                if rvq_state is not None:
+                    rvq_state = normalize_state_dict(rvq_state)
+                    self.rvq.load_state_dict(rvq_state, strict=False)
+                    print("✓ Loaded RVQ from merged safetensors")
+                    loaded = True
+                
+                if talker_state is not None:
+                    if self.load_state_dict(talker_state, strict=False):
+                        print("✓ Loaded Talker from merged safetensors")
+                        loaded = True
+                
+                if loaded:
+                    self.model.eval()
+                    self.rvq.eval()
+                    self.loaded = True
+                    return True
+            
+            # Fall back to individual checkpoint file
             talker_ckpt_dir = ckpt_dir
             if "talker_ckpt" in config:
                 talker_ckpt_dir = config["talker_ckpt"]
@@ -328,10 +439,10 @@ class OCRLoader(BaseModelLoader):
         self.char_to_idx = None
         self.idx_to_char = None
     
-    def load(self, ckpt_dir: str, config: Dict) -> bool:
+    def load(self, ckpt_dir: str, config: Dict, merged_state: Optional[Dict] = None) -> bool:
         """Load OCR model with vocab_size from checkpoint"""
         try:
-            # First, try to load checkpoint to get vocab_size
+            # Get vocab_size and char mappings from checkpoint (try individual checkpoint first for metadata)
             ocr_ckpt_dir = ckpt_dir
             if not os.path.exists(os.path.join(ocr_ckpt_dir, "ocr.pt")):
                 ocr_ckpt_dir = "checkpoints/ocr_tiny"
@@ -375,7 +486,17 @@ class OCRLoader(BaseModelLoader):
                 use_flash=ocr_cfg.get("use_flash", True)
             ).to(self.device)
             
-            # Load checkpoint state_dict
+            # Try to load from merged safetensors first
+            if merged_state is not None:
+                ocr_state = self.load_from_merged(merged_state, "ocr")
+                if ocr_state is not None:
+                    if self.load_state_dict(ocr_state, strict=False):
+                        print(f"✓ Loaded OCR model from merged safetensors (vocab_size={vocab_size})")
+                        self.model.eval()
+                        self.loaded = True
+                        return True
+            
+            # Fall back to individual checkpoint file
             if ckpt is not None:
                 if isinstance(ckpt, dict):
                     if "model" in ckpt:
@@ -748,6 +869,9 @@ class InferenceEngine:
         if os.path.exists(config_path):
             self.config = json.load(open(config_path))
         
+        # Try to load merged safetensors file (for export directory)
+        self.merged_state = load_merged_safetensors(ckpt_dir, device)
+        
         # Model loaders
         self.thinker_loader = ThinkerLoader(device)
         self.vision_loader = VisionLoader(device)
@@ -777,7 +901,7 @@ class InferenceEngine:
         
         # Always load Thinker (required for all inference)
         print("\n[1/6] Loading ThinkerLM (Language Model)...")
-        if not self.thinker_loader.load(self.ckpt_dir, self.config):
+        if not self.thinker_loader.load(self.ckpt_dir, self.config, self.merged_state):
             raise RuntimeError("Failed to load Thinker model")
         
         self.text_generator = TextGenerator(
@@ -789,17 +913,17 @@ class InferenceEngine:
         # Load vision if needed
         if load_vision:
             print("\n[2/6] Loading Vision Encoder (ViTTiny)...")
-            self.vision_loader.load(self.ckpt_dir, self.config)
+            self.vision_loader.load(self.ckpt_dir, self.config, self.merged_state)
         
         # Load audio if needed
         if load_audio:
             print("\n[3/6] Loading Audio Encoder (AudioEncoderTiny)...")
-            self.audio_loader.load(self.ckpt_dir, self.config)
+            self.audio_loader.load(self.ckpt_dir, self.config, self.merged_state)
         
         # Load talker if needed (includes RVQ)
         if load_talker:
             print("\n[4/6] Loading Talker (TTS) + RVQ Codec...")
-            self.talker_loader.load(self.ckpt_dir, self.config)
+            self.talker_loader.load(self.ckpt_dir, self.config, self.merged_state)
             if load_vocoder:
                 print("\n[5/6] Loading Vocoder (NeuralVocoder: HiFi-GAN/Griffin-Lim)...")
                 self.vocoder_loader.load(self.ckpt_dir)
@@ -814,7 +938,7 @@ class InferenceEngine:
         # Load OCR if needed
         if load_ocr:
             print("\n[6/6] Loading OCR Model (OCRModel)...")
-            self.ocr_loader.load(self.ckpt_dir, self.config)
+            self.ocr_loader.load(self.ckpt_dir, self.config, self.merged_state)
             if self.ocr_loader.loaded:
                 self.ocr_processor = OCRProcessor(
                     self.ocr_loader.model,
@@ -865,14 +989,34 @@ class InferenceEngine:
             elif "d_model" in self.config:
                 thinker_d_model = self.config.get("d_model", 256)
         
-        # Try to load from checkpoint
-        ckpt_path, ckpt = find_checkpoint(self.ckpt_dir, "omni.pt", "omni_step_", self.device)
-        loaded_from_ckpt = False
-        
-        if ckpt is not None and isinstance(ckpt, dict):
-            if "proj_a" in ckpt and "proj_v" in ckpt:
+        # Try to load from merged safetensors first
+        loaded_from_merged = False
+        if self.merged_state is not None:
+            proj_a_state = extract_component_from_merged(self.merged_state, "proj_a")
+            proj_v_state = extract_component_from_merged(self.merged_state, "proj_v")
+            
+            if proj_a_state is not None and proj_v_state is not None:
                 self.proj_a = nn.Linear(audio_dim, thinker_d_model).to(self.device)
                 self.proj_v = nn.Linear(vision_dim, thinker_d_model).to(self.device)
+                
+                from omni.utils import strip_orig_mod
+                proj_a_state = strip_orig_mod(proj_a_state)
+                proj_v_state = strip_orig_mod(proj_v_state)
+                
+                self.proj_a.load_state_dict(proj_a_state, strict=False)
+                self.proj_v.load_state_dict(proj_v_state, strict=False)
+                print("✓ Loaded multimodal projectors from merged safetensors")
+                loaded_from_merged = True
+        
+        # Fall back to individual checkpoint file
+        if not loaded_from_merged:
+            ckpt_path, ckpt = find_checkpoint(self.ckpt_dir, "omni.pt", "omni_step_", self.device)
+            loaded_from_ckpt = False
+            
+            if ckpt is not None and isinstance(ckpt, dict):
+                if "proj_a" in ckpt and "proj_v" in ckpt:
+                    self.proj_a = nn.Linear(audio_dim, thinker_d_model).to(self.device)
+                    self.proj_v = nn.Linear(vision_dim, thinker_d_model).to(self.device)
                 
                 from omni.utils import strip_orig_mod
                 proj_a_state = strip_orig_mod(ckpt["proj_a"])

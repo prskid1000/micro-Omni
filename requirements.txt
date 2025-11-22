@@ -16,3 +16,4 @@ einops
 requests
 av
 safetensors
+transformers

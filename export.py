@@ -35,6 +35,54 @@ def load_checkpoint(path, device="cpu"):
         return None
 
 
+def load_checkpoint_paths_from_config(config_path, configs_dir="configs"):
+    """
+    Load checkpoint paths from the omni config file.
+    
+    Args:
+        config_path: Path to the omni config file (e.g., "omni_sft_tiny.json")
+        configs_dir: Directory containing config files (default: "configs")
+    
+    Returns:
+        dict with keys: omni_ckpt_dir, thinker_ckpt_dir, audio_ckpt_dir, 
+                       vision_ckpt_dir, talker_ckpt_dir, ocr_ckpt_dir
+    """
+    full_config_path = os.path.join(configs_dir, config_path)
+    
+    if not os.path.exists(full_config_path):
+        print(f"Warning: Config file not found: {full_config_path}")
+        return {}
+    
+    try:
+        with open(full_config_path, 'r') as f:
+            config = json.load(f)
+        
+        paths = {}
+        
+        # Get omni checkpoint from save_dir
+        if "save_dir" in config:
+            paths["omni_ckpt_dir"] = config["save_dir"]
+        
+        # Get component checkpoints
+        if "thinker_ckpt" in config:
+            paths["thinker_ckpt_dir"] = config["thinker_ckpt"]
+        if "audio_ckpt" in config:
+            paths["audio_ckpt_dir"] = config["audio_ckpt"]
+        if "vision_ckpt" in config:
+            paths["vision_ckpt_dir"] = config["vision_ckpt"]
+        if "talker_ckpt" in config:
+            paths["talker_ckpt_dir"] = config["talker_ckpt"]
+        if "ocr_ckpt" in config:
+            paths["ocr_ckpt_dir"] = config["ocr_ckpt"]
+        
+        print(f"Loaded checkpoint paths from {full_config_path}")
+        return paths
+    
+    except Exception as e:
+        print(f"Warning: Could not load config file {full_config_path}: {e}")
+        return {}
+
+
 def merge_model_components(
     omni_ckpt_dir,
     thinker_ckpt_dir=None,
@@ -220,8 +268,7 @@ def copy_support_files(
     talker_ckpt_dir,
     ocr_ckpt_dir,
     output_dir,
-    configs_dir="configs",
-    skip_component_configs=False
+    configs_dir="configs"
 ):
     """
     Copy all support files needed for inference.
@@ -234,36 +281,9 @@ def copy_support_files(
     os.makedirs(output_dir, exist_ok=True)
     print(f"\nCopying support files to {output_dir}...")
     
-    # Copy config files (optional - for backward compatibility with our inference script)
-    # Note: For Hugging Face, only config.json at root is needed
-    if not skip_component_configs:
-        config_files = [
-            "thinker_tiny.json",
-            "audio_enc_tiny.json",
-            "vision_tiny.json",
-            "talker_tiny.json",
-            "omni_sft_tiny.json",
-            "ocr_tiny.json",
-            "vocoder_tiny.json"
-        ]
-        
-        configs_src = Path(configs_dir)
-        configs_dst = Path(output_dir) / "configs"
-        configs_dst.mkdir(exist_ok=True)
-        
-        configs_copied = 0
-        for config_file in config_files:
-            src = configs_src / config_file
-            if src.exists():
-                shutil.copy2(src, configs_dst / config_file)
-                configs_copied += 1
-        
-        if configs_copied > 0:
-            print(f"  ✓ Copied {configs_copied} component config files (optional, for backward compatibility)")
-        else:
-            print(f"  ⚠ Note: Component configs not found (optional - main config.json is sufficient)")
-    else:
-        print(f"  ⚠ Skipped component configs (using --skip_component_configs)")
+    # Note: Component config files are NOT copied anymore
+    # Only the main config.json at root is created (see below)
+    # This keeps the export directory clean and Hugging Face compatible
     
     # Copy tokenizer
     tokenizer_paths = [
@@ -329,12 +349,13 @@ def copy_support_files(
             thinker_cfg = json.load(f)
     
     # Create main config.json (compatible with both Hugging Face and our inference script)
-    # Load other component configs if available
+    # Load other component configs if available (from configs_dir, not from export directory)
     audio_cfg = {}
     vision_cfg = {}
     talker_cfg = {}
     ocr_cfg = {}
     
+    # Load component configs from source configs_dir (not copying them, just reading)
     configs_src = Path(configs_dir)
     if configs_src.exists():
         for cfg_file, cfg_dict in [
@@ -492,24 +513,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Export all components
-  python export.py \\
-      --omni_ckpt checkpoints/omni_sft_tiny \\
-      --thinker_ckpt checkpoints/thinker_tiny \\
-      --audio_ckpt checkpoints/audio_enc_tiny \\
-      --vision_ckpt checkpoints/vision_tiny \\
-      --talker_ckpt checkpoints/talker_tiny \\
-      --output_dir export
+  # Export all components (auto-detects checkpoint paths from configs/omni_sft_tiny.json)
+  python export.py
 
-  # Minimal export (only main config.json, skip component configs)
+  # Export with custom config file
+  python export.py --omni_config omni_sft_tiny.json
+
+  # Export with explicit checkpoint paths (overrides config file)
   python export.py \\
       --omni_ckpt checkpoints/omni_sft_tiny \\
       --thinker_ckpt checkpoints/thinker_tiny \\
       --audio_ckpt checkpoints/audio_enc_tiny \\
       --vision_ckpt checkpoints/vision_tiny \\
-      --talker_ckpt checkpoints/talker_tiny \\
-      --output_dir export \\
-      --skip_component_configs
+      --talker_ckpt checkpoints/talker_tiny
+
+  # Export (only main config.json is created, component configs are not copied)
+
+Note: Config files are always read from the configs/ folder.
+      Merged model and export files are saved to the export/ folder by default.
         """
     )
     parser.add_argument(
@@ -546,8 +567,8 @@ Examples:
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="merged_model",
-        help="Output directory for merged model and support files"
+        default="export",
+        help="Output directory for merged model and support files (default: export)"
     )
     parser.add_argument(
         "--output_file",
@@ -559,15 +580,32 @@ Examples:
         "--configs_dir",
         type=str,
         default="configs",
-        help="Directory containing config JSON files"
+        help="Directory containing config JSON files (default: configs, always reads from here)"
     )
     parser.add_argument(
-        "--skip_component_configs",
-        action="store_true",
-        help="Skip copying individual component configs (only create main config.json for Hugging Face)"
+        "--omni_config",
+        type=str,
+        default="omni_sft_tiny.json",
+        help="Name of the omni config file in configs_dir to read checkpoint paths from (default: omni_sft_tiny.json)"
     )
     
     args = parser.parse_args()
+    
+    # Always use configs_dir for reading config files
+    configs_dir = args.configs_dir
+    
+    # Load checkpoint paths from config file if not provided via command line
+    config_paths = {}
+    if args.omni_config:
+        config_paths = load_checkpoint_paths_from_config(args.omni_config, configs_dir)
+    
+    # Use command line arguments if provided, otherwise use paths from config file
+    omni_ckpt_dir = args.omni_ckpt or config_paths.get("omni_ckpt_dir")
+    thinker_ckpt_dir = args.thinker_ckpt or config_paths.get("thinker_ckpt_dir")
+    audio_ckpt_dir = args.audio_ckpt or config_paths.get("audio_ckpt_dir")
+    vision_ckpt_dir = args.vision_ckpt or config_paths.get("vision_ckpt_dir")
+    talker_ckpt_dir = args.talker_ckpt or config_paths.get("talker_ckpt_dir")
+    ocr_ckpt_dir = args.ocr_ckpt or config_paths.get("ocr_ckpt_dir")
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -575,26 +613,25 @@ Examples:
     
     # Merge model components
     merged_state = merge_model_components(
-        omni_ckpt_dir=args.omni_ckpt,
-        thinker_ckpt_dir=args.thinker_ckpt,
-        audio_ckpt_dir=args.audio_ckpt,
-        vision_ckpt_dir=args.vision_ckpt,
-        talker_ckpt_dir=args.talker_ckpt,
-        ocr_ckpt_dir=args.ocr_ckpt,
+        omni_ckpt_dir=omni_ckpt_dir,
+        thinker_ckpt_dir=thinker_ckpt_dir,
+        audio_ckpt_dir=audio_ckpt_dir,
+        vision_ckpt_dir=vision_ckpt_dir,
+        talker_ckpt_dir=talker_ckpt_dir,
+        ocr_ckpt_dir=ocr_ckpt_dir,
         output_path=output_path
     )
     
-    # Copy support files
+    # Copy support files (always use configs_dir for reading configs)
     copy_support_files(
-        omni_ckpt_dir=args.omni_ckpt,
-        thinker_ckpt_dir=args.thinker_ckpt,
-        audio_ckpt_dir=args.audio_ckpt,
-        vision_ckpt_dir=args.vision_ckpt,
-        talker_ckpt_dir=args.talker_ckpt,
-        ocr_ckpt_dir=args.ocr_ckpt,
+        omni_ckpt_dir=omni_ckpt_dir,
+        thinker_ckpt_dir=thinker_ckpt_dir,
+        audio_ckpt_dir=audio_ckpt_dir,
+        vision_ckpt_dir=vision_ckpt_dir,
+        talker_ckpt_dir=talker_ckpt_dir,
+        ocr_ckpt_dir=ocr_ckpt_dir,
         output_dir=args.output_dir,
-        configs_dir=args.configs_dir,
-        skip_component_configs=args.skip_component_configs
+        configs_dir=configs_dir
     )
     
     print(f"\n✓ Model merge complete!")
