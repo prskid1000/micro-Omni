@@ -875,7 +875,8 @@ def collate_mel_fn(batch, max_mel_length=None):
         
         pad_len = max_len - current_len
         if pad_len > 0:
-            m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
+            pad = m.new_zeros(pad_len, n_mels)
+            m = torch.cat([m, pad], dim=0)
         padded.append(m)
         mel_lengths.append(min(original_len, max_len))  # Store actual length used (may be truncated)
     
@@ -917,7 +918,8 @@ def collate_mel_text_fn(batch, max_mel_length=None):
         
         pad_len = max_len - current_len
         if pad_len > 0:
-            m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
+            pad = m.new_zeros(pad_len, n_mels)
+            m = torch.cat([m, pad], dim=0)
         padded_mels.append(m)
         mel_lengths.append(min(original_len, max_len))  # Store actual length used (may be truncated)
     
@@ -959,7 +961,8 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
             current_len = max_mel_len
         pad_len = max_mel_len - current_len
         if pad_len > 0:
-            m = torch.cat([m, torch.zeros(pad_len, n_mels)], dim=0)
+            pad = m.new_zeros(pad_len, n_mels)
+            m = torch.cat([m, pad], dim=0)
         padded_mels.append(m)
         mel_lengths.append(min(original_len, max_mel_len))  # Store actual length used (may be truncated)
     
@@ -1472,7 +1475,15 @@ def analyze_ocr_dataset(csv_path, text_percentile=95.0):
     
     return char_to_idx, idx_to_char, vocab_size, max_text_len
 
-def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percentile=95.0):
+def analyze_vocoder_dataset(
+    csv_path,
+    sr=16000,
+    n_fft=1024,
+    hop_length=256,
+    n_mels=128,
+    sample_size=None,
+    audio_percentile=95.0,
+):
     """
     Analyze vocoder dataset to calculate max audio length using percentile.
     This helps determine optimal max_audio_length to minimize padding while covering most data.
@@ -1489,6 +1500,14 @@ def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percenti
     import numpy as np
     
     audio_lengths = []
+    mel_lengths = []
+    melspec = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sr,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=n_fft,
+        n_mels=n_mels,
+    )
     
     with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
         reader = csv.DictReader(f)
@@ -1515,12 +1534,12 @@ def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percenti
                         wav, file_sr = load_audio(wav_path)
                         if file_sr != sr:
                             wav = torchaudio.transforms.Resample(file_sr, sr)(wav)
-                        
-                        # Get audio length in samples
                         if wav.dim() > 1:
-                            wav = wav.mean(dim=0)  # Convert to mono if stereo
+                            wav = wav.mean(dim=0)
                         audio_len = wav.shape[0]
                         audio_lengths.append(audio_len)
+                        mel = melspec(wav.unsqueeze(0))[0].T
+                        mel_lengths.append(mel.shape[0])
                 except Exception:
                     continue
         
@@ -1531,10 +1550,19 @@ def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percenti
     if audio_lengths:
         audio_lengths_arr = np.array(audio_lengths)
         max_audio_len = np.percentile(audio_lengths_arr, audio_percentile)
-        # Round up to nearest 256 for better memory alignment
         max_audio_len = int(np.ceil(max_audio_len / 256) * 256)
-        
-        # Print statistics for user
+    else:
+        max_audio_len = 0
+        audio_lengths_arr = np.array([])
+    
+    if mel_lengths:
+        mel_lengths_arr = np.array(mel_lengths)
+        max_mel_len = int(np.ceil(np.percentile(mel_lengths_arr, audio_percentile)))
+    else:
+        max_mel_len = 0
+        mel_lengths_arr = np.array([])
+    
+    if audio_lengths:
         print(f"\n📊 Audio Length Statistics:")
         print(f"  • Total files analyzed: {len(audio_lengths)}")
         print(f"  • Min length: {audio_lengths_arr.min()} samples ({audio_lengths_arr.min()/sr:.2f}s)")
@@ -1543,11 +1571,10 @@ def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percenti
         print(f"  • Median length: {np.median(audio_lengths_arr):.0f} samples ({np.median(audio_lengths_arr)/sr:.2f}s)")
         print(f"  • {audio_percentile}th percentile: {np.percentile(audio_lengths_arr, audio_percentile):.0f} samples ({np.percentile(audio_lengths_arr, audio_percentile)/sr:.2f}s)")
         print(f"  • Recommended max_audio_length: {max_audio_len} samples (~{max_audio_len/sr:.2f}s)")
+        print(f"  • Approx mel frames @ hop {hop_length}: {max_mel_len}")
         print(f"  • Coverage: ~{audio_percentile:.1f}% of data will fit without truncation")
-    else:
-        max_audio_len = 0
     
-    return max_audio_len
+    return max_audio_len, max_mel_len
 
 class ASRDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""

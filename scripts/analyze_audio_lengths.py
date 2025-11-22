@@ -24,9 +24,12 @@ def main():
     parser.add_argument("--csv", type=str, required=True, help="Path to CSV file with 'wav' column")
     parser.add_argument("--sr", type=int, default=16000, help="Sample rate (default: 16000)")
     parser.add_argument("--percentile", type=float, default=95.0, 
-                       help="Percentile to use for max_audio_length (default: 95.0)")
+                       help="Percentile to use for max lengths (default: 95.0)")
     parser.add_argument("--samples", type=int, default=None,
                        help="Number of samples to analyze (default: all)")
+    parser.add_argument("--hop", type=int, default=256, help="Hop length used for mel computation")
+    parser.add_argument("--n_fft", type=int, default=1024, help="FFT size for mel spectrogram")
+    parser.add_argument("--n_mels", type=int, default=128, help="Number of mel bins")
     
     args = parser.parse_args()
     
@@ -44,9 +47,12 @@ def main():
     print()
     
     # Analyze dataset
-    max_audio_length = analyze_vocoder_dataset(
+    max_audio_length, max_mel_length = analyze_vocoder_dataset(
         csv_path=args.csv,
         sr=args.sr,
+        n_fft=args.n_fft,
+        hop_length=args.hop,
+        n_mels=args.n_mels,
         sample_size=args.samples,
         audio_percentile=args.percentile
     )
@@ -56,6 +62,7 @@ def main():
     print("=" * 70)
     print(f"\n✅ Add to your vocoder config (configs/vocoder_tiny.json):")
     print(f'   "max_audio_length": {max_audio_length},')
+    print(f'   "max_mel_length": {max_mel_length},')
     print(f'   "max_audio_length_percentile": {args.percentile},')
     
     print(f"\n💡 Memory Considerations:")

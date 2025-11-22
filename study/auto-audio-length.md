@@ -186,19 +186,30 @@ Compare to:
 Added to `omni/utils.py`:
 
 ```python
-def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percentile=95.0):
-    """
-    Analyze vocoder dataset to calculate max audio length using percentile.
+def analyze_vocoder_dataset(
+  csv_path,
+  sr=16000,
+  n_fft=1024,
+  hop_length=256,
+  n_mels=128,
+  sample_size=None,
+  audio_percentile=95.0,
+):
+  """
+  Analyze dataset to calculate percentile-based padding limits for audio and mel frames.
 
-    Args:
-        csv_path: Path to vocoder CSV file with 'wav' column
-        sr: Sample rate (default: 16000)
-        sample_size: Number of samples to check (None = all)
-        audio_percentile: Percentile to use (default: 95.0)
+  Args:
+    csv_path: Path to vocoder CSV file with 'wav' column
+    sr: Sample rate (default: 16000)
+    n_fft: FFT size for mel spectrograms (default: 1024)
+    hop_length: Hop length used for mel spectrograms (default: 256)
+    n_mels: Number of mel bins (default: 128)
+    sample_size: Number of samples to check (None = all)
+    audio_percentile: Percentile to use (default: 95.0)
 
-    Returns:
-        int: Maximum audio length at specified percentile (rounded to nearest 256)
-    """
+  Returns:
+    tuple[int, int]: Recommended (max_audio_length, max_mel_length)
+  """
 ```
 
 ## Integration with Training
@@ -206,9 +217,9 @@ def analyze_vocoder_dataset(csv_path, sr=16000, sample_size=None, audio_percenti
 The `train_vocoder.py` script now:
 
 1. Automatically calls `analyze_vocoder_dataset()` before training
-2. Calculates optimal `max_audio_length` based on your dataset
-3. Updates the config with the calculated value
-4. Passes it to `VocoderDataset` for audio cropping
+2. Calculates optimal `max_audio_length` **and** matching `max_mel_length` using the same mel transform as training
+3. Updates the config with the calculated values
+4. Passes them to `VocoderDataset`/collate for cropping + padding alignment
 
 ## Best Practices
 

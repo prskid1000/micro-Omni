@@ -8,6 +8,7 @@ Uses adversarial training with Multi-Period Discriminator (MPD) and Multi-Scale 
 
 import argparse
 import json
+import math
 import os
 import torch
 import torchaudio
@@ -140,30 +141,56 @@ def main(cfg):
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Audio CSV not found. Expected: {csv_path}")
     
-    # Load max_audio_length from checkpoint metadata if resuming, otherwise calculate
-    if metadata and "config" in metadata and "max_audio_length" in metadata["config"]:
-        max_audio_length = metadata["config"]["max_audio_length"]
+    # Load cached padding limits from metadata/config when resuming
+    max_audio_length = None
+    max_mel_length = None
+    metadata_cfg = metadata.get("config", {}) if metadata else {}
+    if metadata:
+        max_audio_length = metadata.get("max_audio_length", metadata_cfg.get("max_audio_length"))
+        max_mel_length = metadata.get("max_mel_length", metadata_cfg.get("max_mel_length"))
+    if max_audio_length is not None:
         print(f"✓ Loaded max_audio_length from checkpoint: {max_audio_length}")
     elif "max_audio_length" in cfg:
         max_audio_length = cfg["max_audio_length"]
         print(f"✓ Using max_audio_length from config: {max_audio_length}")
-    else:
-        # Auto-calculate max_audio_length if not provided (similar to mel length calculation for other models)
+    
+    if max_mel_length is not None:
+        print(f"✓ Loaded max_mel_length from checkpoint: {max_mel_length}")
+    elif "max_mel_length" in cfg:
+        max_mel_length = cfg["max_mel_length"]
+        print(f"✓ Using max_mel_length from config: {max_mel_length}")
+    
+    # Auto-calculate limits if missing
+    if max_audio_length is None or max_mel_length is None:
         print("\n🔍 Analyzing vocoder dataset...")
         audio_percentile = cfg.get("max_audio_length_percentile", 95.0)
-        sample_size = cfg.get("dataset_sample_size", None)  # None = analyze all files
-        
-        max_audio_length = analyze_vocoder_dataset(
-            csv_path, 
-            sr=sr, 
+        sample_size = cfg.get("dataset_sample_size", None)
+        analyzed_audio_len, analyzed_mel_len = analyze_vocoder_dataset(
+            csv_path,
+            sr=sr,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=n_mels,
             sample_size=sample_size,
             audio_percentile=audio_percentile
         )
-        print(f"✓ Calculated max_audio_length: {max_audio_length}")
-        print(f"✓ Calculated max_audio_length: {max_audio_length}")
+        if max_audio_length is None:
+            max_audio_length = analyzed_audio_len
+            print(f"✓ Calculated max_audio_length: {max_audio_length}")
+        if max_mel_length is None:
+            max_mel_length = analyzed_mel_len
+            print(f"✓ Calculated max_mel_length: {max_mel_length}")
     
-    # Update config with the value (whether loaded or calculated)
+    # Final fallback for mel length (derivable from audio length + hop)
+    if max_mel_length is None and max_audio_length is not None:
+        max_mel_length = max(1, int(math.ceil(max_audio_length / hop_length)))
+        print(f"✓ Derived max_mel_length from audio length: {max_mel_length}")
+    
+    if max_audio_length is None or max_mel_length is None:
+        raise RuntimeError("Failed to determine max_audio_length/max_mel_length for vocoder training")
+    
     cfg["max_audio_length"] = max_audio_length
+    cfg["max_mel_length"] = max_mel_length
     
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
@@ -233,6 +260,7 @@ def main(cfg):
     # Memory optimizations summary
 
     print(f"  • Audio length limit: {cfg.get('max_audio_length', 8192)} samples (~{cfg.get('max_audio_length', 8192)/sr:.2f}s)")
+    print(f"  • Mel length limit: {max_mel_length} frames (~{max_mel_length * hop_length / sr:.2f}s)")
     print(f"  • Mixed precision: {'Enabled' if use_amp else 'Disabled'}")
     print()
     
@@ -283,7 +311,11 @@ def main(cfg):
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
     # Note: pin_memory=False to reduce RAM usage (vocoder needs both mel+audio, more memory than TTS)
     # Create collate function with max_audio_length for fixed-size padding
-    collate_fn = partial(collate_mel_audio_fn, max_audio_length=max_audio_length)
+    collate_fn = partial(
+        collate_mel_audio_fn,
+        max_mel_length=max_mel_length,
+        max_audio_length=max_audio_length,
+    )
     
     train_dl = DataLoader(
         train_ds, 
@@ -334,7 +366,8 @@ def main(cfg):
         train_dl_kwargs={
             "num_workers": cfg.get("num_workers", 2),
             "drop_last": True,
-            "collate_fn": collate_mel_audio_fn
+            "collate_fn": collate_fn,
+            "pin_memory": False,
         }
     )
     if new_train_dl is not None:
@@ -584,23 +617,16 @@ def main(cfg):
             audio_real = audio_real[:, :target_audio_length]
             audio_fake_d = audio_fake.unsqueeze(1)
             
-            # Compute mel spectrogram of generated audio (using pre-created transform)
-            # MelSpectrogram outputs (B, 1, n_mels, T_mel) when given (B, 1, T_audio)
-            mel_fake_batch = melspec_for_loss(audio_fake.unsqueeze(1))  # (B, 1, n_mels, T_mel)
-            # Remove channel dimension and transpose to match mel_real format: (B, T_mel, n_mels)
-            mel_fake = mel_fake_batch.squeeze(1).transpose(1, 2)  # (B, T_mel, n_mels)
-            # Match length with mel_real (use actual mel lengths, not padded length)
-            # mel_lengths is the actual length before padding, so we need to match to that
-            # But mel_fake length depends on audio_fake length, which was trimmed to min_len
-            # So we need to match both to the minimum of actual mel length and mel_fake length
-            min_mel_len = min(mel.shape[1], mel_fake.shape[1])
-            # Also consider actual mel lengths - don't include padding in loss
-            actual_mel_len = mel_lengths.min().item()  # Minimum actual mel length in batch
-            min_mel_len = min(min_mel_len, actual_mel_len)
-            mel_real = mel[:, :min_mel_len, :]  # (B, T_mel, n_mels)
-            mel_fake = mel_fake[:, :min_mel_len, :]  # (B, T_mel, n_mels)
-            # Update mel_lengths to match trimmed length for loss calculation
-            mel_lengths_trimmed = torch.clamp(mel_lengths, max=min_mel_len)
+            mel_target_len = mel.shape[1]
+            mel_real = mel  # Already padded/truncated to fixed length
+            mel_lengths_trimmed = torch.clamp(mel_lengths, max=mel_target_len)
+            mel_fake_batch = melspec_for_loss(audio_fake.unsqueeze(1))
+            mel_fake = mel_fake_batch.squeeze(1).transpose(1, 2)
+            if mel_fake.shape[1] > mel_target_len:
+                mel_fake = mel_fake[:, :mel_target_len, :]
+            elif mel_fake.shape[1] < mel_target_len:
+                pad = mel_fake.new_zeros(mel_fake.size(0), mel_target_len - mel_fake.shape[1], mel_fake.size(2))
+                mel_fake = torch.cat([mel_fake, pad], dim=1)
             
             if use_amp:
                 with autocast(device_type='cuda'):
