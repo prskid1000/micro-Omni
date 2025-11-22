@@ -21,18 +21,28 @@ from omni.codec import RVQ, NeuralVocoder
 from omni.utils import ASRDataset, load_audio, find_checkpoint, strip_orig_mod
 
 
-def build_char_vocab():
-    """Build character vocabulary matching training script"""
-    char_to_idx = {}
-    for i in range(32, 127):  # Printable ASCII
-        char_to_idx[chr(i)] = len(char_to_idx) + 1
-    char_to_idx['\n'] = len(char_to_idx) + 1
-    char_to_idx['\t'] = len(char_to_idx) + 1
-    char_to_idx['<UNK>'] = len(char_to_idx) + 1
-    idx_to_char = {v: k for k, v in char_to_idx.items()}
-    idx_to_char[0] = '<BLANK>'  # CTC blank token
-    vocab_size = len(char_to_idx) + 1  # +1 for blank token (0)
-    return char_to_idx, idx_to_char, vocab_size
+def build_char_vocab(csv_path=None):
+    """
+    Build character vocabulary matching training script.
+    If csv_path is provided, uses dynamic vocabulary (new approach).
+    Otherwise, falls back to ASCII-only vocabulary (legacy).
+    """
+    if csv_path and os.path.exists(csv_path):
+        # Use dynamic vocabulary from dataset (new approach)
+        from omni.utils import build_char_vocab_from_asr_csv
+        return build_char_vocab_from_asr_csv(csv_path)
+    else:
+        # Fallback to ASCII-only vocabulary (legacy, for backwards compatibility)
+        char_to_idx = {}
+        for i in range(32, 127):  # Printable ASCII
+            char_to_idx[chr(i)] = len(char_to_idx) + 1
+        char_to_idx['\n'] = len(char_to_idx) + 1
+        char_to_idx['\t'] = len(char_to_idx) + 1
+        char_to_idx['<UNK>'] = len(char_to_idx) + 1
+        idx_to_char = {v: k for k, v in char_to_idx.items()}
+        idx_to_char[0] = '<BLANK>'  # CTC blank token
+        vocab_size = len(char_to_idx) + 1  # +1 for blank token (0)
+        return char_to_idx, idx_to_char, vocab_size
 
 
 def ctc_greedy_decode(logits, idx_to_char):
@@ -94,33 +104,49 @@ def load_asr_models(audio_ckpt_dir, device="cuda"):
                 "mel_bins": 128,
             }
     
-    # Get vocabulary size from checkpoint head if available
+    # Try to load vocabulary from checkpoint first (preferred)
+    char_to_idx = None
+    idx_to_char = None
     vocab_size = None
-    if "head" in checkpoint:
-        head_state = checkpoint["head"]
-        if isinstance(head_state, dict):
-            # Check weight shape to get vocab size
-            if "weight" in head_state:
-                vocab_size = head_state["weight"].shape[0]
-            elif any("weight" in k for k in head_state.keys()):
-                # Find weight key (might have prefix)
-                for k in head_state.keys():
-                    if "weight" in k:
-                        vocab_size = head_state[k].shape[0]
-                        break
     
-    # If vocab size not found, try from config or build default
-    if vocab_size is None:
-        vocab_size = cfg.get("ctc_vocab_size", None)
-        if vocab_size is None:
-            # Build character vocabulary to get default size
-            char_to_idx, idx_to_char, vocab_size = build_char_vocab()
-        else:
-            # Build vocabulary with known size (may not match exactly, but we'll use checkpoint size)
-            char_to_idx, idx_to_char, _ = build_char_vocab()
+    if "char_to_idx" in checkpoint:
+        # Load vocabulary from checkpoint (new format with dynamic vocab)
+        char_to_idx = checkpoint["char_to_idx"]
+        idx_to_char = checkpoint.get("idx_to_char", {v: k for k, v in char_to_idx.items()})
+        vocab_size = len(char_to_idx)
+        print("✓ Loaded vocabulary from checkpoint")
     else:
-        # Build vocabulary (may not match checkpoint exactly, but vocab size will)
-        char_to_idx, idx_to_char, _ = build_char_vocab()
+        # Fallback: get vocabulary size from checkpoint head
+        if "head" in checkpoint:
+            head_state = checkpoint["head"]
+            if isinstance(head_state, dict):
+                # Check weight shape to get vocab size
+                if "weight" in head_state:
+                    vocab_size = head_state["weight"].shape[0]
+                elif any("weight" in k for k in head_state.keys()):
+                    # Find weight key (might have prefix)
+                    for k in head_state.keys():
+                        if "weight" in k:
+                            vocab_size = head_state[k].shape[0]
+                            break
+        
+        # Try to get CSV path from config for dynamic vocabulary
+        csv_path = cfg.get("train_csv", None)
+        if csv_path and not os.path.exists(csv_path):
+            csv_path = None  # Fall back if file doesn't exist
+        
+        # Build vocabulary (use dynamic if CSV available, otherwise legacy ASCII)
+        if vocab_size is None:
+            vocab_size = cfg.get("ctc_vocab_size", None)
+            if vocab_size is None:
+                # Build character vocabulary to get default size (use dynamic if CSV available)
+                char_to_idx, idx_to_char, vocab_size = build_char_vocab(csv_path)
+            else:
+                # Build vocabulary with known size (may not match exactly, but we'll use checkpoint size)
+                char_to_idx, idx_to_char, _ = build_char_vocab(csv_path)
+        else:
+            # Build vocabulary (may not match checkpoint exactly, but vocab size will)
+            char_to_idx, idx_to_char, _ = build_char_vocab(csv_path)
     
     print(f"CTC vocabulary size: {vocab_size} (includes blank token)")
     

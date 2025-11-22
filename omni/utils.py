@@ -1019,6 +1019,52 @@ class TextDataset(IterableDataset):
             print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
 
+def build_char_vocab_from_asr_csv(csv_path):
+    """
+    Build character vocabulary from ASR CSV dataset (dynamic vocabulary like OCR).
+    Supports any Unicode characters present in the dataset.
+    
+    Args:
+        csv_path: Path to ASR CSV file with 'text' column
+        
+    Returns:
+        tuple: (char_to_idx, idx_to_char, vocab_size)
+            - char_to_idx: dict mapping characters to indices
+            - idx_to_char: dict mapping indices to characters
+            - vocab_size: total vocabulary size (includes blank token at index 0)
+    """
+    chars = set()
+    
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            text = row.get("text", "").strip()
+            if text:
+                chars.update(text)
+    
+    # Build vocabulary: blank token (0) reserved for CTC, then special tokens, then characters
+    char_to_idx = {}
+    idx_to_char = {}
+    
+    # Reserve 0 for CTC blank token
+    char_to_idx['<BLANK>'] = 0
+    idx_to_char[0] = '<BLANK>'
+    
+    # Add special tokens
+    char_to_idx['<UNK>'] = 1
+    idx_to_char[1] = '<UNK>'
+    
+    # Add all unique characters from dataset (sorted for consistency)
+    for char in sorted(chars):
+        if char not in char_to_idx:
+            idx = len(char_to_idx)
+            char_to_idx[char] = idx
+            idx_to_char[idx] = char
+    
+    vocab_size = len(char_to_idx)
+    
+    return char_to_idx, idx_to_char, vocab_size
+
 class ASRDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
     def __init__(self, csv_path, sr=16000, n_mels=128, cfg=None, shuffle_buffer_size=10000, seed=None, skip_samples=0):

@@ -5,7 +5,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, cleanup_old_checkpoints, ValidationSkipSamplesContext, collate_mel_text_fn
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, load_checkpoint, setup_resume_data_loading, calculate_resume_position, cleanup_old_checkpoints, ValidationSkipSamplesContext, collate_mel_text_fn, build_char_vocab_from_asr_csv
 from tqdm import tqdm
 
 def main(cfg):
@@ -22,6 +22,26 @@ def main(cfg):
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
+    # Get data path from config (needed for vocabulary building)
+    train_csv = cfg.get("train_csv", "data/audio/production_asr.csv")
+    
+    # Build dynamic character vocabulary from dataset (like OCR approach)
+    # This supports any Unicode characters present in your data
+    print("Building character vocabulary from ASR dataset...")
+    char_to_idx, idx_to_char, vocab_size_dynamic = build_char_vocab_from_asr_csv(train_csv)
+    print(f"Character vocabulary size: {vocab_size_dynamic} (includes blank token at index 0)")
+    print(f"Unique characters found: {len(char_to_idx) - 2}")  # Exclude <BLANK> and <UNK>
+    
+    # Allow override from config, but default to dynamic vocabulary
+    vocab = cfg.get("ctc_vocab_size", vocab_size_dynamic)
+    if vocab != vocab_size_dynamic:
+        print(f"⚠ Warning: Config ctc_vocab_size={vocab} differs from dataset vocabulary size={vocab_size_dynamic}")
+        print(f"  Using config value: {vocab}")
+    else:
+        print(f"✓ Using dynamic vocabulary size: {vocab}")
+    
+    d_model = cfg.get("d_model", 192)
+    
     model = AudioEncoderTiny(
         cfg.get("d_model", 192), 
         cfg.get("n_heads", 3), 
@@ -31,29 +51,17 @@ def main(cfg):
         downsample_factor=downsample_factor,
         compile_model=use_compile
     ).to(device)
-    # Improved CTC head: proper character vocabulary
-    # Build character vocabulary (printable ASCII + special tokens)
-    # This will be used in the training loop for encoding text
-    char_to_idx = {}
-    for i in range(32, 127):  # Printable ASCII
-        char_to_idx[chr(i)] = len(char_to_idx) + 1
-    char_to_idx['\n'] = len(char_to_idx) + 1
-    char_to_idx['\t'] = len(char_to_idx) + 1
-    char_to_idx['<UNK>'] = len(char_to_idx) + 1
-    vocab_size_ctc = len(char_to_idx) + 1  # +1 for blank token (0)
     
-    # Use proper vocabulary size instead of toy 64
-    vocab = cfg.get("ctc_vocab_size", vocab_size_ctc)  # Proper char vocab size
-    d_model = cfg.get("d_model", 192)
+    # CTC head with dynamic vocabulary
     head = nn.Linear(d_model, vocab).to(device)
     ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True)
-    print(f"CTC vocabulary size: {vocab} (includes blank token)")
-    print(f"Character vocabulary: {len(char_to_idx)} characters")
+    
     opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.1))
     
-    unk_idx = char_to_idx['<UNK>']
+    unk_idx = char_to_idx.get('<UNK>', 1)  # Default to 1 if not found
     max_text_len = cfg.get("max_text_len", 64)
     head.char_to_idx = char_to_idx
+    head.idx_to_char = idx_to_char
     head.unk_idx = unk_idx
     head.max_text_len = max_text_len
 
@@ -99,9 +107,6 @@ def main(cfg):
     
     # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
     collate_fn_with_max = partial(collate_mel_text_fn, max_mel_length=max_mel_length)
-    
-    # Get data path from config
-    train_csv = cfg.get("train_csv", "data/audio/production_asr.csv")
     
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -375,7 +380,10 @@ def main(cfg):
                     "head": head.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
+                    "step": step,
+                    "char_to_idx": char_to_idx,
+                    "idx_to_char": idx_to_char,
+                    "config": cfg
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
@@ -454,7 +462,10 @@ def main(cfg):
                     "head": head.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "step": step
+                    "step": step,
+                    "char_to_idx": char_to_idx,
+                    "idx_to_char": idx_to_char,
+                    "config": cfg
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
@@ -531,7 +542,10 @@ def main(cfg):
             "head": head.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "step": step
+            "step": step,
+            "char_to_idx": char_to_idx,
+            "idx_to_char": idx_to_char,
+            "config": cfg
         }
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
