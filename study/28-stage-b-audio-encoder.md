@@ -247,6 +247,13 @@ WER > 50%: Poor (barely understanding)
 
 TARGET FOR μOmni:
 WER 10-20% = Good for proof-of-concept! ✓
+
+**Expected Validation Loss:**
+- Target CTC Loss: < 2.0
+- Good: 1.5-2.0
+- Excellent: < 1.5
+- Initial: 3.0-4.0 (random guessing)
+- Mid-training: 2.0-2.5
 ```
 
 ---

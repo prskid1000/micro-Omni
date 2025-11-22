@@ -281,19 +281,39 @@ This progressive approach ensures stable, effective learning!
 
 ### Complete Specifications
 
-| Stage | Component | Primary Task | Data Type | Loss Function | Metric | Est. Time | Dependencies |
-|-------|-----------|--------------|-----------|---------------|---------|-----------|--------------|
-| **A** | Thinker | Language Modeling | Text | Cross-Entropy | Perplexity | 8-12h | None |
-| **B** | Audio Encoder | ASR | Audio + Text | CTC | WER | 6-10h | None |
-| **C** | Vision Encoder | Contrastive Learning | Images + Captions | Contrastive (InfoNCE) | Contrastive Loss | 4-8h | None (uses tokenizer from A) |
-| **D** | RVQ + Talker | Speech Gen | Audio (TTS) | MSE + CE | Recon Error | 10-15h | None (RVQ), Then Talker needs RVQ |
-| **E** | All (Joint) | Multimodal QA | Mixed Modalities | Cross-Entropy | Task Acc | 6-12h | A, B, C, D |
-| **Optional** | OCR | Text Extraction | Images + Text | Cross-Entropy | Character Acc | 4-8h | None |
-| **Optional** | HiFi-GAN | Vocoder | Audio (TTS) | Adversarial | Quality | 2-4h | None |
+| Stage | Component | Primary Task | Data Type | Loss Function | Metric | Target Loss | Est. Time | Dependencies |
+|-------|-----------|--------------|-----------|---------------|---------|-------------|-----------|--------------|
+| **A** | Thinker | Language Modeling | Text | Cross-Entropy | Perplexity | Loss < 2.0, PPL < 8 | 8-12h | None |
+| **B** | Audio Encoder | ASR | Audio + Text | CTC | WER | CTC Loss < 2.0, WER < 20% | 6-10h | None |
+| **C** | Vision Encoder | Contrastive Learning | Images + Captions | Contrastive (InfoNCE) | Contrastive Loss | Loss < 0.3 | 4-8h | None (uses tokenizer from A) |
+| **D** | RVQ + Talker | Speech Gen | Audio (TTS) | MSE + CE | Recon Error | RVQ: < 0.05, Talker: Loss < 2.0, PPL < 10 | 10-15h | None (RVQ), Then Talker needs RVQ |
+| **E** | All (Joint) | Multimodal QA | Mixed Modalities | Cross-Entropy | Task Acc | Loss < 2.0, PPL < 8 | 6-12h | A, B, C, D |
+| **Optional** | OCR | Text Extraction | Images + Text | Cross-Entropy | Character Acc | Loss < 1.0, Acc > 90% | 4-8h | None |
+| **Optional** | HiFi-GAN | Vocoder | Audio (TTS) | Adversarial | Quality | Natural-sounding speech | 2-4h | None |
 
 **Total Estimated Time: 40-60 hours** on single 12GB GPU (tiny model, 25.65M params)
 
 **Note:** Training time scales with model size. See "Model Scaling" section below for larger models.
+
+### Expected Validation Loss Summary
+
+**Quick Reference - Target Loss Values:**
+
+| Component | Loss Target | Metric Target | Status Indicator |
+|-----------|-------------|---------------|------------------|
+| **Thinker** | < 2.0 | Perplexity < 8 | Ready for Stage E |
+| **Audio Encoder** | < 2.0 | WER < 20% | Good performance |
+| **Vision Encoder** | < 0.3 | Contrastive Loss | Good alignment |
+| **RVQ Codec** | < 0.05 | Reconstruction Error | Good compression |
+| **Talker** | < 2.0 | Perplexity < 10 | Intelligible speech |
+| **SFT** | < 2.0 | Perplexity < 8 | Ready for use |
+| **OCR** | < 1.0 | Character Acc > 90% | Good extraction |
+
+**Loss Interpretation:**
+- **Too High (> 5.0):** Model not learning - check learning rate, data quality
+- **Too Low (< 0.1):** Possible overfitting or numerical issues
+- **Normal Range:** 1.0-3.0 for most tasks indicates healthy training
+- **Perplexity:** Lower is better (5-10 = good understanding, > 50 = poor)
 
 ---
 

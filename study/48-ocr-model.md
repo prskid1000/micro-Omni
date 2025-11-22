@@ -276,6 +276,12 @@ Model predicts next character given:
 - Image features (cross-attention)
 
 Loss: Cross-entropy on character predictions
+
+**Expected Validation Loss:**
+- Target Loss: < 1.0
+- Target Character Accuracy: > 90%
+- Good: loss < 0.8, accuracy > 95%
+- Excellent: loss < 0.5, accuracy > 98%
 Ignore: PAD tokens (index 0)
 ```
 

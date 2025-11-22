@@ -59,6 +59,12 @@ Epoch 5/5: loss=1.123, accuracy=75.6%
   → Image QA: 68.9%
   → Audio WER: 12.7%
   (Good multimodal understanding!)
+
+**Expected Validation Loss:**
+- Target Loss: < 2.5 (similar to Thinker)
+- Target Perplexity: < 10
+- Good: loss < 2.0, perplexity < 8
+- Excellent: loss < 1.5, perplexity < 5
 ```
 
 ### Running

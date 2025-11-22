@@ -72,7 +72,24 @@ This prevents batches from being skipped unnecessarily when gradients are modera
 - ✅ **Token counting:** Streams line-by-line with resume support
 - ✅ **Datasets:** All use streaming `IterableDataset` (no cache files, minimal memory)
 
-### 5. Vocoder Training Issues
+### 5. Validation Loss Not Improving
+
+**Symptoms:** Validation loss plateaus or increases while training loss decreases  
+**Causes & Solutions:**
+- **Overfitting:** Reduce learning rate, increase dropout, or add more data
+- **Learning rate too high:** Reduce to 1e-4 or 3e-5
+- **Data mismatch:** Ensure validation set is representative of training data
+- **Early stopping:** Monitor validation loss and stop when it stops improving
+
+**Expected Validation Loss Targets:**
+- **Thinker (Stage A):** Loss < 2.0, Perplexity < 8
+- **Audio Encoder (Stage B):** CTC Loss < 2.0, WER < 20%
+- **Vision Encoder (Stage C):** Contrastive Loss < 0.3
+- **Talker (Stage D):** Loss < 2.0, Perplexity < 10
+- **SFT (Stage E):** Loss < 2.0, Perplexity < 8
+- **OCR (Optional):** Loss < 1.0, Character Accuracy > 90%
+
+### 6. Vocoder Training Issues
 
 **Symptoms:** Shape errors, audio loading failures, discriminator errors
 

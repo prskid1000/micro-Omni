@@ -433,6 +433,12 @@ Final: loss=1.987 ppl=7.3
 → Output: "the comfortable mat"
 
 READY FOR STAGE E! ✓
+
+**Expected Validation Loss Targets:**
+- Target Loss: 1.5-2.5
+- Target Perplexity: 5-10
+- Good Performance: loss < 2.0, perplexity < 8
+- Excellent: loss < 1.5, perplexity < 5
 ```
 
 ---

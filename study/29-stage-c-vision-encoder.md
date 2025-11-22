@@ -70,6 +70,11 @@ After 3 epochs → Good vision-language alignment (ready for Stage E)
 - **Validation Loss:** Average contrastive loss on validation set
 - **Target:** Low contrastive loss indicates good vision-language alignment
 
+**Expected Validation Loss:**
+- Target Contrastive Loss: < 0.5
+- Good: < 0.3
+- Excellent: < 0.2
+
 ---
 
 ## 🎓 Output

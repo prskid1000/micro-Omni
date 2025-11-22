@@ -100,6 +100,12 @@ Talker:
 Epoch 1: loss=6.8, ppl=900 (random)
 Epoch 10: loss=3.2, ppl=24 (learning patterns)
 Epoch 25: loss=2.1, ppl=8 (good generation!)
+
+**Expected Validation Loss:**
+- Target Loss: < 2.5
+- Target Perplexity: < 15
+- Good: loss < 2.0, perplexity < 10
+- Excellent: loss < 1.5, perplexity < 8
 ```
 
 ---
