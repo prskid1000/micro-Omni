@@ -16,6 +16,7 @@ Ideas for extending μOmni beyond its current capabilities.
 
 **Current:** Simple BPE with 5K vocab  
 **Upgrade:** SentencePiece with 32K vocab
+
 - Better coverage of rare words
 - Improved multilingual support
 - More efficient encoding
@@ -24,6 +25,7 @@ Ideas for extending μOmni beyond its current capabilities.
 
 **Current:** 512 tokens  
 **Upgrade:** 2048-4096 tokens
+
 - Requires: Optimized attention (Flash Attention 2)
 - Benefit: Handle longer conversations/documents
 
@@ -31,22 +33,25 @@ Ideas for extending μOmni beyond its current capabilities.
 
 **Current:** Griffin-Lim vocoder (classical) + HiFi-GAN neural vocoder (optional)  
 **Status:** HiFi-GAN training script available (`train_vocoder.py`)
+
 - More natural speech with neural vocoder
 - Better prosody and quality
 - Automatic fallback to Griffin-Lim if HiFi-GAN unavailable
 - Training optimized for 12GB VRAM
 
 **Usage:**
+
 ```bash
 # Train HiFi-GAN vocoder (optional, improves speech quality)
 python train_vocoder.py --config configs/vocoder_tiny.json
 
 # Time: 2-4 hours (on 12GB GPU)
-# Output: checkpoints/vocoder_tiny/hifigan.pt
+# Output: checkpoints/vocoder_tiny/model.pt
 # Inference automatically uses HiFi-GAN if checkpoint available
 ```
 
 **Features:**
+
 - Adversarial training (Generator vs MPD + MSD discriminators)
 - Memory optimized: batch_size=2, gradient accumulation=4
 - Audio length limiting: 8192 samples (~0.5s) for 12GB VRAM
@@ -56,22 +61,25 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 
 **Current:** OCR model with Vision Encoder + Text Decoder  
 **Status:** OCR training script available (`train_ocr.py`)
+
 - Extract text from images
 - End-to-end training (image → text)
 - Can be combined with multimodal understanding
 - Training optimized for 12GB VRAM
 
 **Usage:**
+
 ```bash
 # Train OCR model (optional, for text extraction)
 python train_ocr.py --config configs/ocr_tiny.json
 
 # Time: 4-8 hours (on 12GB GPU)
-# Output: checkpoints/ocr_tiny/ocr.pt
+# Output: checkpoints/ocr_tiny/model.pt
 # Use with --ocr flag in inference
 ```
 
 **Features:**
+
 - Vision Encoder (ViT) processes image patches
 - Text Decoder generates text autoregressively
 - Teacher forcing with cross-entropy loss
@@ -82,6 +90,7 @@ python train_ocr.py --config configs/ocr_tiny.json
 
 **Current:** Synthetic + small datasets  
 **Upgrade:** Real-world datasets
+
 - Common Voice (audio)
 - COCO Captions (vision)
 - WebText (language)
@@ -102,6 +111,7 @@ class VideoEncoder(nn.Module):
 ```
 
 **Applications:**
+
 - Video captioning
 - Action recognition
 - Video Q&A
@@ -137,6 +147,7 @@ response = model.chat(
 
 **Current:** 25.65M parameters  
 **Target:** 1B-7B parameters
+
 - Requires: Multi-GPU training
 - Benefit: Significantly better quality
 - Challenge: Infrastructure costs
@@ -186,6 +197,7 @@ Training Time Scaling:
 
 **Current:** Text output, speech output  
 **Future:** Image generation, video generation
+
 - Integrate diffusion models
 - Text → Image (Stable Diffusion)
 - Text → Video
@@ -232,16 +244,19 @@ torchrun --nproc_per_node=4 train_text.py
 ### Potential Projects
 
 1. **Domain-Specific Models**
+
    - Medical AI assistant
    - Educational tutor
    - Customer service bot
 
 2. **Benchmarking**
+
    - Standardized evaluation suite
    - Comparison with other systems
    - Performance metrics
 
 3. **Documentation**
+
    - Video tutorials
    - Interactive notebooks
    - Translated documentation
@@ -277,6 +292,7 @@ torchrun --nproc_per_node=4 train_text.py
 ✅ **Theory:** Mathematics, research papers
 
 **Next Steps:**
+
 1. Set up environment (Chapter 38)
 2. Prepare data (Chapter 35)
 3. Run training pipeline (Chapter 39)

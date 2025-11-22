@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - How neural networks learn from data
 - What loss functions measure
 - How backpropagation computes gradients
@@ -19,7 +20,8 @@ By the end of this chapter, you will understand:
 
 ### Prerequisites: What You Need to Know First
 
-Before we learn about *training*, let's make sure we understand what we're training:
+Before we learn about _training_, let's make sure we understand what we're training:
+
 - A neural network is a collection of artificial neurons (from Chapter 2)
 - Each neuron has **weights** (numbers that we can adjust)
 - The network makes predictions by passing data through these neurons
@@ -52,7 +54,7 @@ ATTEMPT 1:
 3. CALCULATE HOW WRONG (error)
    Error = True answer - Network's guess
    Error = 1.0 - 0.3 = 0.7
-   
+
    Translation: "You were 0.7 (or 70%) off! That's pretty bad!"
 
 4. ADJUST THE WEIGHTS
@@ -90,11 +92,13 @@ SUCCESS! Network has learned! ✓
 ### Why This Works
 
 Imagine you're blindfolded trying to find a ball:
+
 - Someone tells you "you're getting warmer" or "colder"
 - You adjust direction based on feedback
 - Eventually, you find the ball!
 
 Neural networks:
+
 - Error is the "warmer/colder" feedback
 - Weights are the "direction" to move
 - Low error is "found it!"
@@ -112,7 +116,7 @@ A **loss function** (or cost function) measures how wrong the network's predicti
 ```
          Bad Predictions          Good Predictions
 Loss:    ██████████ (High)   →   ▓ (Low)
-         
+
 The network adjusts weights to minimize loss
 ```
 
@@ -234,7 +238,7 @@ Compute how each layer's weights affected the final loss
 ```
 FORWARD PASS (Compute output and loss):
 
-x=2 ──→ [w=0.5] ──→ z=1 ──→ [σ] ──→ ŷ=0.73 
+x=2 ──→ [w=0.5] ──→ z=1 ──→ [σ] ──→ ŷ=0.73
                                       ↓
                               True y = 1.0
                                       ↓
@@ -293,7 +297,7 @@ Repeat thousands of times → Converges to good solution
 
 Training process:
 Step 1: w=0.1, loss=8.0  ───→ gradient=+5.0
-Step 2: w=0.4, loss=2.0  ───→ gradient=+1.0  
+Step 2: w=0.4, loss=2.0  ───→ gradient=+1.0
 Step 3: w=0.5, loss=0.1  ───→ gradient≈0 (converged!)
 ```
 
@@ -328,6 +332,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 ```
 
 **How it's better:**
+
 - Keeps moving average of past gradients (momentum)
 - Adapts learning rate per parameter
 - Usually converges faster than SGD
@@ -342,7 +347,7 @@ Adam with better weight decay (regularization).
 
 ```python
 optimizer = torch.optim.AdamW(
-    model.parameters(), 
+    model.parameters(),
     lr=1e-4,
     weight_decay=0.01  # Prevents overfitting
 )
@@ -389,16 +394,16 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 num_epochs = 10
 for epoch in range(num_epochs):
     for batch_inputs, batch_labels in dataloader:
-        
+
         # FORWARD PASS
         outputs = model(batch_inputs)
         loss = criterion(outputs, batch_labels)
-        
+
         # BACKWARD PASS
         optimizer.zero_grad()  # Clear old gradients
         loss.backward()        # Compute new gradients
         optimizer.step()       # Update weights
-        
+
     print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
 ```
 
@@ -427,12 +432,12 @@ Option 3: Process in batches ✅
 
 ### Terminology
 
-| Term | Definition | Example |
-|------|------------|---------|
-| **Sample** | One training example | One image |
-| **Batch** | Group of samples processed together | 32 images |
-| **Iteration** | Processing one batch | 1 forward + backward pass |
-| **Epoch** | One pass through entire dataset | 31 iterations (if 1000 samples, batch=32) |
+| Term          | Definition                          | Example                                   |
+| ------------- | ----------------------------------- | ----------------------------------------- |
+| **Sample**    | One training example                | One image                                 |
+| **Batch**     | Group of samples processed together | 32 images                                 |
+| **Iteration** | Processing one batch                | 1 forward + backward pass                 |
+| **Epoch**     | One pass through entire dataset     | 31 iterations (if 1000 samples, batch=32) |
 
 ```
 Epoch 1:  Batch 1 → Batch 2 → ... → Batch 31
@@ -511,6 +516,7 @@ Validation Loss:╲_____╱‾‾‾ (starts increasing!)
 ```
 
 **Solutions:**
+
 - Use dropout
 - Add weight decay
 - Get more training data
@@ -531,6 +537,7 @@ Model isn't learning enough!
 ```
 
 **Solutions:**
+
 - Increase model capacity (more layers/neurons)
 - Train longer
 - Reduce regularization
@@ -551,6 +558,7 @@ Layer 1:   gradient = 0.0001  ← Too small to learn!
 ```
 
 **Solutions:**
+
 - Use ReLU/GELU (not sigmoid)
 - Use residual connections (skip connections)
 - Use proper initialization
@@ -573,6 +581,7 @@ Layer 5:  gradient = 128.0  ← NaN! (overflow)
 ```
 
 **Solutions:**
+
 - Gradient clipping
 - Lower learning rate
 - Better initialization
@@ -609,7 +618,7 @@ class ModelWithDropout(nn.Module):
         self.fc1 = nn.Linear(100, 50)
         self.dropout = nn.Dropout(0.5)  # 50% dropout
         self.fc2 = nn.Linear(50, 10)
-    
+
     def forward(self, x):
         x = self.fc1(x)
         x = self.dropout(x)  # Applied only during training
@@ -669,7 +678,7 @@ if step % checkpoint_freq == 0:
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict(),
         'step': step
-    }, f'checkpoint_step_{step}.pt')
+    }, 'model.pt')
     print(f"✓ Saved checkpoint at step {step}")
 ```
 
@@ -728,4 +737,3 @@ Or return to the [Index](00-INDEX.md) to choose a different chapter.
 ---
 
 **Chapter Progress:** Foundation ●●●○○ (3/5 complete)
-

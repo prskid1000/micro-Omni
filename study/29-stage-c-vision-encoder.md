@@ -28,19 +28,22 @@
 
 ```json
 {
-  "img_size": 224, "patch": 16,  // 14×14 = 196 patches
-  "d_model": 128, "n_layers": 4,  // Compact ViT
-  "n_heads": 2, "d_ff": 512,
-  
+  "img_size": 224,
+  "patch": 16, // 14×14 = 196 patches
+  "d_model": 128,
+  "n_layers": 4, // Compact ViT
+  "n_heads": 2,
+  "d_ff": 512,
+
   "train_manifest": "data/images/annotations.json",
   "image_root": "data/images",
-  "use_thinker_for_text": true,  // Use Thinker model (true) or simple embedding (false)
-  "thinker_ckpt": "checkpoints/thinker_tiny",  // Uses tokenizer from Stage A
-  "ctx_len": 512,  // Context length for text encoding
-  "vocab_size": 32000,  // Tokenizer vocabulary size
-  "embed_dim": 128,  // Contrastive embedding dimension
-  "temperature": 0.07,  // Contrastive loss temperature
-  
+  "use_thinker_for_text": true, // Use Thinker model (true) or simple embedding (false)
+  "thinker_ckpt": "checkpoints/thinker_tiny", // Uses tokenizer from Stage A
+  "ctx_len": 512, // Context length for text encoding
+  "vocab_size": 32000, // Tokenizer vocabulary size
+  "embed_dim": 128, // Contrastive embedding dimension
+  "temperature": 0.07, // Contrastive loss temperature
+
   "batch_size": 8,
   "max_epochs": 3,
   "learning_rate": 3e-4
@@ -48,6 +51,7 @@
 ```
 
 **Key Configuration Notes:**
+
 - **`use_thinker_for_text`**: Whether to use Thinker model for text encoding
   - **`true` (recommended)**: Uses frozen Thinker model - better contextual embeddings, aligned with Stage E
   - **`false`**: Uses simple tokenizer + embedding - lighter, faster, but less contextual
@@ -71,6 +75,7 @@ After 3 epochs → Good vision-language alignment (ready for Stage E)
 - **Target:** Low contrastive loss indicates good vision-language alignment
 
 **Expected Validation Loss:**
+
 - Target Contrastive Loss: < 0.5
 - Good: < 0.3
 - Excellent: < 0.2
@@ -81,8 +86,8 @@ After 3 epochs → Good vision-language alignment (ready for Stage E)
 
 ```
 checkpoints/vision_encoder_tiny/
-├── vision_step_1000.pt   # Periodic checkpoints (every 1000 steps)
-└── vision_step_2000.pt
+├── model.pt                 # Latest model weights (overwritten)
+└── model_metadata.json      # Training state (step, epoch, config)
 ```
 
 Used in Stage E for multimodal image understanding!

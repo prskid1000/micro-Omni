@@ -153,7 +153,7 @@ This is why μOmni uses 5 stages!
 │ Loss: CTC (alignment-free)                 │
 │ Metric: WER (Word Error Rate)              │
 │ Time: ~6-10 hours                          │
-│ Output: audio_encoder_checkpoints/model.pt │
+│ Output: audio_enc_checkpoints/model.pt     │
 └──────────────────┬──────────────────────────┘
                    ↓
                    │
@@ -167,7 +167,7 @@ This is why μOmni uses 5 stages!
 │ Loss: Contrastive (InfoNCE)                │
 │ Metric: Contrastive Loss                   │
 │ Time: ~4-8 hours                           │
-│ Output: vision_encoder_checkpoints/model.pt│
+│ Output: vision_checkpoints/model.pt        │
 └──────────────────┬──────────────────────────┘
                    ↓
                    │
@@ -196,7 +196,7 @@ This is why μOmni uses 5 stages!
 │ Loss: Cross-entropy (response generation)  │
 │ Metric: Task accuracy                      │
 │ Time: ~6-12 hours                          │
-│ Output: omni_final/model.pt                │
+│ Output: omni_sft_checkpoints/model.pt      │
 └─────────────────────────────────────────────┘
                    ↓
       μOmni is ready! 🎉
@@ -716,7 +716,7 @@ python train_text.py --config configs/thinker_tiny.json
 python train_audio_enc.py --config configs/audio_enc_tiny.json
 
 # Trains Audio Encoder for speech recognition
-# Output: checkpoints/audio_encoder_tiny/model.pt
+# Output: checkpoints/audio_enc_tiny/model.pt
 # Expected: WER < 30%
 
 # Stage C: Vision Encoder
@@ -724,7 +724,7 @@ python train_audio_enc.py --config configs/audio_enc_tiny.json
 python train_vision.py --config configs/vision_tiny.json
 
 # Trains Vision Encoder for image understanding
-# Output: checkpoints/vision_encoder_tiny/model.pt
+# Output: checkpoints/vision_tiny/model.pt
 # Expected: Accuracy > 70%
 
 # Stage D: Talker + RVQ Codec
@@ -739,12 +739,12 @@ python train_talker.py --config configs/talker_tiny.json
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 python sft_omni.py --config configs/omni_sft_tiny.json \
   --thinker checkpoints/thinker_tiny/model.pt \
-  --audio_encoder checkpoints/audio_encoder_tiny/model.pt \
-  --vision_encoder checkpoints/vision_encoder_tiny/model.pt \
+  --audio_encoder checkpoints/audio_enc_tiny/model.pt \
+  --vision_encoder checkpoints/vision_tiny/model.pt \
   --talker checkpoints/talker_tiny/model.pt
 
 # Trains all components jointly for multimodal understanding
-# Output: checkpoints/omni_final/model.pt
+# Output: checkpoints/omni_sft_tiny/model.pt
 # Expected: Successful multimodal Q&A
 
 Complete! μOmni is ready for inference! 🎉

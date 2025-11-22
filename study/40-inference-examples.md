@@ -311,13 +311,26 @@ The inference script (`infer_chat.py`) automatically handles checkpoint loading 
 
 **Example:**
 
-```bash
+````bash
 # Even if thinker.pt doesn't exist, this will work:
 python infer_chat.py --ckpt_dir checkpoints/thinker_tiny --text "Hello"
 
 # Output: Using step checkpoint: thinker_step_10000.pt (step 10000)
 #         Loaded Thinker model
-```
+
+### Using Exported Models (Safetensors)
+
+The `infer_chat.py` script also supports loading from a single merged `model.safetensors` file (created via `export.py`).
+
+- **Automatic Detection**: If `model.safetensors` (or `muomni.safetensors`) is present in the checkpoint directory, it is prioritized over individual `.pt` files.
+- **Efficiency**: Loads faster and uses less memory mapping.
+- **Usage**: Simply point `--ckpt_dir` to the folder containing the safetensors file.
+
+```bash
+python infer_chat.py --ckpt_dir exported_model/
+````
+
+````
 
 ---
 
@@ -341,7 +354,7 @@ python infer_chat.py \
     --image $(find data/images -name "*.jpg" | shuf -n 1) \
     --text "Describe this image." \
     --audio_out narration.wav
-```
+````
 
 ### Workflow 2: Audio Transcription Batch
 

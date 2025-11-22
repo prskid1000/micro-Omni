@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What Stage B trains and its purpose
 - How speech recognition (ASR) training works
 - What CTC loss is and why it's used
@@ -263,26 +264,26 @@ WER 10-20% = Good for proof-of-concept! ✓
 ```json
 {
   // MODEL ARCHITECTURE
-  "d_model": 192,           // Encoder dimension (smaller than Thinker's 256)
-  "n_layers": 4,            // Transformer encoder layers
-  "n_heads": 3,             // Attention heads (3 for 192-dim)
-  "d_ff": 768,              // Feedforward size (4x d_model)
-  "dropout": 0.1,           // Regularization
-  "downsample_time": 8,     // Temporal compression (8x)
-                            // 100 frames → 12 frames
-                            // Reduces computation!
-  
+  "d_model": 192, // Encoder dimension (smaller than Thinker's 256)
+  "n_layers": 4, // Transformer encoder layers
+  "n_heads": 3, // Attention heads (3 for 192-dim)
+  "d_ff": 768, // Feedforward size (4x d_model)
+  "dropout": 0.1, // Regularization
+  "downsample_time": 8, // Temporal compression (8x)
+  // 100 frames → 12 frames
+  // Reduces computation!
+
   // DATA
-  "data_path": "data/audio/asr.csv",  // Audio files + transcriptions
-  "batch_size": 8,          // Smaller than text (audio = memory-intensive)
-  "num_epochs": 20,         // More epochs than Stage A
-                            // ASR is harder to learn!
-  
+  "data_path": "data/audio/asr.csv", // Audio files + transcriptions
+  "batch_size": 8, // Smaller than text (audio = memory-intensive)
+  "num_epochs": 20, // More epochs than Stage A
+  // ASR is harder to learn!
+
   // OPTIMIZATION
-  "learning_rate": 1e-4,    // 0.0001 (lower than Stage A)
-                            // Audio training needs stability
-  
-  "checkpoint_freq": 5000  // Checkpoint frequency (every 1000 steps)
+  "learning_rate": 1e-4, // 0.0001 (lower than Stage A)
+  // Audio training needs stability
+
+  "checkpoint_freq": 5000 // Checkpoint frequency (every 1000 steps)
 }
 ```
 
@@ -346,22 +347,23 @@ data/audio/wav/sample3.wav,"the cat sat on the mat"
 
 ## 🎓 Output Files
 
-```
+````
 checkpoints/audio_enc_tiny/
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-├── audio_enc_step_1000.pt    # Periodic checkpoints (every 1000 steps)
-├── audio_enc_step_2000.pt
+├── model.pt                 # Latest model weights (overwritten)
+├── model_metadata.json      # Training state (step, epoch, config)
 │
 └── training_log.json        # Metrics history
 
 Load for Stage E:
 ```python
 # Load the latest checkpoint
-checkpoint = torch.load('checkpoints/audio_enc_tiny/audio_enc_step_2000.pt')
+checkpoint = torch.load('checkpoints/audio_enc_tiny/model.pt')
 audio_encoder.load_state_dict(checkpoint['enc'])
-```
-```
+````
+
+````
 
 ---
 
@@ -375,25 +377,29 @@ audio_encoder.load_state_dict(checkpoint['enc'])
   "max_mel_length_percentile": 95.0  // Optional: Percentile for auto-calculation (default: 95.0)
   // max_mel_length is auto-calculated from dataset - no need to set manually
 }
-```
+````
 
 **Auto-Calculation:**
+
 - `max_mel_length` is **automatically calculated** from your dataset during training
 - Uses **95th percentile** by default to minimize padding while covering 95% of data
 - Automatically rounds up to nearest 256 for better memory alignment
 - ~5% of data will be truncated if longer (acceptable for outliers)
 
 **Frame Rate Reference:**
+
 - Frame rate = sample_rate / hop_length = 16000 / 160 = 100 frames/second
 - For 60 seconds: 60 × 100 = 6000 frames
 - For 20 seconds: 20 × 100 = 2000 frames
 
 **Why Fixed Length?**
+
 - CUDA graphs require uniform batch shapes
 - Prevents "tensor size mismatch" errors
 - Enables 10-20% speedup with compilation
 
 **Check Your Dataset:**
+
 ```bash
 # Analyze actual mel lengths
 python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
@@ -421,13 +427,13 @@ Starting ASR training with CTC loss...
 Epoch 1/20:
 [Step 100/2500] ctc_loss=45.23 wer=78.5% | 3.5s/step
 [Step 1000/2500] ctc_loss=18.67 wer=45.2% | 3.2s/step
-✓ Saved checkpoint: audio_enc_step_1000.pt
+✓ Saved checkpoint: model.pt + metadata
 
 ...
 
 Epoch 20/20:
 [Step 2500/2500] ctc_loss=8.45 wer=12.3% | 3.0s/step
-✓ Saved checkpoint: audio_enc_step_2000.pt
+✓ Saved checkpoint: model.pt + metadata
 
 Training complete! Time: 8h 15m
 Final WER: 12.3%

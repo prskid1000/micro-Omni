@@ -117,7 +117,7 @@ Options: 0, 1, 2, ..., 127 (from codebook)
 → Softmax over 128 codes → Pick most likely code
 → SAME AS TEXT! We can use the same techniques!
 
-Benefit: 
+Benefit:
 ✅ Speech generation becomes like text generation!
 ✅ Can use transformers, autoregressive modeling
 ✅ Can use teacher forcing, cross-entropy loss
@@ -181,17 +181,17 @@ Input vector (what we actually want):
 
 Find nearest (which pre-defined code is closest?):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-dist_0 = ||input - code_0|| 
+dist_0 = ||input - code_0||
        = √[(0.12-0.1)² + (0.18-0.2)² + (0.32-0.3)²]
        = √[0.0004 + 0.0004 + 0.0004]
        = 0.03  ← Very close!
 
-dist_1 = ||input - code_1|| 
+dist_1 = ||input - code_1||
        = √[(0.12-0.5)² + (0.18-(-0.3))² + (0.32-0.8)²]
        = √[0.1444 + 0.2304 + 0.2304]
        = 1.42  ← Far!
 
-dist_2 = ||input - code_2|| 
+dist_2 = ||input - code_2||
        = √[(0.12-(-0.2))² + (0.18-0.7)² + (0.32-0.1)²]
        = √[0.1024 + 0.2704 + 0.0484]
        = 0.76  ← Medium distance
@@ -430,17 +430,17 @@ class RVQ(nn.Module):
         super().__init__()
         self.num_codebooks = num_codebooks
         self.codebook_size = codebook_size
-        
+
         # Input/output projections
         self.proj_in = nn.Linear(128, d)   # Mel bins → codebook dim
         self.proj_out = nn.Linear(d, 128)  # Codebook dim → Mel bins
-        
+
         # Codebooks (learnable embeddings)
         self.codebooks = nn.ModuleList([
             nn.Embedding(codebook_size, d)
             for _ in range(num_codebooks)
         ])
-    
+
     def encode(self, x):
         """
         x: (B, 128) mel frame
@@ -449,32 +449,32 @@ class RVQ(nn.Module):
         x = self.proj_in(x)  # (B, d)
         codes = []
         residual = x
-        
+
         for codebook in self.codebooks:
             # Find nearest code
             distances = torch.cdist(residual, codebook.weight)  # (B, codebook_size)
             indices = torch.argmin(distances, dim=-1)  # (B,)
             codes.append(indices)
-            
+
             # Compute residual
             quantized = codebook(indices)
             residual = residual - quantized
-        
+
         return torch.stack(codes, dim=-1)  # (B, num_codebooks)
-    
+
     def decode(self, codes):
         """
         codes: (B, num_codebooks) discrete codes
         Returns: (B, 128) reconstructed mel frame
         """
         B = codes.shape[0]
-        quantized = torch.zeros(B, self.codebooks[0].weight.shape[1], 
+        quantized = torch.zeros(B, self.codebooks[0].weight.shape[1],
                                device=codes.device)
-        
+
         # Sum quantized vectors from all codebooks
         for i, codebook in enumerate(self.codebooks):
             quantized += codebook(codes[:, i])
-        
+
         # Project back to mel
         return self.proj_out(quantized)  # (B, 128)
 ```
@@ -526,12 +526,12 @@ Audio waveform: (T_samples,)
 
 ### Trade-offs
 
-| Codebooks | Codes/book | Total Combinations | Quality | Memory |
-|-----------|------------|-------------------|---------|--------|
-| **1** | 128 | 128 | Low | 8KB |
-| **2** | 128 | 16,384 | Good | 16KB | ← **μOmni**
-| **3** | 128 | 2,097,152 | High | 24KB |
-| **4** | 256 | 4,294,967,296 | Very High | 64KB |
+| Codebooks | Codes/book | Total Combinations | Quality   | Memory |
+| --------- | ---------- | ------------------ | --------- | ------ | ----------- |
+| **1**     | 128        | 128                | Low       | 8KB    |
+| **2**     | 128        | 16,384             | Good      | 16KB   | ← **μOmni** |
+| **3**     | 128        | 2,097,152          | High      | 24KB   |
+| **4**     | 256        | 4,294,967,296      | Very High | 64KB   |
 
 ```
 μOmni uses 2 codebooks of 128 codes:
@@ -551,13 +551,13 @@ Audio waveform: (T_samples,)
 for mel_frames in dataloader:
     # Encode to discrete codes
     codes = rvq.encode(mel_frames)      # (B, T, 2)
-    
+
     # Decode back to mel
     reconstructed = rvq.decode(codes)   # (B, T, 128)
-    
+
     # Reconstruction loss
     loss = F.mse_loss(reconstructed, mel_frames)
-    
+
     # Backpropagation updates:
     # - proj_in weights
     # - codebook embeddings
@@ -594,6 +594,7 @@ gradient ───→ quantized ←─── gradient
 **μOmni supports two vocoders:**
 
 1. **HiFi-GAN (Neural Vocoder)** - Recommended for production
+
    - ✅ High quality, natural speech
    - ✅ Better prosody
    - ⚠️ Requires training (~2-4 hours)
@@ -631,6 +632,7 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 ```
 
 **Training Details:**
+
 - Uses adversarial training (Generator vs Discriminators)
 - Multi-Period Discriminator (MPD) + Multi-Scale Discriminator (MSD)
 - Optimized for 12GB VRAM (batch_size=2, gradient accumulation=4)
@@ -669,7 +671,7 @@ mel = torch.stack(mel_frames, dim=0)  # (T, 128)
 # 3. Vocoder: Mel to audio
 # Automatically uses HiFi-GAN if available, falls back to Griffin-Lim
 from omni.codec import NeuralVocoder
-vocoder = NeuralVocoder(checkpoint_path="checkpoints/vocoder_tiny/hifigan.pt")
+vocoder = NeuralVocoder(checkpoint_path="checkpoints/vocoder_tiny/model.pt")
 audio = vocoder.mel_to_audio(mel.numpy())
 
 # 4. Save
@@ -715,4 +717,3 @@ sf.write("output.wav", audio, 16000)
 
 **Chapter Progress:** Core Concepts ●●●●●●● (7/7 complete)  
 **Next Section:** Advanced Architecture →
-

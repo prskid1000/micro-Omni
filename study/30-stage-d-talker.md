@@ -39,13 +39,14 @@ Reconstructed: Mel frame (128,)
 Loss: MSE(reconstructed, original)
 ```
 
-### Part 2: Talker  
+### Part 2: Talker
 
 **Task:** Predict next speech codes given previous codes  
 **Loss:** Cross-entropy (both base and residual heads) with padding mask  
 **Target:** Perplexity <15, intelligible speech
 
 **Padding Handling:**
+
 - Loss calculation masks out padding frames using `mel_lengths`
 - Only valid mel frames contribute to loss
 - Prevents padding from diluting the loss signal
@@ -61,11 +62,11 @@ Predict: [67, 103] (next frame)
 {
   "d_model": 192, "n_layers": 4, "n_heads": 3,
   "codebooks": 2, "codebook_size": 128,
-  
+
   "data_path": "data/audio/tts/",
   "batch_size": 16, "num_epochs": 25,
   "learning_rate": 3e-4,
-  
+
   "use_compile": true,
   "max_mel_length_percentile": 95.0  // Optional: Percentile for auto-calculation (default: 95.0)
   // max_mel_length is auto-calculated from dataset - no need to set manually
@@ -76,12 +77,14 @@ Predict: [67, 103] (next frame)
 **Key Parameters for CUDA Graphs Compatibility:**
 
 **Auto-Calculation:**
+
 - `max_mel_length` is **automatically calculated** from your dataset during training
 - Uses **95th percentile** by default to minimize padding while covering 95% of data
 - Automatically rounds up to nearest 256 for better memory alignment
 - ~5% of data will be truncated if longer (acceptable for outliers)
 
 **Frame Rate Reference:**
+
 - Frame rate = sample_rate / hop_length = 16000 / (16000 × 0.08) = 12.5 frames/second
 - For 60 seconds: 60 × 12.5 = 750 frames
 - For 20 seconds: 20 × 12.5 = 250 frames
@@ -89,6 +92,7 @@ Predict: [67, 103] (next frame)
 **Note:** Talker uses different frame rate than audio encoder due to `frame_ms=80` parameter.
 
 **Why Fixed Length?**
+
 - CUDA graphs require uniform batch shapes
 - Prevents "tensor size mismatch" errors
 - Enables 10-20% speedup with compilation
@@ -121,8 +125,8 @@ Epoch 25: loss=2.1, ppl=8 (good generation!)
 
 ```
 checkpoints/talker_tiny/
-├── talker_step_1000.pt   # Periodic checkpoints (every 1000 steps)
-└── talker_step_2000.pt
+├── model.pt                 # Latest model weights (overwritten)
+└── model_metadata.json      # Training state (step, epoch, config)
 ```
 
 Enables text-to-speech in final system!
@@ -139,15 +143,17 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 
 # Time: 2-4 hours (on 12GB GPU)
 # Target: Natural-sounding speech
-# Output: checkpoints/vocoder_tiny/hifigan.pt
+# Output: checkpoints/vocoder_tiny/model.pt
 ```
 
 **Benefits:**
+
 - ✅ More natural speech than Griffin-Lim
 - ✅ Better prosody and quality
 - ✅ Automatic fallback to Griffin-Lim if unavailable
 
 **Memory Optimized:**
+
 - Batch size: 2 (with gradient accumulation: effective batch size 8)
 - Audio length limit: 8192 samples (~0.5s)
 - Mixed precision (FP16) enabled

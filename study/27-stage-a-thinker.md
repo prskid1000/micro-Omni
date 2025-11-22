@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What Stage A trains and why it's the foundation
 - How language modeling (next-token prediction) works
 - The training process, loss functions, and metrics
@@ -171,30 +172,30 @@ Each prediction teaches language patterns! ✓
 for epoch in range(num_epochs):
     for batch in dataloader:
         # Batch: ["The cat sat...", "Hello world...", ...]
-        
+
         # 1. Tokenize texts
         input_ids, target_ids = tokenize_and_shift(batch)
         # input_ids: (B, T-1) - all but last token
         # target_ids: (B, T-1) - all but first token
-        
+
         # 2. Forward pass
         logits = thinker(input_ids)  # (B, T-1, vocab_size)
-        
+
         # 3. Compute loss
         loss = cross_entropy(logits.view(-1, vocab_size),
                             target_ids.view(-1))
-        
+
         # 4. Backward pass
         loss.backward()  # Compute gradients
-        
+
         # 5. Gradient clipping (prevent explosions)
         torch.nn.utils.clip_grad_norm_(thinker.parameters(),
                                       max_grad_norm=1.0)
-        
+
         # 6. Update weights
         optimizer.step()
         optimizer.zero_grad()
-        
+
         # 7. Log progress
         perplexity = torch.exp(loss)
         print(f"Loss: {loss:.3f}, PPL: {perplexity:.1f}")
@@ -252,55 +253,55 @@ Model has learned language! ✓
 ```json
 {
   // MODEL ARCHITECTURE
-  "vocab_size": 32000,      // How many unique words/tokens
-                             // Smaller = faster, but less coverage
-                             // 32000 = good balance (matches thinker_tiny.json)
-  
-  "n_layers": 4,             // Transformer depth
-                             // More layers = more complex patterns
-                             // 4 = tiny model (GPT-3 has 96!)
-  
-  "d_model": 256,            // Embedding dimension
-                             // Bigger = more expressive
-                             // 256 = efficient for small model
-  
-  "n_heads": 4,              // Attention heads
-                             // More heads = different perspectives
-                             // 4 = good for 256-dim model
-  
-  "d_ff": 1024,              // FFN hidden size (4x d_model)
-                             // Standard ratio
-  
-  "dropout": 0.1,            // Prevent overfitting
-                             // 10% neurons randomly dropped
-  
-  "rope_theta": 10000,       // RoPE frequency base
-                             // Higher = slower position decay
-  
-  "ctx_len": 512,            // Max context length (tokens)
-                             // How much text model can see
-  
+  "vocab_size": 32000, // How many unique words/tokens
+  // Smaller = faster, but less coverage
+  // 32000 = good balance (matches thinker_tiny.json)
+
+  "n_layers": 4, // Transformer depth
+  // More layers = more complex patterns
+  // 4 = tiny model (GPT-3 has 96!)
+
+  "d_model": 256, // Embedding dimension
+  // Bigger = more expressive
+  // 256 = efficient for small model
+
+  "n_heads": 4, // Attention heads
+  // More heads = different perspectives
+  // 4 = good for 256-dim model
+
+  "d_ff": 1024, // FFN hidden size (4x d_model)
+  // Standard ratio
+
+  "dropout": 0.1, // Prevent overfitting
+  // 10% neurons randomly dropped
+
+  "rope_theta": 10000, // RoPE frequency base
+  // Higher = slower position decay
+
+  "ctx_len": 512, // Max context length (tokens)
+  // How much text model can see
+
   // TRAINING DATA
-  "data_path": "data/text/corpus.txt",  // Text file with training data
-  
-  "batch_size": 16,          // Examples per batch
-                             // Larger = more stable, but more memory
-  
-  "num_epochs": 10,          // Complete passes through data
-                             // More epochs = more learning
-  
-  "learning_rate": 3e-4,     // How fast to update weights
-                             // 0.0003 = standard for Adam
-  
-  "warmup_steps": 1000,      // Gradually increase LR
-                             // Prevents early instability
-  
-  "max_grad_norm": 1.0,      // Gradient clipping
-                             // Prevents exploding gradients
-  
+  "data_path": "data/text/corpus.txt", // Text file with training data
+
+  "batch_size": 16, // Examples per batch
+  // Larger = more stable, but more memory
+
+  "num_epochs": 10, // Complete passes through data
+  // More epochs = more learning
+
+  "learning_rate": 3e-4, // How fast to update weights
+  // 0.0003 = standard for Adam
+
+  "warmup_steps": 1000, // Gradually increase LR
+  // Prevents early instability
+
+  "max_grad_norm": 1.0, // Gradient clipping
+  // Prevents exploding gradients
+
   // CHECKPOINTING
-  "save_every": 1000,        // Save checkpoint every N steps
-  "eval_every": 500          // Evaluate every N steps
+  "save_every": 1000, // Save checkpoint every N steps
+  "eval_every": 500 // Evaluate every N steps
 }
 ```
 
@@ -447,13 +448,12 @@ READY FOR STAGE E! ✓
 
 ### What Gets Saved
 
-```
+````
 checkpoints/thinker_tiny/
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-├── thinker_step_1000.pt     # Periodic checkpoints (every 1000 steps)
-├── thinker_step_2000.pt     # (Resume if crash!)
-├── thinker_step_3000.pt
+├── model.pt                 # Latest model weights (overwritten)
+├── model_metadata.json      # Training state (step, epoch, config)
 │
 ├── tokenizer.model          # Tokenizer (BPE model)
 │   Maps: "hello" → 234
@@ -465,10 +465,11 @@ checkpoints/thinker_tiny/
 Load for Stage E:
 ```python
 # Load the latest checkpoint
-checkpoint = torch.load('checkpoints/thinker_tiny/thinker_step_3000.pt')
+checkpoint = torch.load('checkpoints/thinker_tiny/model.pt')
 thinker.load_state_dict(checkpoint['model'])
-```
-```
+````
+
+````
 
 ---
 
@@ -496,20 +497,21 @@ Epoch 1/10:
 [Step 100/5000] loss=4.234 ppl=68.9 lr=0.00030 | 2.3s/step
 [Step 1000/5000] loss=3.156 ppl=23.4 lr=0.00030 | 2.1s/step
 → Validation: loss=3.201 ppl=24.5
-✓ Saved checkpoint: thinker_step_1000.pt
+✓ Saved checkpoint: model.pt + metadata
 
 ...
 
 Epoch 10/10:
 [Step 5000/5000] loss=1.987 ppl=7.3 lr=0.00030 | 2.0s/step
 → Final validation: loss=2.012 ppl=7.5
-✓ Saved checkpoint: thinker_step_5000.pt
+✓ Saved checkpoint: model.pt + metadata
+
 
 Training complete! Time: 10h 24m
 Final validation PPL: 7.5
 
 Ready for Stage E! 🎉
-```
+````
 
 ---
 

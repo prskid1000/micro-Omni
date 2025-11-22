@@ -136,6 +136,9 @@ class GriffinLimVocoder:
     """Classical vocoder (no training)"""
 ```
 
+**Important Note on Defaults:**
+The classes in `omni/` have default arguments (e.g., `d=512` for ThinkerLM) that may differ from the "Tiny" configurations used in this study guide (e.g., `d=256`). Always rely on the JSON configuration files in `configs/` as the source of truth for model sizes. The code defaults are often larger baselines.
+
 ---
 
 ### Training Scripts
