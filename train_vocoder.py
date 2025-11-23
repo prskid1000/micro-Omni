@@ -150,6 +150,8 @@ def main(cfg):
         max_mel_length = metadata.get("max_mel_length", metadata_cfg.get("max_mel_length"))
     if max_audio_length is not None:
         print(f"✓ Loaded max_audio_length from checkpoint: {max_audio_length}")
+        if "max_audio_length" in cfg and cfg["max_audio_length"] != max_audio_length:
+            print(f"⚠ WARNING: Config max_audio_length ({cfg['max_audio_length']}) differs from checkpoint ({max_audio_length}). Using checkpoint value.")
     elif "max_audio_length" in cfg:
         max_audio_length = cfg["max_audio_length"]
         print(f"✓ Using max_audio_length from config: {max_audio_length}")
@@ -192,14 +194,14 @@ def main(cfg):
     cfg["max_audio_length"] = max_audio_length
     cfg["max_mel_length"] = max_mel_length
 
-    # Persist derived config early so crashes during compile or initialization still capture limits
-    preflight_metadata = {
-        "step": metadata.get("step", 0) if metadata else 0,
-        "epoch": metadata.get("epoch", 0) if metadata else 0,
-        "max_audio_length": max_audio_length,
-        "max_mel_length": max_mel_length,
-    }
-    save_training_metadata(save_dir, model_name, preflight_metadata)
+    # # Persist derived config early so crashes during compile or initialization still capture limits
+    # preflight_metadata = {
+    #     "step": metadata.get("step", 0) if metadata else 0,
+    #     "epoch": metadata.get("epoch", 0) if metadata else 0,
+    #     "max_audio_length": max_audio_length,
+    #     "max_mel_length": max_mel_length,
+    # }
+    # save_training_metadata(save_dir, model_name, preflight_metadata)
     
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
@@ -234,11 +236,12 @@ def main(cfg):
         
         # Use channels_last memory format for better performance on modern GPUs
         # Provides 10-30% speedup for convolutional networks
-        try:
-            generator = generator.to(memory_format=torch.channels_last)
-            print("✓ Generator using channels_last memory format")
-        except:
-            print("⚠ channels_last not supported for generator")
+        # Note: HiFiGAN uses 1D convolutions, so channels_last (NHWC) might not apply or be beneficial compared to contiguous
+        # try:
+        #     generator = generator.to(memory_format=torch.channels_last)
+        #     print("✓ Generator using channels_last memory format")
+        # except:
+        #     print("⚠ channels_last not supported for generator")
         
         # Note: Discriminators use 1D convolutions, channels_last is for 2D/3D only
         print("✓ cuDNN benchmark mode enabled for faster convolutions")
@@ -409,9 +412,8 @@ def main(cfg):
         if not drop_last and train_size % batch_size != 0:
             steps_per_epoch += 1
     else:
-        # Fallback: use a large number if size is unknown (for progress bar)
-        # The actual training will work fine, just progress bar won't be accurate
-        steps_per_epoch = 1000000  # Large placeholder
+        # Fallback: use None if size is unknown (for progress bar)
+        steps_per_epoch = None
     initial_step = step
     start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
     if step > 0:
@@ -463,8 +465,9 @@ def main(cfg):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
-                current_batch_step = epoch * steps_per_epoch + batch_idx
-                if current_batch_step < initial_step:
+                # Calculate current step based on accumulation
+                current_step = start_epoch * (steps_per_epoch // accumulation_steps if steps_per_epoch else 0) + (batch_idx // accumulation_steps)
+                if current_step < initial_step:
                     continue
             
             # Update progress bar description
@@ -486,11 +489,12 @@ def main(cfg):
             target_audio_length = max_audio_length
             
             # Convert to channels_last for better performance (if enabled)
-            if device == "cuda" and hasattr(generator, 'memory_format'):
-                try:
-                    mel_input = mel_input.to(memory_format=torch.channels_last)
-                except:
-                    pass  # Silently fail if not supported
+            # Mel input is (B, n_mels, T), which is 3D. channels_last is for 4D (NCHW).
+            # if device == "cuda" and hasattr(generator, 'memory_format'):
+            #     try:
+            #         mel_input = mel_input.to(memory_format=torch.channels_last)
+            #     except:
+            #         pass  # Silently fail if not supported
             
             # Mark step begin for CUDAGraphs optimization (when using torch.compile)
             if use_compile and device == "cuda":
@@ -500,7 +504,15 @@ def main(cfg):
             audio_real = audio_real[:, :target_audio_length]
             audio_real_d = audio_real.unsqueeze(1)
 
-            run_discriminator = (discriminator_update_interval <= 1) or (step % discriminator_update_interval == 0)
+            take_optimizer_step = ((batch_idx + 1) % accumulation_steps == 0)
+            
+            # Discriminator update logic should use current step, not projected step
+            run_discriminator = (
+                discriminator_update_interval <= 1 or
+                ((step + 1) % discriminator_update_interval == 0 and take_optimizer_step)
+            )
+            if step == 0:
+                run_discriminator = True
             loss_d = torch.zeros(1, device=device)
             cached_mpd_real_feats = None
             cached_msd_real_feats = None
@@ -536,7 +548,7 @@ def main(cfg):
                         loss_d = loss_mpd + loss_msd
                     
                     scaler_d.scale(loss_d / accumulation_steps).backward()
-                    if (batch_idx + 1) % accumulation_steps == 0:
+                    if take_optimizer_step:
                         scaler_d.unscale_(opt_d)
                         max_grad_norm = cfg.get("max_grad_norm", 1.0)
                         
@@ -588,7 +600,7 @@ def main(cfg):
                     loss_d = loss_mpd + loss_msd
                     (loss_d / accumulation_steps).backward()
                     
-                    if (batch_idx + 1) % accumulation_steps == 0:
+                    if take_optimizer_step:
                         max_grad_norm = cfg.get("max_grad_norm", 1.0)
                         
                         try:
@@ -673,13 +685,11 @@ def main(cfg):
                     for real_feat_list, fake_feat_list in zip(cached_mpd_real_feats, mpd_fake_feats):
                         for r, f in zip(real_feat_list, fake_feat_list):
                             # Match feature lengths in case audio was trimmed
-                            min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
-                            if r.dim() == 3:  # Conv features: (B, C, T)
+                            if r.dim() >= 3:  # Conv features with time dimension
+                                min_feat_len = min(r.shape[-1], f.shape[-1])
                                 r = r[..., :min_feat_len]
                                 f = f[..., :min_feat_len]
-                            else:  # Other features
-                                r = r[:min_feat_len]
-                                f = f[:min_feat_len]
+                            # else: no slicing needed for matching batch dimensions
                             loss_fm_mpd += torch.mean(torch.abs(r - f))
                             count_fm += 1
                     loss_fm_mpd = loss_fm_mpd / max(count_fm, 1)
@@ -690,13 +700,11 @@ def main(cfg):
                     for real_feat_list, fake_feat_list in zip(cached_msd_real_feats, msd_fake_feats):
                         for r, f in zip(real_feat_list, fake_feat_list):
                             # Match feature lengths in case audio was trimmed
-                            min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
-                            if r.dim() == 3:  # Conv features: (B, C, T)
+                            if r.dim() >= 3:  # Conv features with time dimension
+                                min_feat_len = min(r.shape[-1], f.shape[-1])
                                 r = r[..., :min_feat_len]
                                 f = f[..., :min_feat_len]
-                            else:  # Other features
-                                r = r[:min_feat_len]
-                                f = f[:min_feat_len]
+                            # else: no slicing needed for matching batch dimensions
                             loss_fm_msd += torch.mean(torch.abs(r - f))
                             count_fm += 1
                     loss_fm_msd = loss_fm_msd / max(count_fm, 1)
@@ -712,7 +720,7 @@ def main(cfg):
                     )
                 
                 scaler_g.scale(loss_g / accumulation_steps).backward()
-                if (batch_idx + 1) % accumulation_steps == 0:
+                if take_optimizer_step:
                     scaler_g.unscale_(opt_g)
                     max_grad_norm = cfg.get("max_grad_norm", 1.0)
                     
@@ -734,12 +742,11 @@ def main(cfg):
                         opt_g.zero_grad()
                         scaler_g.update()
                         continue
-                    
                     scaler_g.step(opt_g)
                     scaler_g.update()
                     scheduler_g.step()
                     opt_g.zero_grad()
-                    step += 1
+                    step += 1  # Increment immediately after optimizer step
             else:
                 # Adversarial losses
                 mpd_fake_out_list, mpd_fake_feats = mpd(audio_fake_d)
@@ -763,13 +770,11 @@ def main(cfg):
                 for real_feat_list, fake_feat_list in zip(cached_mpd_real_feats, mpd_fake_feats):
                     for r, f in zip(real_feat_list, fake_feat_list):
                         # Match feature lengths in case audio was trimmed
-                        min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
-                        if r.dim() == 3:  # Conv features: (B, C, T)
+                        if r.dim() >= 3:  # Conv features with time dimension
+                            min_feat_len = min(r.shape[-1], f.shape[-1])
                             r = r[..., :min_feat_len]
                             f = f[..., :min_feat_len]
-                        else:  # Other features
-                            r = r[:min_feat_len]
-                            f = f[:min_feat_len]
+                        # else: no slicing needed for matching batch dimensions
                         loss_fm_mpd += torch.mean(torch.abs(r - f))
                         count_fm += 1
                 loss_fm_mpd = loss_fm_mpd / max(count_fm, 1)
@@ -780,13 +785,11 @@ def main(cfg):
                 for real_feat_list, fake_feat_list in zip(cached_msd_real_feats, msd_fake_feats):
                     for r, f in zip(real_feat_list, fake_feat_list):
                         # Match feature lengths in case audio was trimmed
-                        min_feat_len = min(r.shape[-1], f.shape[-1]) if r.dim() == 3 else min(r.shape[0], f.shape[0])
-                        if r.dim() == 3:  # Conv features: (B, C, T)
+                        if r.dim() >= 3:  # Conv features with time dimension
+                            min_feat_len = min(r.shape[-1], f.shape[-1])
                             r = r[..., :min_feat_len]
                             f = f[..., :min_feat_len]
-                        else:  # Other features
-                            r = r[:min_feat_len]
-                            f = f[:min_feat_len]
+                        # else: no slicing needed for matching batch dimensions
                         loss_fm_msd += torch.mean(torch.abs(r - f))
                         count_fm += 1
                 loss_fm_msd = loss_fm_msd / max(count_fm, 1)
@@ -802,7 +805,7 @@ def main(cfg):
                 )
                 
                 (loss_g / accumulation_steps).backward()
-                if (batch_idx + 1) % accumulation_steps == 0:
+                if take_optimizer_step:
                     max_grad_norm = cfg.get("max_grad_norm", 1.0)
                     
                     # Gradient clipping first, then check if still too high
@@ -853,10 +856,9 @@ def main(cfg):
                     val_loss_d = 0.0
                     val_samples = 0
                     
+                    from itertools import islice
                     with torch.no_grad():
-                        for val_mel, val_audio, val_mel_lengths, val_audio_lengths in val_dl:
-                            if val_samples >= 100:  # Limit validation samples
-                                break
+                        for val_mel, val_audio, val_mel_lengths, val_audio_lengths in islice(val_dl, 100):
                             
                             val_mel = val_mel.to(device)
                             val_audio = val_audio.to(device)

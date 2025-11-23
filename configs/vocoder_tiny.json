@@ -8,7 +8,7 @@
   "batch_size": 1,
   "num_workers": 0,
   "drop_last": true,
-  "max_audio_length_percentile": 75.0,
+  "max_audio_length_percentile": 90.0,
   "lr_g": 0.0002,
   "lr_d": 0.0002,
   "wd": 1e-06,
