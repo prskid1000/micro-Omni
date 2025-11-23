@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What the Audio Encoder does and why we need it
 - How mel spectrograms are processed into embeddings
 - The 8x downsampling strategy and why it matters
@@ -175,17 +176,16 @@ READY FOR THINKER! 🎉
                  ↓
 ┌─────────────────────────────────────────┐
 │  CONVOLUTIONAL DOWNSAMPLING             │
+│  (Implemented as ConvDown + Extra Conv) │
 │  ┌────────────────────────────────────┐ │
-│  │ Conv Layer 1: stride=2             │ │
-│  │ 300 frames → 150 frames            │ │
+│  │ ConvDown Block (4x reduction)      │ │
+│  │ - Conv2d (stride 2) + GELU         │ │
+│  │ - Conv2d (stride 2) + GELU         │ │
 │  └────────────────────────────────────┘ │
 │  ┌────────────────────────────────────┐ │
-│  │ Conv Layer 2: stride=2             │ │
-│  │ 150 frames → 75 frames             │ │
-│  └────────────────────────────────────┘ │
-│  ┌────────────────────────────────────┐ │
-│  │ Conv Layer 3: stride=2             │ │
-│  │ 75 frames → 37 frames              │ │
+│  │ Extra Conv Layer (2x reduction)    │ │
+│  │ - Conv2d (stride 2) + GELU         │ │
+│  │ (Used when downsample_factor=8)    │ │
 │  └────────────────────────────────────┘ │
 │  Output: (1, 192, 37)                   │
 │  8x temporal reduction! ✓               │
@@ -199,6 +199,7 @@ READY FOR THINKER! 🎉
                  ↓
 ┌─────────────────────────────────────────┐
 │  TRANSFORMER ENCODER                    │
+│  (Supports Flash Attention for speed)   │
 │  ┌────────────────────────────────────┐ │
 │  │ Block 1: Attention + FFN + Norm   │ │
 │  └────────────────────────────────────┘ │
@@ -220,7 +221,7 @@ READY FOR THINKER! 🎉
 └────────────────┬────────────────────────┘
                  ↓
 ┌─────────────────────────────────────────┐
-│  AUDIO PROJECTOR                        │
+│  AUDIO PROJECTOR (External)             │
 │  Linear: 192 dim → 256 dim             │
 │  Align with Thinker's dimension!       │
 └────────────────┬────────────────────────┘
@@ -357,11 +358,11 @@ Total: ~2.05M parameters
 
 ### Comparison Table
 
-| Component | Input | Output | Purpose |
-|-----------|-------|--------|---------|
-| **Conv Downsample** | (T, 128) | (T/8, 192) | Temporal compression |
-| **Transformer** | (T/8, 192) | (T/8, 192) | Semantic understanding |
-| **Projector** | (T/8, 192) | (T/8, 256) | Dimension alignment |
+| Component           | Input      | Output     | Purpose                |
+| ------------------- | ---------- | ---------- | ---------------------- |
+| **Conv Downsample** | (T, 128)   | (T/8, 192) | Temporal compression   |
+| **Transformer**     | (T/8, 192) | (T/8, 192) | Semantic understanding |
+| **Projector**       | (T/8, 192) | (T/8, 256) | Dimension alignment    |
 
 ---
 
@@ -435,27 +436,28 @@ CTC handles variable-length alignment automatically!
 ```python
 for batch in dataloader:
     audio, text = batch
-    
+
     # 1. Extract mel spectrogram
     mel = audio_to_mel(audio)  # (B, T, 128)
     # Note: All mel spectrograms are padded to max_mel_length
     # for CUDA graphs compatibility (when use_compile: true)
-    
+
     # 2. Encode with audio encoder
     embeddings = audio_encoder(mel)  # (B, T/8, 192)
-    
+
     # 3. Project to CTC prediction head
     logits = ctc_head(embeddings)  # (B, T/8, vocab_size)
-    
+
     # 4. Compute CTC loss
     loss = ctc_loss(logits, text)
-    
+
     # 5. Backprop and update
     loss.backward()
     optimizer.step()
 ```
 
 **CUDA Graphs Compatibility:**
+
 - When using `use_compile: true`, all batches must have uniform shapes
 - `max_mel_length` is auto-calculated from dataset (95th percentile, typically ~2048 frames = ~20 seconds)
 - All mel spectrograms are padded/truncated to this fixed length
@@ -474,28 +476,28 @@ COMPLETE PIPELINE:
 
 1. User says: "Show me a cat"
    Raw audio: 48,000 samples (3 seconds at 16kHz)
-   
+
 2. Convert to mel:
    Mel spectrogram: (300, 128) at 100 Hz
-   
+
 3. Audio Encoder processes:
    → Downsample 8x: 300 → 37 frames
    → Understand semantics via transformer
    → Project to 256-dim: (37, 256)
-   
+
 4. Tokenize text prompt:
    "show me a cat" → [15, 234, 42, 89, 234]
    → Embed: (5, 256)
-   
+
 5. Concatenate:
    Combined input: (42, 256)
    = [37 audio tokens, 5 text tokens]
-   
+
 6. Thinker processes:
    → Cross-modal attention
    → Audio tokens interact with text tokens
    → Understands: User wants to see a cat image
-   
+
 7. Generate response:
    "Here is an image of a cat..."
 
@@ -545,14 +547,14 @@ Audio encoder enabled multimodal understanding! ✓
 
 ## 📊 Specifications
 
-| Parameter | Value |
-|-----------|-------|
-| **Input** | Mel spectrogram (T, 128) |
-| **Downsample** | 8x (100Hz → 12.5Hz) |
-| **Dimension** | 192 |
-| **Layers** | 4 |
-| **Heads** | 3 |
-| **Parameters** | ~2.05M |
+| Parameter          | Value                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| **Input**          | Mel spectrogram (T, 128)                                                                     |
+| **Downsample**     | 8x (100Hz → 12.5Hz)                                                                          |
+| **Dimension**      | 192                                                                                          |
+| **Layers**         | 4                                                                                            |
+| **Heads**          | 3                                                                                            |
+| **Parameters**     | ~2.05M                                                                                       |
 | **max_mel_length** | Auto-calculated from dataset (95th percentile, ~20s typical) - for CUDA graphs compatibility |
 
 ## 🎓 Training
@@ -571,4 +573,3 @@ Audio encoder enabled multimodal understanding! ✓
 ---
 
 [Back to Index](00-INDEX.md)
-

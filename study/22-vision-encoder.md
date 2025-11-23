@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What the Vision Encoder does and why we need it
 - How Vision Transformers (ViT) work
 - Patch-based image processing
@@ -265,6 +266,7 @@ One embedding captures the entire image!
                  ↓
 ┌─────────────────────────────────────────┐
 │  TRANSFORMER ENCODER                    │
+│  (Supports Flash Attention for speed)   │
 │  ┌────────────────────────────────────┐ │
 │  │ Block 1: Attention + FFN + Norm   │ │
 │  │  CLS gathers info from patches    │ │
@@ -515,13 +517,13 @@ Total: ~914K parameters
 
 ### Comparison Table
 
-| Component | Input | Output | Purpose |
-|-----------|-------|--------|---------|
-| **Patch Embed** | (3, 224, 224) | (196, 128) | Visual tokenization |
-| **Add CLS + Pos** | (196, 128) | (197, 128) | Aggregation + position |
-| **Transformer** | (197, 128) | (197, 128) | Visual understanding |
-| **Extract CLS** | (197, 128) | (1, 128) | Global representation |
-| **Projector** | (1, 128) | (1, 256) | Dimension alignment |
+| Component         | Input         | Output     | Purpose                |
+| ----------------- | ------------- | ---------- | ---------------------- |
+| **Patch Embed**   | (3, 224, 224) | (196, 128) | Visual tokenization    |
+| **Add CLS + Pos** | (196, 128)    | (197, 128) | Aggregation + position |
+| **Transformer**   | (197, 128)    | (197, 128) | Visual understanding   |
+| **Extract CLS**   | (197, 128)    | (1, 128)   | Global representation  |
+| **Projector**     | (1, 128)      | (1, 256)   | Dimension alignment    |
 
 ---
 
@@ -555,18 +557,18 @@ Uses trained tokenizer from Stage A for consistent text encoding.
 ```python
 for batch in dataloader:
     images, captions = batch  # (B, 3, 224, 224), (B,) list of strings
-    
+
     # 1. Encode images
     cls_output = vit(images)  # (B, 128) - CLS token
     img_emb = img_proj(cls_output)  # (B, embed_dim)
     img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
-    
+
     # 2. Encode captions (configurable: Thinker or simple embedding)
     text_embs = []
     for caption in captions:
         token_ids = tokenizer.encode(caption)  # Use trained tokenizer
         token_ids = [1] + token_ids[:ctx_len-1]  # Add BOS, truncate
-        
+
         if use_thinker_for_text:
             # Option 1: Use Thinker model (frozen) for contextual embeddings
             token_tensor = torch.tensor(token_ids).unsqueeze(0)  # (1, T)
@@ -577,23 +579,24 @@ for batch in dataloader:
             # Option 2: Use simple token embeddings
             token_emb = text_embed(torch.tensor(token_ids))  # (T, d_model)
             text_emb = token_emb.mean(dim=0)  # (d_model,)
-        
+
         text_embs.append(text_emb)
     text_embs = torch.stack(text_embs)  # (B, d_model or thinker_d_model)
     text_emb = text_proj(text_embs)  # (B, embed_dim)
     text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
-    
+
     # 3. Contrastive loss (InfoNCE)
     logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
     labels = torch.arange(B, device=device)  # Positive pairs on diagonal
     loss = cross_entropy(logits, labels)
-    
+
     # 4. Backprop and update
     loss.backward()
     optimizer.step()
 ```
 
 **Key Features:**
+
 - Uses **trained tokenizer** from Stage A (`thinker_ckpt/tokenizer.model`)
 - If tokenizer not found, trains new one from image captions
 - **Configurable text encoding** via `use_thinker_for_text`:
@@ -614,26 +617,26 @@ COMPLETE PIPELINE:
 
 1. User uploads cat photo
    Image: (3, 224, 224)
-   
+
 2. Vision Encoder processes:
    → Divide into 196 patches
    → Process with transformer
    → Extract CLS token
    → Project to 256-dim: (1, 256)
-   
+
 3. User types: "What animal is this?"
    Text tokens: [15, 234, 89, 42, 156]
    → Embed: (5, 256)
-   
+
 4. Concatenate:
    Combined input: (6, 256)
    = [1 image token, 5 text tokens]
-   
+
 5. Thinker processes:
    → Cross-modal attention
    → Image token interacts with text tokens
    → Understands: User asking about the image
-   
+
 6. Generate response:
    Token by token: "This", "is", "a", "cat", "."
 
@@ -699,14 +702,14 @@ With vision encoder:
 
 ## 📊 Specifications
 
-| Parameter | Value |
-|-----------|-------|
-| **Input** | Image (224×224×3) |
-| **Patch Size** | 16×16 |
-| **Patches** | 196 + 1 CLS |
-| **Dimension** | 128 |
-| **Layers** | 4 |
-| **Parameters** | ~914K |
+| Parameter      | Value             |
+| -------------- | ----------------- |
+| **Input**      | Image (224×224×3) |
+| **Patch Size** | 16×16             |
+| **Patches**    | 196 + 1 CLS       |
+| **Dimension**  | 128               |
+| **Layers**     | 4                 |
+| **Parameters** | ~914K             |
 
 ## 🎓 Training
 
@@ -725,4 +728,3 @@ With vision encoder:
 ---
 
 [Back to Index](00-INDEX.md)
-

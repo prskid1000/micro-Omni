@@ -60,7 +60,7 @@ Predict: [67, 103] (next frame)
 
 ```json
 {
-  "d_model": 192, "n_layers": 4, "n_heads": 3,
+  "d_model": 384, "n_layers": 8, "n_heads": 6,
   "codebooks": 2, "codebook_size": 128,
 
   "data_path": "data/audio/tts/",
@@ -154,8 +154,8 @@ python train_vocoder.py --config configs/vocoder_tiny.json
 
 **Memory Optimized:**
 
-- Batch size: 2 (with gradient accumulation: effective batch size 8)
-- Audio length limit: 8192 samples (~0.5s)
+- Batch size: 1 (with gradient accumulation steps: 8 → effective batch size 8)
+- Audio length limit: Auto-calculated (default ~0.5s-1s segment)
 - Mixed precision (FP16) enabled
 - Optimized for 12GB VRAM
 

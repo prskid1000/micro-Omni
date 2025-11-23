@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What the Thinker is and why it's the "brain" of μOmni
 - Detailed architecture breakdown
 - How multimodal embeddings flow through the model
@@ -65,7 +66,7 @@ REASON about relationships:
 - Connect: This must be a cat!
 
 GENERATE intelligent response:
-"This is a cat. The image shows a feline, 
+"This is a cat. The image shows a feline,
  and the meow sound confirms it's a cat."
 
 All of this complex reasoning happens in the Thinker!
@@ -108,70 +109,74 @@ Token/Embeddings Input (B, T, 256)
 
 > **Note**: These are the "tiny" configuration values from `configs/thinker_tiny.json`. The code defaults may differ, but config files override them.
 
-| Parameter | Value |
-|-----------|-------|
-| **Model Dimension** | 256 |
-| **Layers** | 4 |
-| **Attention Heads** | 4 |
-| **Feedforward Dim** | 1024 |
-| **Vocabulary** | 32000 tokens |
-| **Context Length** | 512-2048 |
-| **Parameters** | ~20.32M |
+| Parameter           | Value        |
+| ------------------- | ------------ |
+| **Model Dimension** | 256          |
+| **Layers**          | 4            |
+| **Attention Heads** | 4            |
+| **Feedforward Dim** | 1024         |
+| **Vocabulary**      | 32000 tokens |
+| **Context Length**  | 512-2048     |
+| **Parameters**      | ~20.32M      |
 
 ## 🔑 Key Features
 
 ### 1. **Causal Attention**
+
 - Autoregressive generation
 - Each token attends only to previous tokens
 - Enables text generation one token at a time
 
 ### 2. **RoPE Positional Encoding**
+
 - Rotary position embeddings
 - Better extrapolation to longer sequences
 - No additional parameters
 
 ### 3. **KV Caching**
+
 - Caches key/value tensors during generation
 - Speeds up autoregressive decoding from O(T²) to O(T)
 - Essential for interactive applications
 
-### 4. **Optional Optimizations**
-- **GQA** (Grouped Query Attention): Reduces KV parameters
-- **SwiGLU**: Modern activation function
-- **MoE** (Mixture of Experts): Sparse computation
-- **Flash Attention**: 2-4x speedup
+### 4. **Advanced Optimizations**
+
+- **GQA** (Grouped Query Attention): Reduces KV cache size for faster inference
+- **SwiGLU**: Modern activation function for better performance
+- **MoE** (Mixture of Experts): Sparse computation (activates subset of parameters)
+- **Flash Attention**: 2-4x speedup using optimized kernels
+- **Numerical Stability**: Built-in NaN/Inf detection for robust training
 
 ## 💻 Implementation
 
 ```python
 # From omni/thinker.py
 class ThinkerLM(nn.Module):
-    def __init__(self, vocab, n_layers=4, d=256, heads=4, 
-                 ff=1024, dropout=0.1, rope_theta=10000, ctx=512):
+    def __init__(self, vocab, n_layers=16, d=512, heads=8, ff=2048,
+                 dropout=0.1, rope_theta=10000, ctx=1024,
+                 use_gqa=False, use_swiglu=True, use_moe=False,
+                 num_experts=8, num_experts_per_tok=2, use_flash=True):
         super().__init__()
         self.tok_emb = nn.Embedding(vocab, d)
         self.blocks = nn.ModuleList([
-            Block(d, heads, ff, rope_theta, dropout) 
+            Block(d, heads, ff, rope_theta, dropout,
+                  use_gqa=use_gqa, use_swiglu=use_swiglu,
+                  use_moe=use_moe, num_experts=num_experts,
+                  use_flash=use_flash)
             for _ in range(n_layers)
         ])
         self.norm = RMSNorm(d)
         self.lm_head = nn.Linear(d, vocab, bias=False)
         self.ctx = ctx
-        self.kv_cache = None
-    
+
     def forward(self, idx=None, embeddings=None, attn_mask=None):
-        # Accept either token IDs or embeddings (multimodal)
-        if embeddings is not None:
-            x = embeddings
-        elif idx is not None:
-            x = self.tok_emb(idx)
-        else:
-            raise ValueError("Provide idx or embeddings")
-        
-        # Process through transformer blocks
+        # ... (input handling) ...
+
+        # Process through transformer blocks with stability checks
         for block in self.blocks:
             x, _ = block(x, mask=attn_mask, cache=self.kv_cache)
-        
+            if torch.isnan(x).any(): raise RuntimeError("NaN detected")
+
         x = self.norm(x)
         logits = self.lm_head(x)
         return logits
@@ -189,4 +194,3 @@ class ThinkerLM(nn.Module):
 ---
 
 [Back to Index](00-INDEX.md)
-

@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What the Talker does and why we need it
 - How autoregressive speech code prediction works
 - Architecture of the Talker transformer
@@ -51,7 +52,7 @@ Talker: [[0,0]] (start)
 ↓
 Predict next codes: [42, 87]
 ↓
-Continue: [[0,0], [42,87]] 
+Continue: [[0,0], [42,87]]
 ↓
 Predict next codes: [56, 91]
 ↓
@@ -123,35 +124,33 @@ We want to predict Frame 3: [?, ?]
 Step 1: Embed the Codes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Separate embeddings for base and residual!
+Shared embedding matrix for both base and residual!
 
 Base codes: [0, 42, 56]
-→ base_embedding(0): 192-dim vector
-→ base_embedding(42): 192-dim vector
-→ base_embedding(56): 192-dim vector
+→ embedding(0): 384-dim vector
+→ embedding(42): 384-dim vector
+→ embedding(56): 384-dim vector
 
 Residual codes: [0, 87, 91]
-→ res_embedding(0): 192-dim vector
-→ res_embedding(87): 192-dim vector
-→ res_embedding(91): 192-dim vector
+→ embedding(0): 384-dim vector
+→ embedding(87): 384-dim vector
+→ embedding(91): 384-dim vector
 
 Sum embeddings:
-token_0 = base_emb[0] + res_emb[0]      # (192,)
-token_1 = base_emb[42] + res_emb[87]    # (192,)
-token_2 = base_emb[56] + res_emb[91]    # (192,)
+token_0 = emb[0] + emb[0]       # (384,)
+token_1 = emb[42] + emb[87]     # (384,)
+token_2 = emb[56] + emb[91]     # (384,)
 
-Result: (3, 192)
-
-WHY separate embeddings?
-- Base and residual codes have different meanings
-- Base = coarse pattern
-- Residual = fine details
-- Separate embeddings capture this distinction!
+Result: (3, 384)
 
 WHY sum instead of concatenate?
 - More parameter efficient
 - Both contribute to single token representation
 - Standard practice in multi-codebook models
+
+WHY shared embedding?
+- Base and residual codes share the same semantic space
+- Reduces parameters by half compared to separate matrices
 
 Step 2: Add Positional Embeddings
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -374,37 +373,37 @@ DONE! 🎉 Speech generated!
 def generate_speech(talker, rvq, vocoder, max_frames=200):
     # Start with BOS token
     codes = [[0, 0]]  # (1, 2)
-    
+
     # Generate frames autoregressively
     for t in range(max_frames):
         # Forward pass
         base_logits, res_logits = talker(codes)  # (T, 128), (T, 128)
-        
+
         # Take last position predictions
         base_logits_last = base_logits[-1]  # (128,)
         res_logits_last = res_logits[-1]    # (128,)
-        
+
         # Sample or greedy
         base_code = torch.argmax(base_logits_last)  # scalar
         res_code = torch.argmax(res_logits_last)    # scalar
-        
+
         # Append to sequence
         next_frame = [base_code.item(), res_code.item()]
         codes.append(next_frame)
-    
+
     # Remove BOS token
     codes = codes[1:]  # (200, 2)
-    
+
     # Decode with RVQ
     mel_frames = []
     for code_pair in codes:
         mel = rvq.decode(code_pair)
         mel_frames.append(mel)
     mel_spectrogram = torch.stack(mel_frames)  # (200, 128)
-    
+
     # Vocode (HiFi-GAN if available, else Griffin-Lim)
     audio = vocoder.mel_to_audio(mel_spectrogram)
-    
+
     return audio
 ```
 
@@ -417,39 +416,39 @@ def generate_speech(talker, rvq, vocoder, max_frames=200):
 ### Architecture Parameters
 
 ```
-TALKER CONFIGURATION:
+TALKER CONFIGURATION (Code Defaults):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Model dimension: 192
-Number of layers: 4
-Attention heads: 3 (GQA: 3 query heads, 1 KV head)
-FFN dimension: 768 (4 × 192)
+Model dimension: 384
+Number of layers: 8
+Attention heads: 6
+FFN dimension: 1536 (4 × 384)
 Codebook size: 128 (per codebook)
 Number of codebooks: 2
 
 Embeddings:
-- base_embedding: Embedding(128, 192)
-- res_embedding: Embedding(128, 192)
+- Shared Embedding(128, 384)
 
 Transformer:
-- 4 decoder layers
+- 8 decoder layers
 - Causal self-attention
 - RoPE positional encoding
 - RMSNorm
-- SwiGLU activation (optional)
+- SwiGLU activation (default: True)
+- GQA support (optional)
 
 Prediction Heads:
-- base_head: Linear(192 → 128, bias=False)
-- res_head: Linear(192 → 128, bias=False)
+- base_head: Linear(384 → 128)
+- res_head: Linear(384 → 128)
 
 PARAMETERS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Embeddings: 2 × (128 × 192) = 49,152
-Transformer layers: ~10M
-Prediction heads: 2 × (192 × 128) = 49,152
+Embeddings: 128 × 384 = 49,152
+Transformer layers: ~15M
+Prediction heads: 2 × (384 × 128) = 98,304
 ─────────────────────────────────────
-Total: ~10.1M parameters
+Total: ~15M parameters
 
 GENERATION SPECS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -461,12 +460,12 @@ With KV caching: ~50-100ms per frame (real-time capable!)
 
 ### Comparison Table
 
-| Component | Input | Output | Purpose |
-|-----------|-------|--------|---------|
-| **Embeddings** | Codes (T, 2) | Vectors (T, 192) | Vectorize discrete codes |
-| **Transformer** | (T, 192) | (T, 192) | Process temporal context |
-| **Base Head** | (192,) | Logits (128,) | Predict base code |
-| **Res Head** | (192,) | Logits (128,) | Predict residual code |
+| Component       | Input        | Output           | Purpose                  |
+| --------------- | ------------ | ---------------- | ------------------------ |
+| **Embeddings**  | Codes (T, 2) | Vectors (T, 192) | Vectorize discrete codes |
+| **Transformer** | (T, 192)     | (T, 192)         | Process temporal context |
+| **Base Head**   | (192,)       | Logits (128,)    | Predict base code        |
+| **Res Head**    | (192,)       | Logits (128,)    | Predict residual code    |
 
 ---
 
@@ -504,24 +503,24 @@ Loss: Cross-entropy for both base and residual predictions
 ```python
 for batch in dataloader:
     audio = batch  # (B, samples)
-    
+
     # 1. Convert audio to mel
     mel = audio_to_mel(audio)  # (B, T, 128)
     # Note: All mel spectrograms are padded to max_mel_length
     # for CUDA graphs compatibility (when use_compile: true)
-    
+
     # 2. Encode mel with RVQ (frozen!)
     codes = rvq.encode(mel)  # (B, T, 2)
-    
+
     # 3. Prepare input/target
     input_codes = codes[:, :-1, :]   # All but last
     target_codes = codes[:, 1:, :]   # All but first
-    
+
     # 4. Forward pass
     base_logits, res_logits = talker(input_codes)
     # base_logits: (B, T-1, 128)
     # res_logits: (B, T-1, 128)
-    
+
     # 5. Compute loss
     base_loss = cross_entropy(
         base_logits.view(-1, 128),
@@ -532,13 +531,14 @@ for batch in dataloader:
         target_codes[:, :, 1].view(-1)
     )
     total_loss = base_loss + res_loss
-    
+
     # 6. Backprop and update
     total_loss.backward()
     optimizer.step()
 ```
 
 **CUDA Graphs Compatibility:**
+
 - When using `use_compile: true`, all batches must have uniform shapes
 - `max_mel_length` is auto-calculated from dataset (95th percentile)
 - Can override manually or adjust `max_mel_length_percentile` if needed
@@ -665,16 +665,16 @@ Result: Complete text-to-speech system!
 
 ## 📊 Specifications
 
-| Parameter | Value |
-|-----------|-------|
-| **Dimension** | 192 |
-| **Layers** | 4 |
-| **Heads** | 3 |
-| **Codebooks** | 2 |
-| **Output** | 2 × 128 logits |
-| **Parameters** | ~10.1M |
+| Parameter          | Value                                                                          |
+| ------------------ | ------------------------------------------------------------------------------ |
+| **Dimension**      | 192                                                                            |
+| **Layers**         | 4                                                                              |
+| **Heads**          | 3                                                                              |
+| **Codebooks**      | 2                                                                              |
+| **Output**         | 2 × 128 logits                                                                 |
+| **Parameters**     | ~10.1M                                                                         |
 | **max_mel_length** | Auto-calculated from dataset (95th percentile) - for CUDA graphs compatibility |
-| **Frame rate** | 12.5 Hz (with frame_ms=80) |
+| **Frame rate**     | 12.5 Hz (with frame_ms=80)                                                     |
 
 ## 🔄 Generation Process
 
@@ -706,4 +706,3 @@ Result: Complete text-to-speech system!
 ---
 
 [Back to Index](00-INDEX.md)
-

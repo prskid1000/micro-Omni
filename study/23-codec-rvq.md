@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - What RVQ codec does and why it's needed for speech
 - How residual vector quantization works in detail
 - The role of codebooks in speech generation
@@ -110,7 +111,7 @@ Now let's see it in action for speech!
 INPUT: One frame of mel spectrogram
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Mel frame: (128,) 
+Mel frame: (128,)
 - 128 mel frequency bins
 - Continuous values: [0.5, -0.3, 0.8, 0.2, ...]
 - Example: One 10ms slice of "hello" sound
@@ -186,7 +187,7 @@ Final residual:
 Residual_2 = Residual_1 - Quantized_1
           = [-0.05, -0.02, -0.02, 0.02, ...] - [-0.04, -0.02, -0.03, 0.02, ...]
           = [-0.01, 0.00, 0.01, 0.00, ...]
-          
+
 Very small! Most error captured!
 
 Step 4: Combine for Reconstruction
@@ -302,19 +303,19 @@ def encode(mel_frame):
     """
     # Step 1: Project to codebook space
     x = proj_in(mel_frame)  # (128,) → (64,)
-    
+
     # Step 2: Quantize with codebook 0
     distances_0 = compute_distances(x, codebook_0)  # (128,)
     base_code = argmin(distances_0)  # Find nearest
     quantized_0 = codebook_0[base_code]  # (64,)
-    
+
     # Step 3: Compute residual
     residual = x - quantized_0  # (64,)
-    
+
     # Step 4: Quantize residual with codebook 1
     distances_1 = compute_distances(residual, codebook_1)
     residual_code = argmin(distances_1)
-    
+
     # Output: 2 discrete codes
     return [base_code, residual_code]
 
@@ -333,17 +334,17 @@ def decode(codes):
     Returns: (128,) reconstructed mel frame
     """
     base_code, residual_code = codes
-    
+
     # Step 1: Look up in codebooks
     quantized_0 = codebook_0[base_code]      # (64,)
     quantized_1 = codebook_1[residual_code]  # (64,)
-    
+
     # Step 2: Sum quantized vectors
     reconstructed = quantized_0 + quantized_1  # (64,)
-    
+
     # Step 3: Project back to mel space
     mel_frame = proj_out(reconstructed)  # (64,) → (128,)
-    
+
     return mel_frame
 
 # Example:
@@ -493,34 +494,34 @@ COMPLETE SPEECH GENERATION FLOW:
 
 1. Start with BOS (beginning of speech)
    codes = [[0, 0]]  # Start token
-   
+
 2. Talker predicts next codes:
    Input: [[0, 0]]
    Output: Logits for base (128,) and residual (128,)
    Softmax → Probabilities
    Sample/Argmax → [42, 87]
-   
+
 3. Append and repeat:
    codes = [[0, 0], [42, 87]]
    Predict next: [56, 91]
    codes = [[0, 0], [42, 87], [56, 91]]
    ...
-   
+
 4. Generate T frames (e.g., 200 for ~16 seconds at 12.5 Hz):
    codes = [[0,0], [42,87], [56,91], ..., [12,34]]
    Shape: (200, 2)
-   
+
 5. Decode all frames with RVQ:
    mel_frames = []
    for code_pair in codes:
        mel = rvq.decode(code_pair)  # [42,87] → (128,)
        mel_frames.append(mel)
    mel_spectrogram = stack(mel_frames)  # (200, 128)
-   
+
 6. Vocoder converts mel to audio:
    # Uses HiFi-GAN if available, falls back to Griffin-Lim
    audio_waveform = vocoder.mel_to_audio(mel_spectrogram)
-   
+
 7. Save audio file:
    save_wav("output.wav", audio_waveform)
 
@@ -556,14 +557,14 @@ Training forces:
 ```python
 for batch in dataloader:
     mel_frames = batch  # (B, 128)
-    
+
     # Forward: Encode then decode
     codes = rvq.encode(mel_frames)           # (B, 2)
     reconstructed = rvq.decode(codes)        # (B, 128)
-    
+
     # Compute reconstruction loss
     loss = mse_loss(reconstructed, mel_frames)
-    
+
     # Backprop updates:
     # - proj_in weights
     # - codebook_0 embeddings
@@ -598,6 +599,43 @@ This trick allows training!
 ```
 
 ---
+
+## 🔊 The Vocoder: HiFi-GAN
+
+While RVQ decodes codes back to mel spectrograms, we still need to convert those spectrograms into audio waveforms. This is the job of the **Vocoder**.
+
+μOmni uses **HiFi-GAN**, a state-of-the-art neural vocoder that is both fast and high-quality.
+
+### Architecture
+
+**1. Generator (The Synthesizer)**
+
+- **Input**: Mel spectrogram (128 channels)
+- **Upsampling**: 4 stages of upsampling to match the hop length (256x total upsampling)
+  - Rates: `[8, 8, 2, 2]`
+  - Kernel Sizes: `[16, 16, 4, 4]`
+  - Progressively increases time resolution from mel frames to audio samples
+- **MRF (Multi-Receptive Field Fusion)**:
+  - After each upsampling, the signal passes through multiple parallel residual blocks
+  - Each block has different kernel sizes `[3, 5, 7]` and dilation rates `[[1, 2], [1, 2], [1, 2]]`
+  - This allows the model to capture patterns at different temporal resolutions simultaneously
+- **Output**: Raw audio waveform
+
+**2. Discriminators (The Critics - Training Only)**
+To train the generator to produce realistic audio, HiFi-GAN uses two types of discriminators:
+
+- **MPD (Multi-Period Discriminator)**:
+  - Reshapes audio into 2D chunks with different periods `[2, 3, 5]` (Codebase default)
+  - Crucial for capturing periodic structures in speech (pitch, harmonics)
+- **MSD (Multi-Scale Discriminator)**:
+  - Analyzes audio at different scales (raw audio, 2x downsampled)
+  - Default uses 2 scales to ensure realistic structure at both fine and coarse levels
+
+**Why HiFi-GAN?**
+
+- **Non-Autoregressive**: Generates audio in parallel (very fast inference)
+- **High Fidelity**: Produces natural-sounding speech without metallic artifacts common in older vocoders
+- **Efficient**: Optimized architecture suitable for real-time generation
 
 ## 🔗 Connection to Complete Pipeline
 
@@ -637,11 +675,11 @@ TRAINING PREPARATION:
 1. Train RVQ Codec first (Stage D-part1):
    - Learn good codebooks from speech data
    - Minimize reconstruction error
-   
+
 2. Train Talker with frozen RVQ (Stage D-part2):
    - Talker learns to predict codes
    - RVQ provides targets via encoding
-   
+
 3. Inference:
    - Talker generates codes
    - RVQ decodes to mel
@@ -696,13 +734,13 @@ TRAINING PREPARATION:
 
 ## 📊 Specifications
 
-| Parameter | Value |
-|-----------|-------|
-| **Codebooks** | 2 |
-| **Codes per book** | 128 |
-| **Codebook dim** | 64 |
+| Parameter              | Value  |
+| ---------------------- | ------ |
+| **Codebooks**          | 2      |
+| **Codes per book**     | 128    |
+| **Codebook dim**       | 64     |
 | **Total combinations** | 16,384 |
-| **Parameters** | ~100K |
+| **Parameters**         | ~100K  |
 
 ## 🔄 Encoding & Decoding
 
@@ -724,4 +762,3 @@ reconstructed = rvq.decode(codes)  # → (128,)
 ---
 
 [Back to Index](00-INDEX.md)
-
