@@ -346,7 +346,7 @@ class HiFiGANVocoder(nn.Module):
             # Compile the bound _forward_impl method so guard sets stay stable.
             self._compiled_forward = torch.compile(
                 self._forward_impl,
-                backend='inductor',
+                backend='cudagraphs',
                 mode='default',
                 fullgraph=False
             )
