@@ -264,9 +264,9 @@ class HiFiGANVocoder(nn.Module):
                  n_fft: int = 1024, hop_length: int = 256, 
                  upsample_rates: list = [8, 8, 2, 2],
                  upsample_kernel_sizes: list = [16, 16, 4, 4],
-                 upsample_initial_channel: int = 512,
-                 resblock_kernel_sizes: list = [3, 7, 11],
-                 resblock_dilation_sizes: list = [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+                 upsample_initial_channel: int = 256,
+                 resblock_kernel_sizes: Optional[list] = None,
+                 resblock_dilation_sizes: Optional[list] = None,
                  checkpoint_path: Optional[str] = None,
                  compile_model: bool = False) -> None:
         """
@@ -292,6 +292,11 @@ class HiFiGANVocoder(nn.Module):
         self.hop_length = hop_length
         
         # Generator network
+        if resblock_kernel_sizes is None:
+            resblock_kernel_sizes = [3, 5, 7]
+        if resblock_dilation_sizes is None:
+            resblock_dilation_sizes = [[1, 2], [1, 2], [1, 2]]
+
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
         
@@ -515,10 +520,12 @@ class MultiPeriodDiscriminator(nn.Module):
     Multi-Period Discriminator (MPD) for HiFi-GAN training.
     Uses multiple sub-discriminators with different periods to capture different temporal patterns.
     """
-    def __init__(self, periods: list = [2, 3, 5, 7, 11]) -> None:
+    def __init__(self, periods: Optional[list] = None, kernel_size: int = 3, stride: int = 2) -> None:
         super().__init__()
+        if periods is None:
+            periods = [2, 3, 5]
         self.discriminators = nn.ModuleList([
-            DiscriminatorP(period) for period in periods
+            DiscriminatorP(period, kernel_size=kernel_size, stride=stride) for period in periods
         ])
     
     def forward(self, x: torch.Tensor) -> tuple:
@@ -543,15 +550,16 @@ class MultiPeriodDiscriminator(nn.Module):
 
 class DiscriminatorP(nn.Module):
     """Period discriminator for a specific period."""
-    def __init__(self, period: int, kernel_size: int = 5, stride: int = 3) -> None:
+    def __init__(self, period: int, kernel_size: int = 3, stride: int = 2) -> None:
         super().__init__()
         self.period = period
+        pad = kernel_size // 2
         self.convs = nn.ModuleList([
-            nn.Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(2, 0)),
-            nn.Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(2, 0)),
-            nn.Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(2, 0)),
-            nn.Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(2, 0)),
-            nn.Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(2, 0)),
+            nn.Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(pad, 0)),
+            nn.Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(pad, 0)),
+            nn.Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(pad, 0)),
+            nn.Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(pad, 0)),
+            nn.Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(pad, 0)),
         ])
         self.conv_post = nn.Conv2d(1024, 1, (3, 1), 1, padding=(1, 0))
     
@@ -589,16 +597,14 @@ class MultiScaleDiscriminator(nn.Module):
     Multi-Scale Discriminator (MSD) for HiFi-GAN training.
     Uses multiple sub-discriminators at different scales to capture different frequency patterns.
     """
-    def __init__(self) -> None:
+    def __init__(self, num_scales: int = 2) -> None:
         super().__init__()
-        self.discriminators = nn.ModuleList([
-            DiscriminatorS(use_spectral_norm=True),
-            DiscriminatorS(),
-            DiscriminatorS(),
-        ])
+        num_scales = max(1, num_scales)
+        self.discriminators = nn.ModuleList()
+        for idx in range(num_scales):
+            self.discriminators.append(DiscriminatorS(use_spectral_norm=(idx == 0)))
         self.pools = nn.ModuleList([
-            nn.AvgPool1d(4, 2, padding=2),
-            nn.AvgPool1d(4, 2, padding=2),
+            nn.AvgPool1d(4, 2, padding=2) for _ in range(max(num_scales - 1, 0))
         ])
     
     def forward(self, x: torch.Tensor) -> tuple:

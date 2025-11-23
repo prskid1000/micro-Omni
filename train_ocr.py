@@ -113,7 +113,6 @@ def main(cfg):
             "idx_to_char": idx_to_char,
             "vocab_size": vocab_size_dynamic,
             "max_text_length": max_text_length_dynamic,
-            "config": cfg
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         print("✓ Saved dataset statistics to metadata (will be reused on next run)")
@@ -487,8 +486,7 @@ def main(cfg):
                     "char_to_idx": train_ds.char_to_idx,
                     "idx_to_char": train_ds.idx_to_char,
                     "vocab_size": vocab_size_dynamic,
-                    "max_text_length": max_text_length_dynamic,
-                    "config": cfg
+                    "max_text_length": max_text_length_dynamic
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.checkpoint(step, model_path)
@@ -498,8 +496,7 @@ def main(cfg):
                 torch.save({
                     "model": model.state_dict(),
                     "char_to_idx": train_ds.char_to_idx,
-                    "idx_to_char": train_ds.idx_to_char,
-                    "config": cfg
+                    "idx_to_char": train_ds.idx_to_char
                 }, final_path)
                 
                 logger.info(f"Saved checkpoint: {checkpoint_path}")
@@ -526,8 +523,7 @@ def main(cfg):
         "char_to_idx": train_ds.char_to_idx,
         "idx_to_char": train_ds.idx_to_char,
         "vocab_size": vocab_size_dynamic,
-        "max_text_length": max_text_length_dynamic,
-        "config": cfg
+        "max_text_length": max_text_length_dynamic
     }
     save_training_metadata(save_dir, model_name, training_metadata)
     logger.info(f"Training complete! Final model saved to: {final_path}")

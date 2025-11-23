@@ -103,8 +103,7 @@ def main(cfg):
         training_metadata = {
             "step": 0,  # Will be updated when we save checkpoints
             "epoch": 0,
-            "max_mel_length": max_mel_length_dynamic,
-            "config": cfg
+            "max_mel_length": max_mel_length_dynamic
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         print("✓ Saved dataset statistics to metadata (will be reused on next run)")
@@ -448,8 +447,7 @@ def main(cfg):
                 training_metadata = {
                     "step": step,
                     "epoch": epoch,
-                    "max_mel_length": max_mel_length_dynamic,
-                    "config": cfg
+                    "max_mel_length": max_mel_length_dynamic
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.checkpoint(step, model_path)
@@ -558,8 +556,7 @@ def main(cfg):
                 training_metadata = {
                     "step": step,
                     "epoch": epoch,
-                    "max_mel_length": max_mel_length_dynamic,
-                    "config": cfg
+                    "max_mel_length": max_mel_length_dynamic
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {save_dir}")
@@ -670,8 +667,7 @@ def main(cfg):
         training_metadata = {
             "step": step,
             "epoch": epoch,
-            "max_mel_length": max_mel_length_dynamic,
-            "config": cfg
+            "max_mel_length": max_mel_length_dynamic
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")

@@ -191,21 +191,41 @@ def main(cfg):
     
     cfg["max_audio_length"] = max_audio_length
     cfg["max_mel_length"] = max_mel_length
+
+    # Persist derived config early so crashes during compile or initialization still capture limits
+    preflight_metadata = {
+        "step": metadata.get("step", 0) if metadata else 0,
+        "epoch": metadata.get("epoch", 0) if metadata else 0,
+        "max_audio_length": max_audio_length,
+        "max_mel_length": max_mel_length,
+    }
+    save_training_metadata(save_dir, model_name, preflight_metadata)
     
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
     # Initialize models
+    resblock_kernel_sizes = cfg.get("resblock_kernel_sizes", [3, 5, 7])
+    resblock_dilation_sizes = cfg.get("resblock_dilation_sizes", [[1, 2], [1, 2], [1, 2]])
     generator = HiFiGANVocoder(
         sample_rate=sr,
         n_mels=n_mels,
         n_fft=n_fft,
         hop_length=hop_length,
+        upsample_initial_channel=cfg.get("upsample_initial_channel", 256),
+        resblock_kernel_sizes=resblock_kernel_sizes,
+        resblock_dilation_sizes=resblock_dilation_sizes,
         compile_model=use_compile
     ).to(device)
     
-    mpd = MultiPeriodDiscriminator().to(device)
-    msd = MultiScaleDiscriminator().to(device)
+    mpd = MultiPeriodDiscriminator(
+        periods=cfg.get("mpd_periods", [2, 3, 5]),
+        kernel_size=cfg.get("mpd_kernel_size", 3),
+        stride=cfg.get("mpd_stride", 2)
+    ).to(device)
+    msd = MultiScaleDiscriminator(
+        num_scales=cfg.get("msd_num_scales", 2)
+    ).to(device)
     
     # CNN-specific optimizations
     if device == "cuda":
@@ -268,6 +288,11 @@ def main(cfg):
     lambda_mel = cfg.get("lambda_mel", 45.0)
     lambda_fm = cfg.get("lambda_fm", 2.0)
     lambda_adv = cfg.get("lambda_adv", 1.0)
+    mel_decay_start = cfg.get("mel_weight_decay_start", None)
+    mel_decay_duration = cfg.get("mel_weight_decay_duration", 50000)
+    mel_decay_factor = cfg.get("mel_weight_decay_factor", 0.5)
+    discriminator_update_interval = cfg.get("discriminator_update_interval", 1)
+    discriminator_lr_warmup_steps = cfg.get("discriminator_lr_warmup_steps", 0)
     
     # Validation split
     val_split = cfg.get("val_split", 0.1)
@@ -471,27 +496,79 @@ def main(cfg):
             if use_compile and device == "cuda":
                 torch.compiler.cudagraph_mark_step_begin()
             
-            # ========== Train Discriminators ==========
-            opt_d.zero_grad()
-            
-            # Generate fake audio with fixed target length
-            with torch.no_grad():
-                audio_fake = generator(mel_input, target_length=target_audio_length)  # (B, T_audio)
-            
             # Trim real audio to match target length (handles variable-length real audio)
             audio_real = audio_real[:, :target_audio_length]
-            
-            # Add channel dimension for discriminators: (B, 1, T)
             audio_real_d = audio_real.unsqueeze(1)
-            audio_fake_d = audio_fake.unsqueeze(1)
-            
-            if use_amp:
-                with autocast(device_type='cuda'):
-                    # MPD - returns list of outputs and features
-                    # SAVE the real features for later use in generator training
+
+            run_discriminator = (discriminator_update_interval <= 1) or (step % discriminator_update_interval == 0)
+            loss_d = torch.zeros(1, device=device)
+            cached_mpd_real_feats = None
+            cached_msd_real_feats = None
+
+            if run_discriminator:
+                opt_d.zero_grad()
+                
+                # Generate fake audio with fixed target length for discriminator update
+                with torch.no_grad():
+                    audio_fake = generator(mel_input, target_length=target_audio_length)
+                audio_fake_d = audio_fake.unsqueeze(1)
+                
+                if use_amp:
+                    with autocast(device_type='cuda'):
+                        mpd_real_out, cached_mpd_real_feats = mpd(audio_real_d)
+                        mpd_fake_out, mpd_fake_feats = mpd(audio_fake_d.detach())
+                        loss_mpd = 0.0
+                        for real_out, fake_out in zip(mpd_real_out, mpd_fake_out):
+                            real_loss = torch.mean((real_out - 1.0) ** 2)
+                            fake_loss = torch.mean(fake_out ** 2)
+                            loss_mpd += (real_loss + fake_loss) / 2.0
+                        loss_mpd = loss_mpd / len(mpd_real_out)
+                        
+                        msd_real_out, cached_msd_real_feats = msd(audio_real_d)
+                        msd_fake_out, msd_fake_feats = msd(audio_fake_d.detach())
+                        loss_msd = 0.0
+                        for real_out, fake_out in zip(msd_real_out, msd_fake_out):
+                            real_loss = torch.mean((real_out - 1.0) ** 2)
+                            fake_loss = torch.mean(fake_out ** 2)
+                            loss_msd += (real_loss + fake_loss) / 2.0
+                        loss_msd = loss_msd / len(msd_real_out)
+                        
+                        loss_d = loss_mpd + loss_msd
+                    
+                    scaler_d.scale(loss_d / accumulation_steps).backward()
+                    if (batch_idx + 1) % accumulation_steps == 0:
+                        scaler_d.unscale_(opt_d)
+                        max_grad_norm = cfg.get("max_grad_norm", 1.0)
+                        
+                        try:
+                            grad_norm_mpd_before = clip_gradients(mpd, max_grad_norm)
+                            grad_norm_msd_before = clip_gradients(msd, max_grad_norm)
+                            explosion_threshold = max(100.0, max_grad_norm * 10)
+                            grad_norm_mpd_after, is_exploded_mpd = check_gradient_explosion(mpd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                            grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                            if is_exploded_mpd or is_exploded_msd:
+                                logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
+                                opt_d.zero_grad()
+                                scaler_d.update()
+                                continue
+                        except RuntimeError as e:
+                            logger.error(f"Step {step}: {e}")
+                            opt_d.zero_grad()
+                            scaler_d.update()
+                            continue
+                        
+                        scaler_d.step(opt_d)
+                        scaler_d.update()
+                        scheduler_d.step()
+                        if discriminator_lr_warmup_steps > 0 and step < discriminator_lr_warmup_steps:
+                            warmup_factor = min(1.0, (step + 1) / discriminator_lr_warmup_steps)
+                            last_lrs = scheduler_d.get_last_lr()
+                            for group, base_lr in zip(opt_d.param_groups, last_lrs):
+                                group['lr'] = base_lr * warmup_factor
+                        opt_d.zero_grad()
+                else:
                     mpd_real_out, cached_mpd_real_feats = mpd(audio_real_d)
                     mpd_fake_out, mpd_fake_feats = mpd(audio_fake_d.detach())
-                    # MPD returns list of outputs (one per period)
                     loss_mpd = 0.0
                     for real_out, fake_out in zip(mpd_real_out, mpd_fake_out):
                         real_loss = torch.mean((real_out - 1.0) ** 2)
@@ -499,11 +576,8 @@ def main(cfg):
                         loss_mpd += (real_loss + fake_loss) / 2.0
                     loss_mpd = loss_mpd / len(mpd_real_out)
                     
-                    # MSD - returns list of outputs and features
-                    # SAVE the real features for later use in generator training
                     msd_real_out, cached_msd_real_feats = msd(audio_real_d)
                     msd_fake_out, msd_fake_feats = msd(audio_fake_d.detach())
-                    # MSD returns list of outputs (one per scale)
                     loss_msd = 0.0
                     for real_out, fake_out in zip(msd_real_out, msd_fake_out):
                         real_loss = torch.mean((real_out - 1.0) ** 2)
@@ -512,100 +586,42 @@ def main(cfg):
                     loss_msd = loss_msd / len(msd_real_out)
                     
                     loss_d = loss_mpd + loss_msd
-                
-                scaler_d.scale(loss_d / accumulation_steps).backward()
-                if (batch_idx + 1) % accumulation_steps == 0:
-                    scaler_d.unscale_(opt_d)
-                    max_grad_norm = cfg.get("max_grad_norm", 1.0)
+                    (loss_d / accumulation_steps).backward()
                     
-                    # Gradient clipping first, then check if still too high
-                    try:
-                        grad_norm_mpd_before = clip_gradients(mpd, max_grad_norm)
-                        grad_norm_msd_before = clip_gradients(msd, max_grad_norm)
+                    if (batch_idx + 1) % accumulation_steps == 0:
+                        max_grad_norm = cfg.get("max_grad_norm", 1.0)
                         
-                        # Check for gradient explosion AFTER clipping
-                        explosion_threshold = max(100.0, max_grad_norm * 10)
-                        grad_norm_mpd_after, is_exploded_mpd = check_gradient_explosion(mpd, max_grad_norm=explosion_threshold, raise_on_error=False)
-                        grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
-                        
-                        if is_exploded_mpd or is_exploded_msd:
-                            logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
+                        try:
+                            grad_norm_mpd_before = clip_gradients(mpd, max_grad_norm)
+                            grad_norm_msd_before = clip_gradients(msd, max_grad_norm)
+                            explosion_threshold = max(100.0, max_grad_norm * 10)
+                            grad_norm_mpd_after, is_exploded_mpd = check_gradient_explosion(mpd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                            grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
+                            if is_exploded_mpd or is_exploded_msd:
+                                logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
+                                opt_d.zero_grad()
+                                continue
+                        except RuntimeError as e:
+                            logger.error(f"Step {step}: {e}")
                             opt_d.zero_grad()
-                            scaler_d.update()
                             continue
-                    except RuntimeError as e:
-                        logger.error(f"Step {step}: {e}")
+                        
+                        opt_d.step()
+                        scheduler_d.step()
+                        if discriminator_lr_warmup_steps > 0 and step < discriminator_lr_warmup_steps:
+                            warmup_factor = min(1.0, (step + 1) / discriminator_lr_warmup_steps)
+                            last_lrs = scheduler_d.get_last_lr()
+                            for group, base_lr in zip(opt_d.param_groups, last_lrs):
+                                group['lr'] = base_lr * warmup_factor
                         opt_d.zero_grad()
-                        scaler_d.update()
-                        continue
-                    
-                    scaler_d.step(opt_d)
-                    scaler_d.update()
-                    scheduler_d.step()
-                    opt_d.zero_grad()
-                    
-                    # Detach cached features to prevent gradient graph conflicts
-                    # These will be reused in generator training for feature matching loss
-                    cached_mpd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_mpd_real_feats]
-                    cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
+                cached_mpd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_mpd_real_feats]
+                cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
             else:
-                # MPD - returns list of outputs and features
-                # SAVE the real features for later use in generator training
-                mpd_real_out, cached_mpd_real_feats = mpd(audio_real_d)
-                mpd_fake_out, mpd_fake_feats = mpd(audio_fake_d.detach())
-                # MPD returns list of outputs (one per period)
-                loss_mpd = 0.0
-                for real_out, fake_out in zip(mpd_real_out, mpd_fake_out):
-                    real_loss = torch.mean((real_out - 1.0) ** 2)
-                    fake_loss = torch.mean(fake_out ** 2)
-                    loss_mpd += (real_loss + fake_loss) / 2.0
-                loss_mpd = loss_mpd / len(mpd_real_out)
-                
-                # MSD - returns list of outputs and features
-                # SAVE the real features for later use in generator training
-                msd_real_out, cached_msd_real_feats = msd(audio_real_d)
-                msd_fake_out, msd_fake_feats = msd(audio_fake_d.detach())
-                # MSD returns list of outputs (one per scale)
-                loss_msd = 0.0
-                for real_out, fake_out in zip(msd_real_out, msd_fake_out):
-                    real_loss = torch.mean((real_out - 1.0) ** 2)
-                    fake_loss = torch.mean(fake_out ** 2)
-                    loss_msd += (real_loss + fake_loss) / 2.0
-                loss_msd = loss_msd / len(msd_real_out)
-                
-                loss_d = loss_mpd + loss_msd
-                (loss_d / accumulation_steps).backward()
-                
-                if (batch_idx + 1) % accumulation_steps == 0:
-                    max_grad_norm = cfg.get("max_grad_norm", 1.0)
-                    
-                    # Gradient clipping first, then check if still too high
-                    try:
-                        grad_norm_mpd_before = clip_gradients(mpd, max_grad_norm)
-                        grad_norm_msd_before = clip_gradients(msd, max_grad_norm)
-                        
-                        # Check for gradient explosion AFTER clipping
-                        explosion_threshold = max(100.0, max_grad_norm * 10)
-                        grad_norm_mpd_after, is_exploded_mpd = check_gradient_explosion(mpd, max_grad_norm=explosion_threshold, raise_on_error=False)
-                        grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
-                        
-                        if is_exploded_mpd or is_exploded_msd:
-                            logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
-                            opt_d.zero_grad()
-                            continue
-                    except RuntimeError as e:
-                        logger.error(f"Step {step}: {e}")
-                        opt_d.zero_grad()
-                        continue
-                    
-                    opt_d.step()
-                    scheduler_d.step()
-                    opt_d.zero_grad()
-                    
-                    # Detach cached features to prevent gradient graph conflicts
-                    # These will be reused in generator training for feature matching loss
-                    cached_mpd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_mpd_real_feats]
-                    cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
+                with torch.no_grad():
+                    _, cached_mpd_real_feats = mpd(audio_real_d)
+                    _, cached_msd_real_feats = msd(audio_real_d)
+                cached_mpd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_mpd_real_feats]
+                cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
             
             # ========== Train Generator ==========
             opt_g.zero_grad()
@@ -628,6 +644,11 @@ def main(cfg):
                 pad = mel_fake.new_zeros(mel_fake.size(0), mel_target_len - mel_fake.shape[1], mel_fake.size(2))
                 mel_fake = torch.cat([mel_fake, pad], dim=1)
             
+            mel_weight = lambda_mel
+            if mel_decay_start is not None and step > mel_decay_start:
+                decay_progress = (step - mel_decay_start) / max(mel_decay_duration, 1)
+                mel_weight = lambda_mel * (mel_decay_factor ** decay_progress)
+
             if use_amp:
                 with autocast(device_type='cuda'):
                     # Adversarial losses
@@ -687,7 +708,7 @@ def main(cfg):
                     loss_g = (
                         lambda_adv * (loss_adv_mpd + loss_adv_msd) +
                         lambda_fm * (loss_fm_mpd + loss_fm_msd) +
-                        lambda_mel * loss_mel
+                        mel_weight * loss_mel
                     )
                 
                 scaler_g.scale(loss_g / accumulation_steps).backward()
@@ -777,7 +798,7 @@ def main(cfg):
                 loss_g = (
                     lambda_adv * (loss_adv_mpd + loss_adv_msd) +
                     lambda_fm * (loss_fm_mpd + loss_fm_msd) +
-                    lambda_mel * loss_mel
+                    mel_weight * loss_mel
                 )
                 
                 (loss_g / accumulation_steps).backward()
@@ -905,7 +926,8 @@ def main(cfg):
                 training_metadata = {
                     "step": step,
                     "epoch": epoch,
-                    "config": cfg
+                    "max_audio_length": cfg.get("max_audio_length", max_audio_length),
+                    "max_mel_length": cfg.get("max_mel_length", max_mel_length)
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 
@@ -935,7 +957,8 @@ def main(cfg):
     training_metadata = {
         "step": step,
         "epoch": epoch if 'epoch' in locals() else 0,
-        "config": cfg
+        "max_audio_length": cfg.get("max_audio_length", max_audio_length),
+        "max_mel_length": cfg.get("max_mel_length", max_mel_length)
     }
     save_training_metadata(save_dir, model_name, training_metadata)
     logger.info(f"Training complete! Final model saved to: {final_path}")
@@ -959,8 +982,8 @@ if __name__ == "__main__":
             "n_mels": 128,
             "n_fft": 1024,
             "hop_length": 256,
-            "batch_size": 4,
-            "num_workers": 2,
+            "batch_size": 1,
+            "num_workers": 0,
             "drop_last": True,
             "lr_g": 2e-4,
             "lr_d": 2e-4,
@@ -968,17 +991,30 @@ if __name__ == "__main__":
             "warmup_steps": 1000,
             "max_steps": 100000,
             "max_epochs": 9999,
-            "gradient_accumulation_steps": 1,
+            "gradient_accumulation_steps": 8,
             "max_grad_norm": 1.0,
             "use_amp": True,
+            "use_compile": False,
             "lambda_mel": 45.0,
             "lambda_fm": 2.0,
             "lambda_adv": 1.0,
+            "mel_weight_decay_start": 10000,
+            "mel_weight_decay_duration": 50000,
+            "mel_weight_decay_factor": 0.5,
+            "discriminator_update_interval": 2,
+            "discriminator_lr_warmup_steps": 5000,
             "val_split": 0.1,
             "print_freq": 50,
             "checkpoint_freq": 1000,
             "val_freq": 500,
-            "seed": 42
+            "seed": 42,
+            "upsample_initial_channel": 256,
+            "resblock_kernel_sizes": [3, 5, 7],
+            "resblock_dilation_sizes": [[1, 2], [1, 2], [1, 2]],
+            "mpd_periods": [2, 3, 5],
+            "mpd_kernel_size": 3,
+            "mpd_stride": 2,
+            "msd_num_scales": 2
         }
         print(f"Config file not found, using defaults. Creating: {args.config}")
         os.makedirs(os.path.dirname(args.config), exist_ok=True)

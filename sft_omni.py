@@ -779,8 +779,7 @@ def main(cfg):
                 # Save training metadata
                 training_metadata = {
                     "step": step,
-                    "epoch": epoch,
-                    "config": cfg
+                    "epoch": epoch
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.checkpoint(step, model_path)
@@ -802,8 +801,7 @@ def main(cfg):
                 # Save final training metadata
                 training_metadata = {
                     "step": step,
-                    "epoch": epoch,
-                    "config": cfg
+                    "epoch": epoch
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {save_dir}")
@@ -912,8 +910,7 @@ def main(cfg):
         # Save training metadata
         training_metadata = {
             "step": step,
-            "epoch": epoch,
-            "config": cfg
+            "epoch": epoch
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")

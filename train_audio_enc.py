@@ -78,7 +78,6 @@ def main(cfg):
             "vocab_size": vocab_size_dynamic,
             "max_text_len": max_text_len_dynamic,
             "max_mel_length": max_mel_length_dynamic,
-            "config": cfg
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         print("✓ Saved dataset statistics to metadata (will be reused on next run)")
@@ -461,7 +460,6 @@ def main(cfg):
                     "vocab_size": vocab_size_dynamic,
                     "max_text_len": max_text_len_dynamic,
                     "max_mel_length": max_mel_length_dynamic,
-                    "config": cfg
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.checkpoint(step, model_path)
@@ -551,7 +549,6 @@ def main(cfg):
                     "vocab_size": vocab_size_dynamic,
                     "max_text_len": max_text_len_dynamic,
                     "max_mel_length": max_mel_length_dynamic,
-                    "config": cfg
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {save_dir}")
@@ -640,7 +637,6 @@ def main(cfg):
             "vocab_size": vocab_size_dynamic,
             "max_text_len": max_text_len_dynamic,
             "max_mel_length": max_mel_length_dynamic,
-            "config": cfg
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
