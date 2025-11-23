@@ -325,6 +325,7 @@ class HiFiGANVocoder(nn.Module):
         
         # Compilation support
         self._compiled = False
+        self._compiled_forward = None
         
         # Load pretrained weights if available
         if checkpoint_path and os.path.exists(checkpoint_path):
@@ -335,36 +336,32 @@ class HiFiGANVocoder(nn.Module):
             self._apply_compilation()
     
     def _apply_compilation(self) -> None:
-        """
-        Apply torch.compile() to the model for 10-20% speedup.
-        Requires PyTorch 2.0+.
-        Uses cudagraphs backend to avoid Triton dependency.
-        """
+        """Compile the entire forward graph once to avoid per-layer recompilations."""
+        if self._compiled:
+            return
         if not hasattr(torch, 'compile'):
             warnings.warn("torch.compile() not available. Requires PyTorch 2.0+. Skipping compilation.")
             return
-        
         try:
-            # Compile convolutional layers
-            # Using 'cudagraphs' backend to avoid Triton/LLVM compatibility issues
-            # Provides 10-20% speedup without requiring Triton compilation
-            self.conv_pre = torch.compile(self.conv_pre, backend='cudagraphs', mode='default', fullgraph=False)
-            self.conv_post = torch.compile(self.conv_post, backend='cudagraphs', mode='default', fullgraph=False)
-            
-            # Compile upsampling layers
-            for i in range(len(self.ups)):
-                self.ups[i] = torch.compile(self.ups[i], backend='cudagraphs', mode='default', fullgraph=False)
-            
-            # Compile residual blocks
-            for i in range(len(self.resblocks)):
-                self.resblocks[i] = torch.compile(self.resblocks[i], backend='cudagraphs', mode='default', fullgraph=False)
-            
+            # Compile the bound _forward_impl method so guard sets stay stable.
+            self._compiled_forward = torch.compile(
+                self._forward_impl,
+                backend='inductor',
+                mode='default',
+                fullgraph=False
+            )
             self._compiled = True
-            print(f"✓ HiFiGAN Vocoder compiled successfully with torch.compile()")
+            print("✓ HiFi-GAN Vocoder compiled successfully with torch.compile()")
         except Exception as e:
-            warnings.warn(f"Failed to compile HiFiGAN Vocoder: {e}. Continuing without compilation.")
+            self._compiled_forward = None
+            warnings.warn(f"Failed to compile HiFi-GAN Vocoder: {e}. Continuing without compilation.")
     
     def forward(self, mel: torch.Tensor, target_length: Optional[int] = None) -> torch.Tensor:
+        if self._compiled_forward is not None:
+            return self._compiled_forward(mel, target_length)
+        return self._forward_impl(mel, target_length)
+
+    def _forward_impl(self, mel: torch.Tensor, target_length: Optional[int] = None) -> torch.Tensor:
         """
         Convert mel spectrogram to audio waveform.
         
