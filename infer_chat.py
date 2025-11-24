@@ -766,15 +766,10 @@ class AudioGenerator:
             if codes.shape[1] > 1:
                 codes = codes[:, 1:, :]
             
-            # Decode to mel
-            mel_frames = []
-            for t in range(codes.shape[1]):
-                frame_codes = codes[:, t:t+1, :]
-                frame_codes_flat = frame_codes.squeeze(0).squeeze(0)
-                mel_frame = self.rvq.decode(frame_codes_flat.unsqueeze(0))
-                mel_frames.append(mel_frame.squeeze(0))
-            
-            mel = torch.stack(mel_frames, dim=0)
+            # Decode to mel - batch decode all frames at once (more accurate and efficient)
+            # codes shape: (B, T, 2) where B=1, T=num_frames, 2=codebooks
+            mel = self.rvq.decode(codes)  # (B, T, 128)
+            mel = mel.squeeze(0)  # (T, 128) - remove batch dimension
             
             # Normalize
             mel_min = mel.min()

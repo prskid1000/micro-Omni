@@ -123,8 +123,37 @@ class RVQ(nn.Module):
         """
         Decode codebook indices back to mel spectrogram.
         
+        Supports both single frame and batched frames:
+        - Single frame: idxs (B, codebooks) -> returns (B, 128)
+        - Batched frames: idxs (B, T, codebooks) -> returns (B, T, 128)
+        
         Args:
-            idxs: (B, C) codebook indices
+            idxs: (B, codebooks) or (B, T, codebooks) codebook indices
+        
+        Returns:
+            mel: (B, 128) or (B, T, 128) reconstructed mel spectrogram
+        """
+        # Handle both single frame (B, C) and batched (B, T, C)
+        if idxs.dim() == 2:
+            # Single frame: (B, C)
+            return self._decode_single(idxs)
+        elif idxs.dim() == 3:
+            # Batched frames: (B, T, C) -> decode all at once
+            B, T, C = idxs.shape
+            # Reshape to (B*T, C) for batch processing
+            idxs_flat = idxs.view(B * T, C)
+            mel_flat = self._decode_single(idxs_flat)  # (B*T, 128)
+            # Reshape back to (B, T, 128)
+            return mel_flat.view(B, T, 128)
+        else:
+            raise ValueError(f"Expected idxs shape (B, C) or (B, T, C), got {idxs.shape}")
+    
+    def _decode_single(self, idxs: torch.Tensor) -> torch.Tensor:
+        """
+        Internal method to decode single frame(s) - handles (B, codebooks) input.
+        
+        Args:
+            idxs: (B, codebooks) codebook indices
         
         Returns:
             mel: (B, 128) reconstructed mel spectrogram
