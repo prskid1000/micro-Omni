@@ -43,8 +43,7 @@
 ├── sft_omni.py              # Stage E: Multimodal SFT
 │
 ├── infer_chat.py            # Inference interface
-├── test_all_media.py        # Test multimodal inputs
-│
+
 ├── data/                    # Training data (create)
 │   ├── text/                # Text corpus files
 │   ├── images/              # Image manifest files

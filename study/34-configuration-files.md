@@ -278,8 +278,8 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **Check your dataset (optional):**
 
 ```bash
-# Analyze actual mel lengths in your dataset (for reference)
-python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
+# (script removed) Use `omni.utils` helpers instead, e.g.:
+# python -c "from omni import utils; print(utils.calculate_max_mel_length_from_asr_csv('data/audio/production_asr.csv'))"
 ```
 
 ### OCR Training (`train_ocr.py`)

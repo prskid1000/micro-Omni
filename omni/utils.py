@@ -1206,7 +1206,7 @@ def calculate_max_mel_length_from_asr_csv(csv_path, sr=16000, n_mels=128, sample
         if total > 0:
             print(f"  Calculated mel lengths: {total} files processed")
     
-    # Round up to nearest 256 for better memory alignment (like check_mel_lengths.py)
+    # Round up to nearest 256 for better memory alignment
     if max_len > 0:
         max_len = int(np.ceil(max_len / 256) * 256)
     

@@ -17,3 +17,7 @@ requests
 av
 safetensors
 transformers
+python-Levenshtein
+tqdm
+pesq
+pystoi

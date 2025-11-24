@@ -402,7 +402,9 @@ audio_encoder.load_state_dict(checkpoint['enc'])
 
 ```bash
 # Analyze actual mel lengths
-python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv
+# (script removed) Use `omni.utils` dataset analysis helpers instead,
+# e.g. `omni.utils.calculate_max_mel_length_from_asr_csv()` or
+# `omni.utils.analyze_asr_dataset()` to compute recommended max lengths.
 ```
 
 ---

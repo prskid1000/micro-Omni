@@ -1,19 +1,23 @@
 """
-Simple test script to verify Talker (TTS) is working properly.
-Loads a checkpoint, processes text/mel, and displays the output codes.
+Complete test script to validate Talker (TTS) accuracy.
+Measures codec quality, autoregressive prediction accuracy, and mel reconstruction.
 """
 
 import torch
+import torch.nn as nn
 import json
 import os
 import argparse
 import random
+import numpy as np
 from omni.talker import TalkerTiny
 from omni.codec import RVQ
 from omni.utils import TTSDataset, find_checkpoint, strip_orig_mod
+from tqdm import tqdm
 
-def load_model(checkpoint_dir, device="cuda"):
-    """Load Talker model from checkpoint."""
+
+def load_model_and_codec(checkpoint_dir, device="cuda"):
+    """Load Talker model and RVQ codec from checkpoint."""
     checkpoint_path, checkpoint = find_checkpoint(checkpoint_dir, "talker.pt", "talker_step_", device)
     if checkpoint is None:
         raise FileNotFoundError(f"Checkpoint not found in: {checkpoint_dir}")
@@ -34,18 +38,24 @@ def load_model(checkpoint_dir, device="cuda"):
                 "n_layers": 4,
                 "n_heads": 4,
                 "d_ff": 1024,
-                "codebooks": 8,
-                "codebook_size": 1024,
+                "codebooks": 2,
+                "codebook_size": 128,
                 "dropout": 0.1,
                 "sample_rate": 16000,
                 "n_mels": 128,
                 "frame_ms": 80,
+                "use_gqa": False,
+                "use_swiglu": True,
+                "rope_theta": 10000.0,
             }
+    
+    codebooks = cfg.get("codebooks", 2)
+    codebook_size = cfg.get("codebook_size", 128)
     
     # Initialize models
     rvq = RVQ(
-        codebooks=cfg.get("codebooks", 8),
-        codebook_size=cfg.get("codebook_size", 1024),
+        codebooks=codebooks,
+        codebook_size=codebook_size,
         d=64,
         compile_model=False
     ).to(device)
@@ -55,8 +65,8 @@ def load_model(checkpoint_dir, device="cuda"):
         n_layers=cfg.get("n_layers", 4),
         n_heads=cfg.get("n_heads", 4),
         d_ff=cfg.get("d_ff", 1024),
-        codebooks=cfg.get("codebooks", 8),
-        codebook_size=cfg.get("codebook_size", 1024),
+        codebooks=codebooks,
+        codebook_size=codebook_size,
         dropout=cfg.get("dropout", 0.1),
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
@@ -64,197 +74,437 @@ def load_model(checkpoint_dir, device="cuda"):
         compile_model=False
     ).to(device)
     
-    # Load weights (strip _orig_mod, matches training script behavior)
+    # Load weights
     if "rvq" in checkpoint and "talker" in checkpoint:
         rvq_state = strip_orig_mod(checkpoint["rvq"])
         talker_state = strip_orig_mod(checkpoint["talker"])
         rvq.load_state_dict(rvq_state, strict=False)
         talker.load_state_dict(talker_state, strict=False)
+        print("✓ Loaded RVQ and Talker from checkpoint")
     elif "model" in checkpoint:
         # Try to split model state dict
         model_state = strip_orig_mod(checkpoint["model"])
-        # This is tricky - might need to filter by prefix
         rvq_state = {k.replace("rvq.", ""): v for k, v in model_state.items() if k.startswith("rvq.")}
         talker_state = {k.replace("talker.", ""): v for k, v in model_state.items() if k.startswith("talker.")}
         if rvq_state:
             rvq.load_state_dict(rvq_state, strict=False)
         if talker_state:
             talker.load_state_dict(talker_state, strict=False)
+        print("✓ Loaded from combined model state")
     else:
         # Try loading as-is
         state_dict = strip_orig_mod(checkpoint)
-        # Try to load what we can
         try:
             rvq.load_state_dict({k: v for k, v in state_dict.items() if "rvq" in k or "codebook" in k}, strict=False)
+            talker.load_state_dict({k: v for k, v in state_dict.items() if "talker" in k}, strict=False)
         except:
-            pass
-        try:
-            talker.load_state_dict({k: v for k, v in state_dict.items() if "talker" in k or ("decoder" in k and "rvq" not in k)}, strict=False)
-        except:
-            pass
+            print("⚠️  Warning: Could not load some weights")
     
     rvq.eval()
     talker.eval()
+    
     print("✓ Models loaded successfully")
+    print(f"  Codebooks: {codebooks}")
+    print(f"  Codebook size: {codebook_size}")
+    print(f"  Model dimension: {cfg.get('d_model', 256)}")
     
     return rvq, talker, cfg
 
-def test_talker(rvq, talker, mel, device="cuda"):
-    """Run Talker forward pass."""
+
+def compute_codec_metrics(rvq, mel, device="cuda"):
+    """
+    Evaluate RVQ codec quality.
+    
+    Metrics:
+    - Reconstruction error (MSE, MAE)
+    - Codebook utilization
+    - Compression ratio
+    """
     rvq.eval()
-    talker.eval()
     mel = mel.to(device)
     
     with torch.no_grad():
-        # Encode mel to codes
+        # Encode to discrete codes
         codes = rvq.encode(mel)  # (B, T, codebooks)
         
-        # Decode codes to mel (for testing)
-        mel_recon = rvq.decode(codes)  # (B, T, d)
+        # Decode back to mel
+        mel_recon = rvq.decode(codes)  # (B, T, n_mels)
         
-        # Talker forward pass (generate codes from mel)
-        # This is a simplified test - actual usage would be text-to-codes
-        logits = talker(mel_recon)  # (B, T, codebooks, codebook_size)
-    
-    return codes, mel_recon, logits
+        # Reconstruction errors
+        mse = torch.mean((mel - mel_recon) ** 2).item()
+        mae = torch.mean(torch.abs(mel - mel_recon)).item()
+        
+        # Spectral convergence (normalized reconstruction error)
+        numerator = torch.norm(mel - mel_recon, p='fro')
+        denominator = torch.norm(mel, p='fro')
+        spec_convergence = (numerator / denominator).item() if denominator > 0 else float('inf')
+        
+        # Codebook utilization (how many unique codes are used)
+        unique_codes_per_book = []
+        for book_idx in range(codes.shape[-1]):
+            unique_codes = torch.unique(codes[:, :, book_idx]).numel()
+            unique_codes_per_book.append(unique_codes)
+        
+        return {
+            'mse': mse,
+            'mae': mae,
+            'spec_convergence': spec_convergence,
+            'codes': codes,
+            'mel_recon': mel_recon,
+            'unique_codes_per_book': unique_codes_per_book,
+        }
 
-def get_random_mel_from_dataset(cfg):
-    """Get a random mel spectrogram from the dataset."""
-    csv_path = cfg.get("tts_csv", "data/audio/production_tts.csv")
-    
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"TTS CSV not found: {csv_path}")
-    
-    # Create dataset with shuffling
-    dataset = TTSDataset(
-        csv_path=csv_path,
-        sr=cfg.get("sample_rate", 16000),
-        n_mels=cfg.get("n_mels", 128),
-        frame_ms=cfg.get("frame_ms", 80),
-        cfg=cfg,
-        shuffle_buffer_size=10000,
-        seed=random.randint(0, 1000000),
-        skip_samples=0
-    )
-    
-    # Get first sample
-    try:
-        iterator = iter(dataset)
-        mel = next(iterator)
-        return mel.unsqueeze(0)  # Add batch dimension
-    except StopIteration:
-        raise ValueError("Dataset is empty")
 
-def evaluate_talker(rvq, talker, cfg, device="cuda", num_samples=100):
-    """Evaluate Talker on multiple samples and compute metrics."""
+def compute_ar_accuracy(talker, codes, device="cuda"):
+    """
+    Evaluate autoregressive prediction accuracy.
+    
+    Measures how well Talker predicts next codes given previous codes.
+    """
+    talker.eval()
+    codes = codes.to(device)  # (B, T, codebooks)
+    
+    with torch.no_grad():
+        # Shift codes for teacher forcing
+        # prev: codes shifted right by 1, with 0 at beginning
+        prev = torch.roll(codes, 1, dims=1)
+        prev[:, 0, :] = 0  # BOS
+        
+        # Forward pass
+        base_logits, res_logits = talker(prev)  # Each: (B, T, codebook_size)
+        
+        # Compute accuracy for each codebook
+        base_preds = base_logits.argmax(dim=-1)  # (B, T)
+        res_preds = res_logits.argmax(dim=-1)    # (B, T)
+        
+        # Exclude first frame (BOS) from accuracy calculation
+        base_acc = (base_preds[:, 1:] == codes[:, 1:, 0]).float().mean().item()
+        res_acc = (res_preds[:, 1:] == codes[:, 1:, 1]).float().mean().item()
+        
+        # Top-5 accuracy
+        base_top5_correct = 0
+        res_top5_correct = 0
+        total_frames = 0
+        
+        for b in range(codes.shape[0]):
+            for t in range(1, codes.shape[1]):  # Skip BOS
+                # Base codebook
+                top5_base = base_logits[b, t].topk(5).indices
+                if codes[b, t, 0] in top5_base:
+                    base_top5_correct += 1
+                
+                # Residual codebook
+                top5_res = res_logits[b, t].topk(5).indices
+                if codes[b, t, 1] in top5_res:
+                    res_top5_correct += 1
+                
+                total_frames += 1
+        
+        base_top5_acc = base_top5_correct / total_frames if total_frames > 0 else 0.0
+        res_top5_acc = res_top5_correct / total_frames if total_frames > 0 else 0.0
+        
+        # Cross-entropy loss
+        loss_fn = nn.CrossEntropyLoss(reduction='mean')
+        base_loss = loss_fn(base_logits[:, :-1, :].reshape(-1, base_logits.size(-1)), 
+                           codes[:, 1:, 0].reshape(-1)).item()
+        res_loss = loss_fn(res_logits[:, :-1, :].reshape(-1, res_logits.size(-1)),
+                          codes[:, 1:, 1].reshape(-1)).item()
+        
+        return {
+            'base_accuracy': base_acc,
+            'res_accuracy': res_acc,
+            'base_top5_accuracy': base_top5_acc,
+            'res_top5_accuracy': res_top5_acc,
+            'base_loss': base_loss,
+            'res_loss': res_loss,
+            'total_loss': base_loss + res_loss,
+        }
+
+
+def evaluate_tts_quality(rvq, talker, cfg, device="cuda", num_samples=100, verbose=True):
+    """
+    Comprehensive TTS evaluation.
+    
+    Metrics:
+    - Codec reconstruction quality
+    - Autoregressive prediction accuracy
+    - Codebook utilization
+    """
     rvq.eval()
     talker.eval()
     
-    csv_path = cfg.get("train_csv", "data/tts/production_tts.csv")
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"TTS CSV not found: {csv_path}")
+    tts_csv = cfg.get("tts_csv", "data/audio/production_tts.csv")
+    if not os.path.exists(tts_csv):
+        raise FileNotFoundError(f"TTS CSV not found: {tts_csv}")
     
     # Create dataset
     dataset = TTSDataset(
-        csv_path=csv_path,
+        csv_path=tts_csv,
         sr=cfg.get("sample_rate", 16000),
         n_mels=cfg.get("n_mels", 128),
         frame_ms=cfg.get("frame_ms", 80),
         cfg=cfg,
         shuffle_buffer_size=10000,
-        seed=random.randint(0, 1000000),
+        seed=42,  # Fixed seed for reproducibility
         skip_samples=0
     )
     
-    iterator = iter(dataset)
-    total_recon_error = 0.0
-    num_valid_samples = 0
+    # Accumulators
+    total_mse = 0.0
+    total_mae = 0.0
+    total_spec_conv = 0.0
+    total_base_acc = 0.0
+    total_res_acc = 0.0
+    total_base_top5 = 0.0
+    total_res_top5 = 0.0
+    total_base_loss = 0.0
+    total_res_loss = 0.0
+    all_unique_codes = [[] for _ in range(cfg.get("codebooks", 2))]
+    num_valid = 0
     
-    print(f"\nEvaluating on {num_samples} samples...")
+    if verbose:
+        print(f"\nEvaluating TTS quality on {num_samples} samples...")
+        iterator = tqdm(dataset, total=num_samples, desc="Processing")
+    else:
+        iterator = iter(dataset)
     
     with torch.no_grad():
-        for i in range(num_samples):
-            try:
-                mel = next(iterator)
-                mel = mel.unsqueeze(0).to(device)
-                
-                # Forward pass
-                codes, mel_recon, logits = test_talker(rvq, talker, mel, device)
-                
-                # Compute reconstruction error
-                recon_error = torch.mean((mel - mel_recon) ** 2).item()
-                total_recon_error += recon_error
-                num_valid_samples += 1
-                
-                if (i + 1) % 10 == 0:
-                    print(f"  Processed {i + 1}/{num_samples} samples...", end='\r')
-                    
-            except StopIteration:
-                print(f"\n⚠️  Dataset exhausted after {i} samples")
+        for i, mel in enumerate(iterator):
+            if i >= num_samples:
                 break
+            
+            try:
+                mel = mel.unsqueeze(0).to(device)  # Add batch dimension
+                
+                # Evaluate codec
+                codec_metrics = compute_codec_metrics(rvq, mel, device)
+                
+                # Evaluate AR model
+                ar_metrics = compute_ar_accuracy(talker, codec_metrics['codes'], device)
+                
+                # Accumulate metrics
+                total_mse += codec_metrics['mse']
+                total_mae += codec_metrics['mae']
+                total_spec_conv += codec_metrics['spec_convergence']
+                total_base_acc += ar_metrics['base_accuracy']
+                total_res_acc += ar_metrics['res_accuracy']
+                total_base_top5 += ar_metrics['base_top5_accuracy']
+                total_res_top5 += ar_metrics['res_top5_accuracy']
+                total_base_loss += ar_metrics['base_loss']
+                total_res_loss += ar_metrics['res_loss']
+                
+                # Track unique codes
+                for book_idx, unique_count in enumerate(codec_metrics['unique_codes_per_book']):
+                    all_unique_codes[book_idx].append(unique_count)
+                
+                num_valid += 1
+                
             except Exception as e:
-                print(f"\n⚠️  Error processing sample {i}: {e}")
+                if verbose:
+                    print(f"\n⚠️  Error processing sample {i}: {e}")
                 continue
     
-    print()  # New line after progress
+    if num_valid == 0:
+        raise ValueError("No valid samples processed!")
     
-    # Calculate metrics
-    avg_recon_error = total_recon_error / num_valid_samples if num_valid_samples > 0 else float('inf')
+    # Calculate averages
+    avg_mse = total_mse / num_valid
+    avg_mae = total_mae / num_valid
+    avg_spec_conv = total_spec_conv / num_valid
+    avg_base_acc = total_base_acc / num_valid
+    avg_res_acc = total_res_acc / num_valid
+    avg_base_top5 = total_base_top5 / num_valid
+    avg_res_top5 = total_res_top5 / num_valid
+    avg_base_loss = total_base_loss / num_valid
+    avg_res_loss = total_res_loss / num_valid
+    
+    # Codebook utilization statistics
+    codebook_size = cfg.get("codebook_size", 128)
+    avg_unique_per_book = [np.mean(codes) for codes in all_unique_codes]
+    utilization_per_book = [avg / codebook_size for avg in avg_unique_per_book]
     
     return {
-        'avg_reconstruction_error': avg_recon_error,
-        'num_samples': num_valid_samples
+        'num_samples': num_valid,
+        # Codec metrics
+        'reconstruction_mse': avg_mse,
+        'reconstruction_mae': avg_mae,
+        'spectral_convergence': avg_spec_conv,
+        # AR metrics
+        'base_accuracy': avg_base_acc,
+        'res_accuracy': avg_res_acc,
+        'base_top5_accuracy': avg_base_top5,
+        'res_top5_accuracy': avg_res_top5,
+        'base_loss': avg_base_loss,
+        'res_loss': avg_res_loss,
+        'total_loss': avg_base_loss + avg_res_loss,
+        # Codebook metrics
+        'avg_unique_codes_per_book': avg_unique_per_book,
+        'codebook_utilization': utilization_per_book,
     }
 
+
+def print_results(metrics, cfg):
+    """Pretty print evaluation results."""
+    print(f"\n{'='*70}")
+    print("TALKER (TTS) EVALUATION RESULTS")
+    print(f"{'='*70}")
+    
+    print(f"\nSamples Evaluated: {metrics['num_samples']}")
+    
+    # Codec quality
+    print(f"\nCODEC RECONSTRUCTION QUALITY:")
+    print(f"  MSE: {metrics['reconstruction_mse']:.6f}")
+    print(f"  MAE: {metrics['reconstruction_mae']:.6f}")
+    print(f"  Spectral Convergence: {metrics['spectral_convergence']:.6f}")
+    
+    # AR prediction accuracy
+    print(f"\nAUTOREGRESSIVE PREDICTION ACCURACY:")
+    print(f"  Base Codebook:")
+    print(f"    Top-1 Accuracy: {metrics['base_accuracy']*100:.2f}%")
+    print(f"    Top-5 Accuracy: {metrics['base_top5_accuracy']*100:.2f}%")
+    print(f"    Cross-Entropy Loss: {metrics['base_loss']:.4f}")
+    print(f"  Residual Codebook:")
+    print(f"    Top-1 Accuracy: {metrics['res_accuracy']*100:.2f}%")
+    print(f"    Top-5 Accuracy: {metrics['res_top5_accuracy']*100:.2f}%")
+    print(f"    Cross-Entropy Loss: {metrics['res_loss']:.4f}")
+    print(f"  Total Loss: {metrics['total_loss']:.4f}")
+    
+    # Codebook utilization
+    print(f"\nCODEBOOK UTILIZATION:")
+    codebook_size = cfg.get("codebook_size", 128)
+    for i, (unique, util) in enumerate(zip(metrics['avg_unique_codes_per_book'], 
+                                           metrics['codebook_utilization'])):
+        print(f"  Codebook {i}: {unique:.1f}/{codebook_size} codes used ({util*100:.1f}%)")
+    
+    # Interpretation
+    print(f"\n{'='*70}")
+    print("INTERPRETATION:")
+    print(f"{'='*70}")
+    
+    # Codec quality assessment
+    mse = metrics['reconstruction_mse']
+    if mse < 0.001:
+        codec_status = "✓ EXCELLENT - Near-perfect reconstruction"
+    elif mse < 0.01:
+        codec_status = "✓ GOOD - High quality reconstruction"
+    elif mse < 0.1:
+        codec_status = "⚠ ACCEPTABLE - Moderate quality"
+    else:
+        codec_status = "✗ POOR - Needs more training"
+    
+    # AR accuracy assessment
+    base_acc = metrics['base_accuracy']
+    if base_acc > 0.70:
+        ar_status = "✓ EXCELLENT - Strong autoregressive modeling"
+    elif base_acc > 0.50:
+        ar_status = "✓ GOOD - Reasonable prediction accuracy"
+    elif base_acc > 0.30:
+        ar_status = "⚠ ACCEPTABLE - Model is learning patterns"
+    else:
+        ar_status = "✗ POOR - Needs significant training"
+    
+    # Codebook utilization assessment
+    avg_util = np.mean(metrics['codebook_utilization'])
+    if avg_util > 0.7:
+        util_status = "✓ EXCELLENT - Good codebook diversity"
+    elif avg_util > 0.4:
+        util_status = "✓ GOOD - Reasonable codebook usage"
+    elif avg_util > 0.2:
+        util_status = "⚠ ACCEPTABLE - Some codebook collapse"
+    else:
+        util_status = "✗ POOR - Severe codebook collapse"
+    
+    print(f"Codec Quality: {codec_status}")
+    print(f"AR Prediction: {ar_status}")
+    print(f"Codebook Usage: {util_status}")
+    
+    # Overall assessment
+    print(f"\n{'='*70}")
+    if mse < 0.01 and base_acc > 0.50 and avg_util > 0.4:
+        print("✓ Talker is working well!")
+        print("  Ready for TTS generation with good quality.")
+    elif mse < 0.1 and base_acc > 0.30:
+        print("⚠ Talker is learning but could improve.")
+        print("  Consider training longer or adjusting hyperparameters.")
+    else:
+        print("✗ Talker needs more training.")
+        print("  Current quality is not sufficient for production use.")
+    
+    print(f"{'='*70}")
+
+
+def test_single_mel(rvq, talker, mel, cfg, device="cuda"):
+    """Test on a single mel spectrogram."""
+    print(f"\nTesting single mel spectrogram...")
+    print(f"  Input shape: {mel.shape}")
+    
+    mel = mel.unsqueeze(0).to(device)
+    
+    # Evaluate codec
+    codec_metrics = compute_codec_metrics(rvq, mel, device)
+    
+    # Evaluate AR model
+    ar_metrics = compute_ar_accuracy(talker, codec_metrics['codes'], device)
+    
+    print(f"\nCodec Metrics:")
+    print(f"  MSE: {codec_metrics['mse']:.6f}")
+    print(f"  MAE: {codec_metrics['mae']:.6f}")
+    print(f"  Codes shape: {codec_metrics['codes'].shape}")
+    print(f"  Unique codes per book: {codec_metrics['unique_codes_per_book']}")
+    
+    print(f"\nAR Metrics:")
+    print(f"  Base accuracy: {ar_metrics['base_accuracy']*100:.2f}%")
+    print(f"  Res accuracy: {ar_metrics['res_accuracy']*100:.2f}%")
+    print(f"  Total loss: {ar_metrics['total_loss']:.4f}")
+    
+    return codec_metrics, ar_metrics
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Test Talker (TTS)")
+    parser = argparse.ArgumentParser(description="Test Talker (TTS) with accuracy metrics")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/talker_tiny",
                        help="Path to Talker checkpoint directory")
     parser.add_argument("--num_samples", type=int, default=100,
                        help="Number of samples to evaluate (default: 100)")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                        help="Device to use (cuda/cpu)")
+    parser.add_argument("--quick", action="store_true",
+                       help="Quick test with 10 samples")
     args = parser.parse_args()
     
-    print("=" * 60)
-    print("Talker (TTS) Test")
-    print("=" * 60)
+    if args.quick:
+        args.num_samples = 10
+    
+    print("=" * 70)
+    print("TALKER (TTS) ACCURACY TEST")
+    print("=" * 70)
     
     # Load model
     try:
-        rvq, talker, cfg = load_model(args.checkpoint, args.device)
+        rvq, talker, cfg = load_model_and_codec(args.checkpoint, args.device)
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"✗ Error loading model: {e}")
         import traceback
         traceback.print_exc()
         return
     
-    # Evaluate on multiple samples
+    # Evaluate on dataset
     try:
-        metrics = evaluate_talker(rvq, talker, cfg, args.device, args.num_samples)
+        metrics = evaluate_tts_quality(
+            rvq, talker, cfg,
+            device=args.device,
+            num_samples=args.num_samples,
+            verbose=True
+        )
         
-        print(f"\n{'=' * 60}")
-        print("EVALUATION RESULTS:")
-        print(f"{'=' * 60}")
-        print(f"Samples evaluated: {metrics['num_samples']}")
-        print(f"Average Reconstruction Error (MSE): {metrics['avg_reconstruction_error']:.6f}")
-        print(f"{'=' * 60}")
+        print_results(metrics, cfg)
         
-        # Interpretation
-        if metrics['avg_reconstruction_error'] < 0.01:
-            print("✓ Excellent reconstruction quality!")
-        elif metrics['avg_reconstruction_error'] < 0.1:
-            print("✓ Good reconstruction quality")
-        elif metrics['avg_reconstruction_error'] < 0.5:
-            print("⚠️  Moderate quality - model may need more training")
-        else:
-            print("⚠️  Poor quality - model needs significant training")
-            
     except Exception as e:
-        print(f"❌ Error during evaluation: {e}")
+        print(f"✗ Error during evaluation: {e}")
         import traceback
         traceback.print_exc()
+        return
+
 
 if __name__ == "__main__":
     main()
-

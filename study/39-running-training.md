@@ -56,7 +56,7 @@ python train_audio_enc.py --config configs/audio_enc_tiny.json
 - `max_mel_length` is **auto-calculated** from your dataset (95th percentile)
 - No manual configuration needed - training script analyzes dataset automatically
 - Can override with `max_mel_length` or adjust `max_mel_length_percentile` if needed
-- Optional: Check your dataset: `python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv`
+- Optional: Check your dataset using `omni.utils` analysis helpers (e.g. `calculate_max_mel_length_from_asr_csv`) instead of a standalone script.
 
 ### Stage C: Vision Encoder
 

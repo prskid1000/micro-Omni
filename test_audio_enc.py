@@ -1,9 +1,10 @@
 """
-Simple test script to verify Audio Encoder (ASR) is working properly.
-Loads a checkpoint, processes an audio file, and displays the transcribed text.
+Complete test script to validate Audio Encoder (ASR) accuracy.
+Measures CER, WER, and provides detailed transcription examples.
 """
 
 import torch
+import torch.nn as nn
 import json
 import os
 import argparse
@@ -11,9 +12,96 @@ import random
 import torchaudio
 from omni.audio_encoder import AudioEncoderTiny
 from omni.utils import ASRDataset, load_audio, find_checkpoint, strip_orig_mod
+from tqdm import tqdm
 
-def load_model(checkpoint_dir, device="cuda"):
-    """Load Audio Encoder model from checkpoint."""
+try:
+    import Levenshtein
+    HAS_LEVENSHTEIN = True
+except ImportError:
+    HAS_LEVENSHTEIN = False
+    print("⚠️  Warning: python-Levenshtein not installed. Install with: pip install python-Levenshtein")
+    print("   Falling back to basic error rate calculation.")
+
+
+def compute_cer_basic(pred, target):
+    """Basic Character Error Rate without Levenshtein."""
+    if len(target) == 0:
+        return 0.0 if len(pred) == 0 else 1.0
+    
+    # Simple character-level comparison
+    matches = sum(1 for p, t in zip(pred, target) if p == t)
+    max_len = max(len(pred), len(target))
+    return 1.0 - (matches / max_len)
+
+
+def compute_wer_basic(pred, target):
+    """Basic Word Error Rate without Levenshtein."""
+    pred_words = pred.split()
+    target_words = target.split()
+    
+    if len(target_words) == 0:
+        return 0.0 if len(pred_words) == 0 else 1.0
+    
+    # Simple word-level comparison
+    matches = sum(1 for p, t in zip(pred_words, target_words) if p == t)
+    max_len = max(len(pred_words), len(target_words))
+    return 1.0 - (matches / max_len)
+
+
+def compute_cer(pred, target):
+    """Character Error Rate using Levenshtein distance."""
+    if HAS_LEVENSHTEIN:
+        return Levenshtein.distance(pred, target) / max(len(target), 1)
+    else:
+        return compute_cer_basic(pred, target)
+
+
+def compute_wer(pred, target):
+    """Word Error Rate using Levenshtein distance."""
+    if HAS_LEVENSHTEIN:
+        pred_words = pred.split()
+        target_words = target.split()
+        return Levenshtein.distance(pred_words, target_words) / max(len(target_words), 1)
+    else:
+        return compute_wer_basic(pred, target)
+
+
+def decode_ctc_greedy(logits, idx_to_char, blank_idx=0):
+    """
+    Greedy CTC decoder (argmax at each timestep).
+    
+    Args:
+        logits: (B, T, vocab_size) - model outputs
+        idx_to_char: dict mapping indices to characters
+        blank_idx: index of blank token (default: 0)
+    
+    Returns:
+        List of decoded strings
+    """
+    probs = torch.softmax(logits, dim=-1)
+    preds = probs.argmax(dim=-1)  # (B, T)
+    
+    decoded = []
+    for pred_seq in preds:
+        chars = []
+        prev = None
+        for idx in pred_seq:
+            idx = idx.item()
+            # Skip blanks and repeated characters (CTC collapsing)
+            if idx != blank_idx and idx != prev:
+                if idx in idx_to_char:
+                    char = idx_to_char[idx]
+                    # Skip special tokens
+                    if char not in ['<BLANK>', '<UNK>']:
+                        chars.append(char)
+            prev = idx
+        decoded.append(''.join(chars))
+    
+    return decoded
+
+
+def load_model_and_head(checkpoint_dir, device="cuda"):
+    """Load Audio Encoder model and CTC head from checkpoint."""
     checkpoint_path, checkpoint = find_checkpoint(checkpoint_dir, "audio_enc.pt", "audio_enc_step_", device)
     if checkpoint is None:
         raise FileNotFoundError(f"Checkpoint not found in: {checkpoint_dir}")
@@ -51,7 +139,7 @@ def load_model(checkpoint_dir, device="cuda"):
         compile_model=False
     ).to(device)
     
-    # Load weights
+    # Load model weights
     if "enc" in checkpoint:
         state_dict = checkpoint["enc"]
     elif "model" in checkpoint:
@@ -59,21 +147,210 @@ def load_model(checkpoint_dir, device="cuda"):
     else:
         state_dict = checkpoint
     
-    # Strip _orig_mod (matches training script behavior)
     state_dict = strip_orig_mod(state_dict)
     model.load_state_dict(state_dict, strict=False)
     
-    model.eval()
-    print("✓ Model loaded successfully")
+    # Load metadata for vocabulary
+    metadata_path = os.path.join(checkpoint_dir, "audio_enc_metadata.json")
+    if os.path.exists(metadata_path):
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        
+        # Get vocabulary mappings
+        char_to_idx = metadata.get("char_to_idx", {})
+        idx_to_char = metadata.get("idx_to_char", {})
+        vocab_size = metadata.get("vocab_size", len(char_to_idx))
+        
+        # Convert string keys back to integers for idx_to_char
+        idx_to_char = {int(k): v for k, v in idx_to_char.items()}
+    else:
+        print("⚠️  Warning: Metadata file not found. Using defaults.")
+        vocab_size = cfg.get("ctc_vocab_size", 256)
+        char_to_idx = {}
+        idx_to_char = {}
     
-    return model, cfg
+    # Initialize CTC head
+    d_model = cfg.get("d_model", 192)
+    head = nn.Linear(d_model, vocab_size).to(device)
+    
+    # Load head weights
+    if "head" in checkpoint:
+        head_state_dict = checkpoint["head"]
+        head_state_dict = strip_orig_mod(head_state_dict)
+        head.load_state_dict(head_state_dict, strict=False)
+    
+    model.eval()
+    head.eval()
+    
+    print("✓ Model and head loaded successfully")
+    print(f"  Vocabulary size: {vocab_size}")
+    print(f"  Characters in vocab: {len(char_to_idx)}")
+    
+    return model, head, idx_to_char, cfg
 
-def preprocess_audio(audio_path, sr=16000, device="cuda"):
-    """Load and preprocess audio for ASR."""
+
+def evaluate_accuracy(model, head, idx_to_char, cfg, device="cuda", num_samples=100, verbose=True):
+    """
+    Evaluate ASR accuracy with CER and WER metrics.
+    
+    Args:
+        model: AudioEncoderTiny model
+        head: CTC head (Linear layer)
+        idx_to_char: dictionary mapping indices to characters
+        cfg: configuration dictionary
+        device: device to run on
+        num_samples: number of samples to evaluate
+        verbose: whether to print progress
+    
+    Returns:
+        Dictionary with metrics and examples
+    """
+    model.eval()
+    head.eval()
+    
+    csv_path = cfg.get("train_csv", "data/audio/production_asr.csv")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"ASR CSV not found: {csv_path}")
+    
+    # Create dataset
+    dataset = ASRDataset(
+        csv_path=csv_path,
+        sr=cfg.get("sample_rate", 16000),
+        n_mels=cfg.get("mel_bins", 128),
+        cfg=cfg,
+        shuffle_buffer_size=10000,
+        seed=42,  # Fixed seed for reproducibility
+        skip_samples=0
+    )
+    
+    total_cer = 0.0
+    total_wer = 0.0
+    num_valid = 0
+    examples = []
+    
+    if verbose:
+        print(f"\nEvaluating on {num_samples} samples...")
+        iterator = tqdm(dataset, total=num_samples, desc="Evaluating")
+    else:
+        iterator = iter(dataset)
+    
+    with torch.no_grad():
+        for i, (mel, text) in enumerate(iterator):
+            if i >= num_samples:
+                break
+            
+            try:
+                mel = mel.unsqueeze(0).to(device)  # Add batch dimension
+                
+                # Forward pass
+                x = model(mel)  # (1, T', d_model)
+                logits = head(x)  # (1, T', vocab_size)
+                
+                # Decode
+                pred_texts = decode_ctc_greedy(logits, idx_to_char)
+                pred_text = pred_texts[0]
+                
+                # Normalize for comparison (lowercase, strip whitespace)
+                pred_normalized = pred_text.lower().strip()
+                target_normalized = text.lower().strip()
+                
+                # Compute metrics
+                cer = compute_cer(pred_normalized, target_normalized)
+                wer = compute_wer(pred_normalized, target_normalized)
+                
+                total_cer += cer
+                total_wer += wer
+                num_valid += 1
+                
+                # Save first 10 examples
+                if len(examples) < 10:
+                    examples.append({
+                        'target': text,
+                        'predicted': pred_text,
+                        'cer': cer,
+                        'wer': wer
+                    })
+                
+            except Exception as e:
+                if verbose:
+                    print(f"\n⚠️  Error processing sample {i}: {e}")
+                continue
+    
+    if num_valid == 0:
+        raise ValueError("No valid samples processed!")
+    
+    # Calculate average metrics
+    avg_cer = total_cer / num_valid
+    avg_wer = total_wer / num_valid
+    
+    return {
+        'cer': avg_cer,
+        'wer': avg_wer,
+        'num_samples': num_valid,
+        'examples': examples
+    }
+
+
+def print_results(metrics):
+    """Pretty print evaluation results."""
+    print(f"\n{'='*70}")
+    print("ACCURACY EVALUATION RESULTS")
+    print(f"{'='*70}")
+    print(f"Samples Evaluated: {metrics['num_samples']}")
+    print(f"Character Error Rate (CER): {metrics['cer']*100:.2f}%")
+    print(f"Word Error Rate (WER): {metrics['wer']*100:.2f}%")
+    
+    # Interpretation
+    print(f"\n{'='*70}")
+    print("INTERPRETATION:")
+    print(f"{'='*70}")
+    
+    if metrics['cer'] < 0.05:
+        cer_status = "✓ EXCELLENT - Production ready!"
+    elif metrics['cer'] < 0.10:
+        cer_status = "✓ GOOD - Working well"
+    elif metrics['cer'] < 0.20:
+        cer_status = "⚠ ACCEPTABLE - May need improvement"
+    else:
+        cer_status = "✗ POOR - Needs more training"
+    
+    if metrics['wer'] < 0.10:
+        wer_status = "✓ EXCELLENT - Production ready!"
+    elif metrics['wer'] < 0.20:
+        wer_status = "✓ GOOD - Working well"
+    elif metrics['wer'] < 0.30:
+        wer_status = "⚠ ACCEPTABLE - May need improvement"
+    else:
+        wer_status = "✗ POOR - Needs more training"
+    
+    print(f"CER Assessment: {cer_status}")
+    print(f"WER Assessment: {wer_status}")
+    
+    # Print examples
+    if metrics['examples']:
+        print(f"\n{'='*70}")
+        print("SAMPLE TRANSCRIPTIONS:")
+        print(f"{'='*70}")
+        
+        for idx, ex in enumerate(metrics['examples']):
+            print(f"\nExample {idx+1}:")
+            print(f"  Target:    '{ex['target']}'")
+            print(f"  Predicted: '{ex['predicted']}'")
+            print(f"  CER: {ex['cer']*100:.1f}% | WER: {ex['wer']*100:.1f}%")
+    
+    print(f"\n{'='*70}")
+
+
+def test_single_audio(model, head, idx_to_char, audio_path, cfg, device="cuda"):
+    """Test on a single audio file."""
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
     
+    print(f"\nTesting single audio file: {audio_path}")
+    
+    # Load audio
     wav, orig_sr = load_audio(audio_path)
+    sr = cfg.get("sample_rate", 16000)
     
     # Resample if needed
     if orig_sr != sr:
@@ -90,158 +367,82 @@ def preprocess_audio(audio_path, sr=16000, device="cuda"):
         n_fft=1024,
         hop_length=160,
         win_length=400,
-        n_mels=128
+        n_mels=cfg.get("mel_bins", 128)
     ).to(device)
     
     wav = wav.to(device)
     mel = mel_spec(wav)[0].T.unsqueeze(0)  # (1, T, 128)
     
-    return mel, wav
-
-def test_audio_encoder(model, mel, device="cuda"):
-    """Run audio encoder forward pass."""
+    # Forward pass
     model.eval()
+    head.eval()
     
     with torch.no_grad():
-        # Forward pass
-        output = model(mel)  # (B, T', d_model)
-        
-    return output
+        x = model(mel)
+        logits = head(x)
+        pred_texts = decode_ctc_greedy(logits, idx_to_char)
+    
+    print(f"\nTranscription: '{pred_texts[0]}'")
+    return pred_texts[0]
 
-def get_random_audio_from_dataset(cfg):
-    """Get a random audio sample from the dataset."""
-    csv_path = cfg.get("train_csv", "data/audio/production_asr.csv")
-    
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"ASR CSV not found: {csv_path}")
-    
-    # Create dataset with shuffling
-    dataset = ASRDataset(
-        csv_path=csv_path,
-        sr=cfg.get("sample_rate", 16000),
-        n_mels=cfg.get("mel_bins", 128),
-        cfg=cfg,
-        shuffle_buffer_size=10000,
-        seed=random.randint(0, 1000000),
-        skip_samples=0
-    )
-    
-    # Get first sample
-    try:
-        iterator = iter(dataset)
-        mel, text = next(iterator)
-        return mel.unsqueeze(0), text  # Add batch dimension
-    except StopIteration:
-        raise ValueError("Dataset is empty")
-
-def evaluate_audio_encoder(model, cfg, device="cuda", num_samples=100):
-    """Evaluate audio encoder on multiple samples and compute metrics."""
-    model.eval()
-    
-    csv_path = cfg.get("train_csv", "data/audio/production_asr.csv")
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"ASR CSV not found: {csv_path}")
-    
-    # Create dataset
-    dataset = ASRDataset(
-        csv_path=csv_path,
-        sr=cfg.get("sample_rate", 16000),
-        n_mels=cfg.get("mel_bins", 128),
-        cfg=cfg,
-        shuffle_buffer_size=10000,
-        seed=random.randint(0, 1000000),
-        skip_samples=0
-    )
-    
-    iterator = iter(dataset)
-    total_output_norm = 0.0
-    total_output_std = 0.0
-    num_valid_samples = 0
-    
-    print(f"\nEvaluating on {num_samples} samples...")
-    
-    with torch.no_grad():
-        for i in range(num_samples):
-            try:
-                mel, text = next(iterator)
-                mel = mel.unsqueeze(0).to(device)
-                
-                # Forward pass
-                output = model(mel)
-                
-                # Compute statistics
-                output_norm = torch.norm(output).item()
-                output_std = output.std().item()
-                
-                total_output_norm += output_norm
-                total_output_std += output_std
-                num_valid_samples += 1
-                
-                if (i + 1) % 10 == 0:
-                    print(f"  Processed {i + 1}/{num_samples} samples...", end='\r')
-                    
-            except StopIteration:
-                print(f"\n⚠️  Dataset exhausted after {i} samples")
-                break
-            except Exception as e:
-                print(f"\n⚠️  Error processing sample {i}: {e}")
-                continue
-    
-    print()  # New line after progress
-    
-    # Calculate metrics
-    avg_norm = total_output_norm / num_valid_samples if num_valid_samples > 0 else 0.0
-    avg_std = total_output_std / num_valid_samples if num_valid_samples > 0 else 0.0
-    
-    return {
-        'avg_output_norm': avg_norm,
-        'avg_output_std': avg_std,
-        'num_samples': num_valid_samples
-    }
 
 def main():
-    parser = argparse.ArgumentParser(description="Test Audio Encoder (ASR)")
+    parser = argparse.ArgumentParser(description="Test Audio Encoder (ASR) with accuracy metrics")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/audio_enc_tiny",
                        help="Path to Audio Encoder checkpoint directory")
     parser.add_argument("--num_samples", type=int, default=100,
                        help="Number of samples to evaluate (default: 100)")
+    parser.add_argument("--audio", type=str, default=None,
+                       help="Path to single audio file to test (optional)")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                        help="Device to use (cuda/cpu)")
+    parser.add_argument("--quick", action="store_true",
+                       help="Quick test with 10 samples")
     args = parser.parse_args()
     
-    print("=" * 60)
-    print("Audio Encoder (ASR) Test")
-    print("=" * 60)
+    if args.quick:
+        args.num_samples = 10
+    
+    print("=" * 70)
+    print("AUDIO ENCODER (ASR) ACCURACY TEST")
+    print("=" * 70)
     
     # Load model
     try:
-        model, cfg = load_model(args.checkpoint, args.device)
+        model, head, idx_to_char, cfg = load_model_and_head(args.checkpoint, args.device)
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"✗ Error loading model: {e}")
         import traceback
         traceback.print_exc()
         return
     
-    # Evaluate on multiple samples from dataset
+    # Test single audio if provided
+    if args.audio:
+        try:
+            test_single_audio(model, head, idx_to_char, args.audio, cfg, args.device)
+        except Exception as e:
+            print(f"✗ Error testing audio file: {e}")
+            import traceback
+            traceback.print_exc()
+        return
+    
+    # Evaluate on dataset
     try:
-        metrics = evaluate_audio_encoder(model, cfg, args.device, args.num_samples)
+        metrics = evaluate_accuracy(
+            model, head, idx_to_char, cfg, 
+            device=args.device, 
+            num_samples=args.num_samples,
+            verbose=True
+        )
         
-        print(f"\n{'=' * 60}")
-        print("EVALUATION RESULTS:")
-        print(f"{'=' * 60}")
-        print(f"Samples evaluated: {metrics['num_samples']}")
-        print(f"Average Output Norm: {metrics['avg_output_norm']:.4f}")
-        print(f"Average Output Std: {metrics['avg_output_std']:.4f}")
-        print(f"{'=' * 60}")
-        print("✓ Audio encoder is working properly!")
-        print("  (Note: For ASR accuracy, use a full ASR pipeline with decoder)")
-            
+        print_results(metrics)
+        
     except Exception as e:
-        print(f"❌ Error during evaluation: {e}")
+        print(f"✗ Error during evaluation: {e}")
         import traceback
         traceback.print_exc()
         return
 
+
 if __name__ == "__main__":
     main()
-

@@ -46,7 +46,7 @@ The μOmni project includes comprehensive test scripts for validating each model
 
 | Script              | Purpose              | What It Tests                                            |
 | ------------------- | -------------------- | -------------------------------------------------------- |
-| `test_all_media.py` | Multimodal inference | All media types (text, image, audio) via `infer_chat.py` |
+
 
 ---
 
@@ -415,60 +415,7 @@ EVALUATION RESULTS:
 
 ---
 
-### 8. `test_all_media.py` - Multimodal Integration Testing
 
-**Purpose:** Test complete multimodal inference pipeline via `infer_chat.py`.
-
-**What it tests:**
-
-- Text-only chat
-- Image + Text chat
-- Audio + Text chat
-- Image-only chat
-- Audio-only chat
-- OCR (text extraction from images)
-
-**Pipeline:**
-
-```
-Random Samples → infer_chat.py → Success/Failure Tracking
-```
-
-**Metrics:**
-
-- **Success Rate**: % of successful inference runs
-- **Average Time**: Mean inference time per sample
-- **Min/Max Time**: Time range
-
-**Usage:**
-
-```bash
-python test_all_media.py --num_samples 100
-```
-
-**Example Output:**
-
-```
-EVALUATION SUMMARY
-============================================================
-Text-only          ✓ 98.50% (98/100) | Avg: 0.45s | Range: 0.32s-0.67s
-Image+Text         ✓ 95.00% (95/100) | Avg: 1.23s | Range: 0.89s-2.34s
-Audio+Text         ✓ 92.00% (92/100) | Avg: 1.56s | Range: 1.12s-3.45s
-Image-only          ✓ 96.00% (96/100) | Avg: 1.12s | Range: 0.78s-2.11s
-Audio-only          ✓ 94.00% (94/100) | Avg: 1.34s | Range: 0.98s-2.67s
-OCR                 ✓ 88.00% (88/100) | Avg: 0.89s | Range: 0.56s-1.78s
-------------------------------------------------------------
-Overall: 94.00% success rate (563/600 samples)
-```
-
-**Key Features:**
-
-- Tests actual `infer_chat.py` interface (not direct model calls)
-- Uses file paths (not processed tensors) - appropriate for integration testing
-- Memory-efficient file scanning (limits to 10k files per directory)
-- Reports timing statistics
-
----
 
 ## 🔍 Checkpoint Loading Details
 
@@ -663,7 +610,7 @@ Run component tests after each training stage:
 - Stage B (Audio): `test_audio_enc.py`
 - Stage C (Vision): `test_vision.py`
 - Stage D (Talker): `test_talker.py`, `test_vocoder.py`
-- Stage E (SFT): `test_all_media.py`
+- Stage E (SFT): run integration checks using `infer_chat.py` and component test scripts
 
 ### 2. **Use Consistent Sample Sizes**
 
@@ -693,7 +640,7 @@ For production:
 
 After individual tests pass:
 
-- Run `test_all_media.py` for end-to-end validation
+- Run integration checks with `infer_chat.py` and the component test scripts for end-to-end validation
 - Test actual user workflows
 - Verify multimodal combinations work
 
@@ -772,14 +719,14 @@ python test_asr_tts.py \
     --talker_ckpt checkpoints/talker_tiny
 
 # Integration test
-python test_all_media.py --num_samples 100
+# Use component test scripts and `infer_chat.py` for integration validation
 ```
 
 ### Expected Test Times
 
 - Individual component tests: 1-5 minutes (100 samples)
 - `test_asr_tts.py`: 5-15 minutes (100 samples, includes TTS generation)
-- `test_all_media.py`: 10-30 minutes (100 samples per test type)
+- Integration testing time: varies (minutes to tens of minutes depending on samples and modalities)
 
 ---
 

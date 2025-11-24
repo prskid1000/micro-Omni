@@ -208,11 +208,8 @@ python infer_chat.py \
 ### Test with Random Data
 
 ```bash
-# Use the test script to pick random samples from data/
-python test_all_media.py
-
-# Automatically finds random images, audio, and text from data folders
-# Runs comprehensive tests across all modalities
+# Use component test scripts or run `infer_chat.py` on sample files
+# Example: run individual test scripts to validate specific components
 ```
 
 ---
@@ -276,7 +273,7 @@ The script automatically:
 ### Data Sources
 
 ✅ **Use random samples** from `data/` folders for testing  
-✅ **Test script** (`test_all_media.py`) picks random samples automatically  
+✅ **Test guidance**: Component test scripts and `infer_chat.py` can be used to pick and run samples automatically  
 ✅ **Production data** from download scripts is ready to use
 
 ### Troubleshooting
@@ -389,7 +386,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny
 Before deploying, test your models to ensure they work correctly:
 
 - **Component Testing**: See [Chapter 49: Testing Scripts](49-testing-scripts.md) for comprehensive testing of all model components
-- **Integration Testing**: Use `test_all_media.py` to test the complete multimodal pipeline
+- **Integration Testing**: Run component test scripts and exercise `infer_chat.py` manually to validate multimodal flows
 - **Quick Test**: Run individual test scripts after each training stage
 
 ### Model Export
