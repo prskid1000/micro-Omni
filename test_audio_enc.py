@@ -158,8 +158,12 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
         idx_to_char = metadata.get("idx_to_char", {})
         vocab_size = metadata.get("vocab_size", len(char_to_idx))
         
-        # Convert string keys back to integers for idx_to_char
-        idx_to_char = {int(k): v for k, v in idx_to_char.items()}
+        # Convert string keys back to integers for idx_to_char (JSON saves all keys as strings)
+        if idx_to_char and isinstance(list(idx_to_char.keys())[0], str):
+            idx_to_char = {int(k): v for k, v in idx_to_char.items()}
+        
+        print(f"  Loaded vocabulary: {vocab_size} characters")
+        print(f"  Sample mappings: {list(idx_to_char.items())[:5]}")
     else:
         print("⚠️  Warning: Metadata file not found. Using defaults.")
         vocab_size = cfg.get("ctc_vocab_size", 256)

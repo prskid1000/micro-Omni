@@ -89,6 +89,10 @@ def main(cfg):
         vocab_size_dynamic = metadata.get("vocab_size", None)
         max_text_length_dynamic = metadata.get("max_text_length", None)
         
+        # Convert string keys back to integers for idx_to_char (JSON saves all keys as strings)
+        if idx_to_char and isinstance(list(idx_to_char.keys())[0], str):
+            idx_to_char = {int(k): v for k, v in idx_to_char.items()}
+        
         print(f"Character vocabulary size: {vocab_size_dynamic} (from metadata)")
         print(f"Text length: {max_text_length_dynamic} (from metadata)")
     else:
@@ -106,11 +110,13 @@ def main(cfg):
         print(f"  Note: ~{100 - text_percentile:.1f}% of data will be truncated if longer (acceptable for outliers)")
         
         # Save calculated values to metadata (so we don't recalculate next time)
+        # Convert idx_to_char keys to strings for JSON compatibility
+        idx_to_char_json = {str(k): v for k, v in idx_to_char.items()}
         training_metadata = {
             "step": 0,  # Will be updated when we save checkpoints
             "epoch": 0,
             "char_to_idx": char_to_idx,
-            "idx_to_char": idx_to_char,
+            "idx_to_char": idx_to_char_json,  # Use string keys for JSON
             "vocab_size": vocab_size_dynamic,
             "max_text_length": max_text_length_dynamic,
         }
@@ -502,11 +508,13 @@ def main(cfg):
                 torch.save(model_data, model_path)
                 
                 # Save training metadata (step, calculated values, etc.)
+                # Convert idx_to_char keys to strings for JSON compatibility
+                idx_to_char_json = {str(k): v for k, v in train_ds.idx_to_char.items()}
                 training_metadata = {
                     "step": step,
                     "epoch": epoch,
                     "char_to_idx": train_ds.char_to_idx,
-                    "idx_to_char": train_ds.idx_to_char,
+                    "idx_to_char": idx_to_char_json,  # Use string keys for JSON
                     "vocab_size": vocab_size_dynamic,
                     "max_text_length": max_text_length_dynamic,
                     "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
@@ -567,11 +575,13 @@ def main(cfg):
     torch.save(model_data, final_path)
     
     # Save final training metadata
+    # Convert idx_to_char keys to strings for JSON compatibility
+    idx_to_char_json = {str(k): v for k, v in train_ds.idx_to_char.items()}
     training_metadata = {
         "step": step,
         "epoch": epoch,
         "char_to_idx": train_ds.char_to_idx,
-        "idx_to_char": train_ds.idx_to_char,
+        "idx_to_char": idx_to_char_json,  # Use string keys for JSON
         "vocab_size": vocab_size_dynamic,
         "max_text_length": max_text_length_dynamic,
         "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,

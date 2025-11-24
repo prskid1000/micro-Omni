@@ -449,15 +449,31 @@ class OCRLoader(BaseModelLoader):
             
             ckpt_path, ckpt = self.load_checkpoint(ocr_ckpt_dir, "ocr.pt", "ocr_step_")
             
-            # Get vocab_size from checkpoint
+            # Get vocab_size from checkpoint or metadata
             vocab_size = 128  # Default
             if ckpt is not None and isinstance(ckpt, dict):
                 if "char_to_idx" in ckpt:
                     vocab_size = len(ckpt["char_to_idx"])
                     self.char_to_idx = ckpt["char_to_idx"]
                     self.idx_to_char = ckpt.get("idx_to_char", {v: k for k, v in self.char_to_idx.items()})
+                    # Convert string keys back to integers for idx_to_char (JSON saves all keys as strings)
+                    if self.idx_to_char and isinstance(next(iter(self.idx_to_char.keys())), str):
+                        self.idx_to_char = {int(k): v for k, v in self.idx_to_char.items()}
                 elif "config" in ckpt and "vocab_size" in ckpt["config"]:
                     vocab_size = ckpt["config"]["vocab_size"]
+            
+            # Try loading from metadata file if not in checkpoint
+            if self.char_to_idx is None:
+                metadata_path = os.path.join(ocr_ckpt_dir, "ocr_metadata.json")
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                        self.char_to_idx = metadata.get("char_to_idx", {})
+                        self.idx_to_char = metadata.get("idx_to_char", {})
+                        # Convert string keys back to integers for idx_to_char (JSON saves all keys as strings)
+                        if self.idx_to_char and isinstance(next(iter(self.idx_to_char.keys())), str):
+                            self.idx_to_char = {int(k): v for k, v in self.idx_to_char.items()}
+                        vocab_size = len(self.char_to_idx)
             
             # Load config
             ocr_cfg = self.load_config("configs/ocr_tiny.json", {
