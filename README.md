@@ -759,7 +759,6 @@ Below are the test scripts included in this repository and quick PowerShell comm
    - `test_vision.py` (Vision encoder)
    - `test_talker.py` (Talker + RVQ)
    - `test_vocoder.py` (Vocoder)
-   - `test_asr_tts.py` (ASR + TTS round-trip)
    - `test_all_media.py` (integration / media-focused checks)
    - `export/test_safetensor.py` (export / safetensor validation)
 

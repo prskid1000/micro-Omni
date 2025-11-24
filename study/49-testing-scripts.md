@@ -40,7 +40,6 @@ The μOmni project includes comprehensive test scripts for validating each model
 | `test_vision.py`    | ViTTiny            | Image feature extraction     | CLS Norm/Std, Grid Norm/Std                               |
 | `test_talker.py`    | TalkerTiny + RVQ   | Speech generation            | Reconstruction Error (MSE)                                |
 | `test_vocoder.py`   | HiFiGANVocoder     | Mel-to-audio conversion      | Audio Norm, Audio Std                                     |
-| `test_asr_tts.py`   | ASR + TTS Pipeline | Round-trip speech processing | WER, CER, ASR Loss, TTS Reconstruction Error              |
 
 ### Integration Tests
 
@@ -355,59 +354,6 @@ python test_vocoder.py \
 - Checks for reasonable signal levels
 
 ---
-
-### 7. `test_asr_tts.py` - ASR + TTS Round-Trip Testing
-
-**Purpose:** Test full speech-to-text-to-speech pipeline.
-
-**Pipeline:**
-
-```
-Audio → AudioEncoder + CTC → Text → Talker + RVQ + Vocoder → Audio
-```
-
-**Metrics:**
-
-**ASR Metrics (Speech → Text):**
-
-- Word Error Rate (WER): % of word errors
-- Character Error Rate (CER): % of character errors
-- Exact Match Rate: % of perfect transcriptions
-- Word/Character Accuracy: Token-level correctness
-- Average CTC Loss: ASR model loss
-
-**TTS Metrics (Text → Speech):**
-
-- TTS Success Rate: % of successful audio generations
-- Audio Reconstruction MSE: How well reconstructed audio matches original
-- Audio Reconstruction L1: Mean absolute error
-
-**Usage:**
-
-```bash
-python test_asr_tts.py \
-    --audio_ckpt checkpoints/audio_enc_tiny \
-    --talker_ckpt checkpoints/talker_tiny \
-    --num_samples 100
-```
-
-**Example Output:**
-
-```
-EVALUATION RESULTS:
-
-📊 ASR Metrics (Speech → Text):
-  Samples evaluated: 100
-  Average CTC Loss: 1.2345
-  Word Error Rate (WER): 15.67%
-  Character Error Rate (CER): 8.90%
-  Exact Match Rate: 45.00%
-  Word Accuracy: 84.33%
-  Character Accuracy: 91.10%
-
-🎵 TTS Metrics (Text → Speech):
-  TTS Success Rate: 95.00% (95/100)
-  Audio Reconstruction MSE: 0.001234
   Audio Reconstruction L1: 0.012345
 ```
 
@@ -713,11 +659,6 @@ python test_vision.py --checkpoint checkpoints/vision_tiny
 python test_talker.py --checkpoint checkpoints/talker_tiny
 python test_vocoder.py --checkpoint checkpoints/vocoder_tiny
 
-# Round-trip ASR+TTS
-python test_asr_tts.py \
-    --audio_ckpt checkpoints/audio_enc_tiny \
-    --talker_ckpt checkpoints/talker_tiny
-
 # Integration test
 # Use component test scripts and `infer_chat.py` for integration validation
 ```
@@ -725,7 +666,6 @@ python test_asr_tts.py \
 ### Expected Test Times
 
 - Individual component tests: 1-5 minutes (100 samples)
-- `test_asr_tts.py`: 5-15 minutes (100 samples, includes TTS generation)
 - Integration testing time: varies (minutes to tens of minutes depending on samples and modalities)
 
 ---
