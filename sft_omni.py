@@ -761,10 +761,8 @@ def main(cfg):
                                 else:
                                     logger.warning(f"Step {step}: Invalid validation loss: {e}")
                                     # Continue with other validation batches
-                            if val_count >= 10:  # Limit validation batches
-                                break
                     
-                    avg_val_loss = val_loss_sum / val_count
+                    avg_val_loss = val_loss_sum / max(val_count, 1)
                     logger.val_step(step, avg_val_loss, epoch)
                     
                     # Check for loss spike

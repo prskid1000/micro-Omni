@@ -453,9 +453,6 @@ def main(cfg):
                     
                     with torch.no_grad():
                         for val_images, val_text_ids in val_dl:
-                            if val_count >= 10:  # Limit validation batches
-                                break
-                            
                             val_images = val_images.to(device)
                             val_text_ids = val_text_ids.to(device)
                             val_input_ids = val_text_ids[:, :-1]
