@@ -110,6 +110,9 @@ def load_model_and_vocab(checkpoint_dir, device="cuda"):
     if "char_to_idx" in checkpoint and "idx_to_char" in checkpoint:
         char_to_idx = checkpoint["char_to_idx"]
         idx_to_char = checkpoint["idx_to_char"]
+        # Ensure idx_to_char has integer keys (in case it was loaded from JSON)
+        if idx_to_char and isinstance(next(iter(idx_to_char.keys())), str):
+            idx_to_char = {int(k): v for k, v in idx_to_char.items()}
         vocab_size = len(char_to_idx)
     else:
         # Try loading from metadata file
@@ -119,7 +122,7 @@ def load_model_and_vocab(checkpoint_dir, device="cuda"):
                 metadata = json.load(f)
                 char_to_idx = metadata.get("char_to_idx", {})
                 idx_to_char = metadata.get("idx_to_char", {})
-                # Convert string keys back to integers for idx_to_char
+                # Convert string keys back to integers for idx_to_char (JSON keys are always strings)
                 idx_to_char = {int(k): v for k, v in idx_to_char.items()}
                 vocab_size = len(char_to_idx)
         else:
