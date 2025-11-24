@@ -1,21 +1,88 @@
 """
-Simple test script to verify OCR model is working properly.
-Loads a checkpoint, processes an image, and displays the extracted text.
+Complete test script to validate OCR model accuracy.
+Measures CER, WER, exact match rate, and provides detailed analysis.
 """
 
 import torch
+from torch.nn import CrossEntropyLoss
 import json
 import os
 import argparse
 import random
+import numpy as np
 from PIL import Image
 from torchvision import transforms
-from torch.nn import CrossEntropyLoss
 from omni.ocr_model import OCRModel
 from omni.utils import OCRDataset, find_checkpoint, strip_orig_mod
+from tqdm import tqdm
 
-def load_model(checkpoint_dir, device="cuda"):
-    """Load OCR model from checkpoint."""
+# Try to import Levenshtein for better edit distance
+try:
+    import Levenshtein
+    HAS_LEVENSHTEIN = True
+except ImportError:
+    HAS_LEVENSHTEIN = False
+    print("⚠️  python-Levenshtein not installed. Using fallback edit distance.")
+
+
+def levenshtein_distance(s1, s2):
+    """Calculate Levenshtein edit distance between two strings."""
+    if HAS_LEVENSHTEIN:
+        return Levenshtein.distance(s1, s2)
+    
+    # Fallback implementation
+    m, n = len(s1), len(s2)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if s1[i-1] == s2[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+            else:
+                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+    
+    return dp[m][n]
+
+
+def compute_cer(pred, target):
+    """
+    Compute Character Error Rate (CER).
+    CER = edit_distance / len(target)
+    """
+    if len(target) == 0:
+        return 0.0 if len(pred) == 0 else 1.0
+    
+    edit_dist = levenshtein_distance(pred, target)
+    return edit_dist / len(target)
+
+
+def compute_wer(pred, target):
+    """
+    Compute Word Error Rate (WER).
+    WER = edit_distance(words) / num_target_words
+    """
+    pred_words = pred.split()
+    target_words = target.split()
+    
+    if len(target_words) == 0:
+        return 0.0 if len(pred_words) == 0 else 1.0
+    
+    if HAS_LEVENSHTEIN:
+        edit_dist = Levenshtein.distance(pred_words, target_words)
+    else:
+        # Fallback: word-level edit distance
+        edit_dist = levenshtein_distance(pred_words, target_words)
+    
+    return edit_dist / len(target_words)
+
+
+def load_model_and_vocab(checkpoint_dir, device="cuda"):
+    """Load OCR model and vocabulary from checkpoint."""
     checkpoint_path, checkpoint = find_checkpoint(checkpoint_dir, "ocr.pt", "ocr_step_", device)
     if checkpoint is None:
         raise FileNotFoundError(f"Checkpoint not found in: {checkpoint_dir}")
@@ -44,12 +111,10 @@ def load_model(checkpoint_dir, device="cuda"):
         char_to_idx = checkpoint["char_to_idx"]
         idx_to_char = checkpoint["idx_to_char"]
         vocab_size = len(char_to_idx)
-        print(f"Vocabulary size: {vocab_size}")
     else:
-        # Try loading from metadata file (newer training script saves it there)
+        # Try loading from metadata file
         metadata_path = os.path.join(checkpoint_dir, "ocr_metadata.json")
         if os.path.exists(metadata_path):
-            print(f"Loading vocabulary from metadata: {metadata_path}")
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
                 char_to_idx = metadata.get("char_to_idx", {})
@@ -57,9 +122,10 @@ def load_model(checkpoint_dir, device="cuda"):
                 # Convert string keys back to integers for idx_to_char
                 idx_to_char = {int(k): v for k, v in idx_to_char.items()}
                 vocab_size = len(char_to_idx)
-                print(f"Vocabulary size: {vocab_size} (from metadata)")
         else:
-            raise ValueError("Checkpoint missing char_to_idx and idx_to_char. Cannot decode text.")
+            raise ValueError("Checkpoint missing vocabulary. Cannot decode text.")
+    
+    print(f"✓ Loaded vocabulary (size: {vocab_size})")
     
     # Initialize model
     model = OCRModel(
@@ -78,80 +144,53 @@ def load_model(checkpoint_dir, device="cuda"):
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
         use_flash=cfg.get("use_flash", True),
-        compile_model=False  # Disable compilation for testing
+        compile_model=False
     ).to(device)
     
-    # Load weights (strip _orig_mod prefixes if present from torch.compile)
+    # Load weights
     if "model" in checkpoint:
         state_dict = checkpoint["model"]
     else:
         state_dict = checkpoint
     
-    # Strip _orig_mod (matches training script behavior)
     state_dict = strip_orig_mod(state_dict)
     model.load_state_dict(state_dict, strict=False)
     
     model.eval()
+    
     print("✓ Model loaded successfully")
+    print(f"  Image size: {cfg.get('img_size', 224)}")
+    print(f"  Decoder layers: {cfg.get('decoder_layers', 4)}")
     
-    return model, idx_to_char, char_to_idx, cfg
+    return model, char_to_idx, idx_to_char, cfg
 
-def preprocess_image(image_path, img_size=224):
-    """Load and preprocess image for OCR."""
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"Image not found: {image_path}")
-    
-    img = Image.open(image_path).convert("RGB")
-    transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor()
-    ])
-    img_tensor = transform(img).unsqueeze(0)  # Add batch dimension
-    return img_tensor, img
 
-def decode_text(logits, idx_to_char, max_length=256):
-    """Decode logits to text string."""
-    # Get predicted token IDs (greedy decoding)
-    pred_ids = torch.argmax(logits, dim=-1)  # (B, T)
+def decode_greedy(model, image_tensor, char_to_idx, idx_to_char, device="cuda", max_length=256):
+    """
+    Greedy decoding: generate text from image autoregressively.
     
-    # Convert to list
-    pred_ids = pred_ids[0].cpu().tolist()  # First batch item
-    
-    # Decode to text
-    text = []
-    for idx in pred_ids:
-        if idx in idx_to_char:
-            char = idx_to_char[idx]
-            # Stop at EOS token
-            if char == '<EOS>':
-                break
-            # Skip special tokens
-            if char not in ['<PAD>', '<BOS>', '<UNK>']:
-                text.append(char)
-    
-    return ''.join(text)
-
-def test_ocr_inference(model, image_tensor, idx_to_char, char_to_idx, device="cuda", max_length=256):
-    """Run OCR inference on an image."""
+    Returns:
+        Decoded text string
+    """
     model.eval()
     image_tensor = image_tensor.to(device)
     
     with torch.no_grad():
         # Start with BOS token
         bos_id = char_to_idx.get('<BOS>', 1)
-        current_ids = torch.tensor([[bos_id]], device=device)  # (B=1, T=1)
+        current_ids = torch.tensor([[bos_id]], device=device)
         
-        # Autoregressive generation
         generated_text = []
-        for step in range(max_length):
+        
+        for _ in range(max_length):
             # Forward pass
-            logits = model(image_tensor, current_ids)  # (B, T, vocab_size)
+            logits = model(image_tensor, current_ids)  # (1, T, vocab_size)
             
             # Get next token (greedy)
-            next_token_logits = logits[0, -1, :]  # Last position logits
+            next_token_logits = logits[0, -1, :]
             next_token_id = torch.argmax(next_token_logits).item()
             
-            # Check for EOS
+            # Check for EOS or special tokens
             if next_token_id in idx_to_char:
                 char = idx_to_char[next_token_id]
                 if char == '<EOS>':
@@ -159,81 +198,90 @@ def test_ocr_inference(model, image_tensor, idx_to_char, char_to_idx, device="cu
                 if char not in ['<PAD>', '<BOS>', '<UNK>']:
                     generated_text.append(char)
             
-            # Append to sequence for next iteration
+            # Append to sequence
             current_ids = torch.cat([current_ids, torch.tensor([[next_token_id]], device=device)], dim=1)
-        
-        return ''.join(generated_text)
+    
+    return ''.join(generated_text)
 
-def get_random_image_from_dataset(cfg, char_to_idx, idx_to_char):
-    """Get a random image from the OCR dataset."""
-    csv_path = cfg.get("train_csv", "data/ocr/production_ocr.csv")
-    image_root = cfg.get("image_root", "data/ocr")
-    img_size = cfg.get("img_size", 224)
-    
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"OCR CSV not found: {csv_path}")
-    
-    # Create dataset with shuffling to get random sample
-    dataset = OCRDataset(
-        csv_path=csv_path,
-        image_root=image_root,
-        img_size=img_size,
-        cfg=cfg,
-        shuffle_buffer_size=10000,  # Enable shuffling for randomness
-        seed=random.randint(0, 1000000),  # Random seed for different samples each time
-        skip_samples=0
-    )
-    
-    # Use the dataset's vocabulary (should match checkpoint)
-    dataset.char_to_idx = char_to_idx
-    dataset.idx_to_char = idx_to_char
-    
-    # Get first sample from iterator (will be random due to shuffling)
-    try:
-        iterator = iter(dataset)
-        image_tensor, text_ids = next(iterator)
-        
-        # Decode ground truth text for comparison
-        ground_truth = ""
-        for idx in text_ids:
-            if idx in idx_to_char:
-                char = idx_to_char[idx]
-                if char == '<EOS>':
-                    break
-                if char not in ['<PAD>', '<BOS>', '<UNK>']:
-                    ground_truth += char
-        
-        return image_tensor.unsqueeze(0), ground_truth  # Add batch dimension
-    except StopIteration:
-        raise ValueError("Dataset is empty - no samples found")
-    except Exception as e:
-        raise RuntimeError(f"Error getting sample from dataset: {e}")
 
-def calculate_edit_distance(str1, str2):
-    """Calculate Levenshtein edit distance between two strings."""
-    m, n = len(str1), len(str2)
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
+def decode_beam_search(model, image_tensor, char_to_idx, idx_to_char, device="cuda", max_length=256, beam_width=5):
+    """
+    Beam search decoding for better quality (optional, slower).
     
-    for i in range(m + 1):
-        dp[i][0] = i
-    for j in range(n + 1):
-        dp[0][j] = j
-    
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            if str1[i-1] == str2[j-1]:
-                dp[i][j] = dp[i-1][j-1]
-            else:
-                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
-    
-    return dp[m][n]
-
-def evaluate_ocr_model(model, idx_to_char, char_to_idx, cfg, device="cuda", num_samples=100):
-    """Evaluate OCR model on multiple samples and compute metrics."""
+    Returns:
+        Best decoded text string
+    """
     model.eval()
-    loss_fn = CrossEntropyLoss(ignore_index=0)
+    image_tensor = image_tensor.to(device)
     
-    csv_path = cfg.get("train_csv", "data/ocr/production_ocr.csv")
+    bos_id = char_to_idx.get('<BOS>', 1)
+    eos_id = char_to_idx.get('<EOS>', 2)
+    
+    # Initialize beam: list of (sequence, score)
+    beams = [([bos_id], 0.0)]
+    
+    with torch.no_grad():
+        for _ in range(max_length):
+            new_beams = []
+            
+            for seq, score in beams:
+                # Check if sequence ended
+                if seq[-1] == eos_id:
+                    new_beams.append((seq, score))
+                    continue
+                
+                # Forward pass
+                input_ids = torch.tensor([seq], device=device)
+                logits = model(image_tensor, input_ids)  # (1, T, vocab_size)
+                
+                # Get log probabilities for next token
+                next_token_logprobs = torch.log_softmax(logits[0, -1, :], dim=-1)
+                
+                # Get top-k candidates
+                topk_logprobs, topk_ids = torch.topk(next_token_logprobs, beam_width)
+                
+                for logprob, token_id in zip(topk_logprobs, topk_ids):
+                    new_seq = seq + [token_id.item()]
+                    new_score = score + logprob.item()
+                    new_beams.append((new_seq, new_score))
+            
+            # Keep top beam_width beams
+            beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_width]
+            
+            # Stop if all beams ended
+            if all(seq[-1] == eos_id for seq, _ in beams):
+                break
+    
+    # Get best beam
+    best_seq, _ = beams[0]
+    
+    # Decode to text
+    generated_text = []
+    for token_id in best_seq:
+        if token_id in idx_to_char:
+            char = idx_to_char[token_id]
+            if char == '<EOS>':
+                break
+            if char not in ['<PAD>', '<BOS>', '<UNK>']:
+                generated_text.append(char)
+    
+    return ''.join(generated_text)
+
+
+def evaluate_ocr_accuracy(model, char_to_idx, idx_to_char, cfg, device="cuda", num_samples=100, use_beam_search=False, verbose=True):
+    """
+    Comprehensive OCR evaluation.
+    
+    Metrics:
+    - Character Error Rate (CER)
+    - Word Error Rate (WER)
+    - Exact Match Rate
+    - Average edit distance
+    - Per-character accuracy
+    """
+    model.eval()
+    
+    csv_path = cfg.get("train_csv", "data/ocr/ocr_train.csv")
     image_root = cfg.get("image_root", "data/ocr")
     img_size = cfg.get("img_size", 224)
     
@@ -247,27 +295,38 @@ def evaluate_ocr_model(model, idx_to_char, char_to_idx, cfg, device="cuda", num_
         img_size=img_size,
         cfg=cfg,
         shuffle_buffer_size=10000,
-        seed=random.randint(0, 1000000),
-        skip_samples=0
+        seed=42,  # Fixed seed for reproducibility
+        skip_samples=0,
+        char_to_idx=char_to_idx,
+        idx_to_char=idx_to_char
     )
     
-    dataset.char_to_idx = char_to_idx
-    dataset.idx_to_char = idx_to_char
-    
-    iterator = iter(dataset)
-    total_loss = 0.0
-    total_chars = 0
+    # Accumulators
+    total_cer = 0.0
+    total_wer = 0.0
     exact_matches = 0
     total_edit_distance = 0
     char_correct = 0
     char_total = 0
+    num_valid = 0
+    examples = []
     
-    print(f"\nEvaluating on {num_samples} samples...")
+    if verbose:
+        print(f"\nEvaluating OCR on {num_samples} samples...")
+        if use_beam_search:
+            print("  Using beam search decoding (slower, better quality)")
+        else:
+            print("  Using greedy decoding (faster)")
+        iterator = tqdm(dataset, total=num_samples, desc="Processing")
+    else:
+        iterator = iter(dataset)
     
     with torch.no_grad():
-        for i in range(num_samples):
+        for i, (image_tensor, text_ids) in enumerate(iterator):
+            if i >= num_samples:
+                break
+            
             try:
-                image_tensor, text_ids = next(iterator)
                 image_tensor = image_tensor.unsqueeze(0).to(device)
                 
                 # Decode ground truth
@@ -281,123 +340,200 @@ def evaluate_ocr_model(model, idx_to_char, char_to_idx, cfg, device="cuda", num_
                             ground_truth += char
                 
                 # Run inference
-                extracted_text = test_ocr_inference(model, image_tensor, idx_to_char, char_to_idx, device)
+                if use_beam_search:
+                    predicted_text = decode_beam_search(model, image_tensor, char_to_idx, idx_to_char, device)
+                else:
+                    predicted_text = decode_greedy(model, image_tensor, char_to_idx, idx_to_char, device)
                 
-                # Calculate edit distance
-                edit_dist = calculate_edit_distance(extracted_text, ground_truth)
+                # Compute metrics
+                cer = compute_cer(predicted_text, ground_truth)
+                wer = compute_wer(predicted_text, ground_truth)
+                edit_dist = levenshtein_distance(predicted_text, ground_truth)
+                
+                total_cer += cer
+                total_wer += wer
                 total_edit_distance += edit_dist
                 
                 # Exact match
-                if extracted_text == ground_truth:
+                if predicted_text == ground_truth:
                     exact_matches += 1
                 
                 # Character-level accuracy
-                max_len = max(len(extracted_text), len(ground_truth))
+                max_len = max(len(predicted_text), len(ground_truth))
                 for j in range(max_len):
                     char_total += 1
-                    if j < len(extracted_text) and j < len(ground_truth):
-                        if extracted_text[j] == ground_truth[j]:
+                    if j < len(predicted_text) and j < len(ground_truth):
+                        if predicted_text[j] == ground_truth[j]:
                             char_correct += 1
                 
-                # Compute loss (teacher forcing)
-                bos_id = char_to_idx.get('<BOS>', 1)
-                input_ids = torch.tensor([[bos_id]], device=device)
-                total_loss_batch = 0.0
-                num_steps = 0
+                num_valid += 1
                 
-                for step, target_id in enumerate(text_ids[:min(len(text_ids), 128)]):
-                    if target_id == char_to_idx.get('<EOS>', 2):
-                        break
-                    logits = model(image_tensor, input_ids)
-                    target_tensor = torch.tensor([[target_id]], device=device)
-                    step_loss = loss_fn(logits[:, -1:, :].view(-1, logits.size(-1)), target_tensor.view(-1))
-                    total_loss_batch += step_loss.item()
-                    num_steps += 1
-                    input_ids = torch.cat([input_ids, target_tensor], dim=1)
+                # Save first 10 examples
+                if len(examples) < 10:
+                    examples.append({
+                        'ground_truth': ground_truth,
+                        'predicted': predicted_text,
+                        'cer': cer,
+                        'wer': wer,
+                        'edit_distance': edit_dist,
+                    })
                 
-                if num_steps > 0:
-                    total_loss += total_loss_batch / num_steps
-                    total_chars += num_steps
-                
-                if (i + 1) % 10 == 0:
-                    print(f"  Processed {i + 1}/{num_samples} samples...", end='\r')
-                    
-            except StopIteration:
-                print(f"\n⚠️  Dataset exhausted after {i} samples")
-                break
             except Exception as e:
-                print(f"\n⚠️  Error processing sample {i}: {e}")
+                if verbose:
+                    print(f"\n⚠️  Error processing sample {i}: {e}")
                 continue
     
-    print()  # New line after progress
+    if num_valid == 0:
+        raise ValueError("No valid samples processed!")
     
-    # Calculate metrics
-    avg_loss = total_loss / num_samples if num_samples > 0 else float('inf')
-    exact_match_rate = (exact_matches / num_samples * 100) if num_samples > 0 else 0.0
-    avg_edit_distance = total_edit_distance / num_samples if num_samples > 0 else 0.0
-    char_accuracy = (char_correct / char_total * 100) if char_total > 0 else 0.0
+    # Calculate averages
+    avg_cer = total_cer / num_valid
+    avg_wer = total_wer / num_valid
+    exact_match_rate = exact_matches / num_valid
+    avg_edit_distance = total_edit_distance / num_valid
+    char_accuracy = char_correct / char_total if char_total > 0 else 0.0
     
     return {
-        'loss': avg_loss,
+        'num_samples': num_valid,
+        'cer': avg_cer,
+        'wer': avg_wer,
         'exact_match_rate': exact_match_rate,
-        'char_accuracy': char_accuracy,
         'avg_edit_distance': avg_edit_distance,
-        'num_samples': i + 1
+        'char_accuracy': char_accuracy,
+        'examples': examples,
     }
 
+
+def print_results(metrics):
+    """Pretty print evaluation results."""
+    print(f"\n{'='*70}")
+    print("OCR MODEL EVALUATION RESULTS")
+    print(f"{'='*70}")
+    
+    print(f"\nSamples Evaluated: {metrics['num_samples']}")
+    
+    # Core metrics
+    print(f"\nCORE OCR METRICS:")
+    print(f"  Character Error Rate (CER): {metrics['cer']*100:.2f}%")
+    print(f"    (Lower is better. Measures character-level accuracy)")
+    print(f"  Word Error Rate (WER): {metrics['wer']*100:.2f}%")
+    print(f"    (Lower is better. Measures word-level accuracy)")
+    print(f"  Exact Match Rate: {metrics['exact_match_rate']*100:.2f}%")
+    print(f"    (Perfect predictions)")
+    
+    print(f"\nADDITIONAL METRICS:")
+    print(f"  Character Accuracy: {metrics['char_accuracy']*100:.2f}%")
+    print(f"  Average Edit Distance: {metrics['avg_edit_distance']:.2f} characters")
+    
+    # Interpretation
+    print(f"\n{'='*70}")
+    print("INTERPRETATION:")
+    print(f"{'='*70}")
+    
+    # CER assessment
+    cer = metrics['cer']
+    if cer < 0.02:
+        cer_status = "✓ EXCELLENT - Near-perfect recognition"
+    elif cer < 0.05:
+        cer_status = "✓ GOOD - High accuracy"
+    elif cer < 0.10:
+        cer_status = "⚠ ACCEPTABLE - Usable quality"
+    else:
+        cer_status = "✗ POOR - Needs more training"
+    
+    # Exact match assessment
+    exact_match = metrics['exact_match_rate']
+    if exact_match > 0.80:
+        match_status = "✓ EXCELLENT - Very reliable"
+    elif exact_match > 0.50:
+        match_status = "✓ GOOD - Mostly accurate"
+    elif exact_match > 0.30:
+        match_status = "⚠ ACCEPTABLE - Moderate accuracy"
+    else:
+        match_status = "✗ POOR - Low reliability"
+    
+    print(f"CER: {cer_status}")
+    print(f"Exact Match: {match_status}")
+    
+    # Examples
+    if metrics['examples']:
+        print(f"\n{'='*70}")
+        print("SAMPLE PREDICTIONS:")
+        print(f"{'='*70}")
+        
+        for idx, ex in enumerate(metrics['examples']):
+            print(f"\nExample {idx+1}:")
+            print(f"  Ground Truth: '{ex['ground_truth']}'")
+            print(f"  Predicted:    '{ex['predicted']}'")
+            print(f"  CER: {ex['cer']*100:.1f}% | WER: {ex['wer']*100:.1f}% | Edit Dist: {ex['edit_distance']}")
+    
+    # Overall assessment
+    print(f"\n{'='*70}")
+    
+    if cer < 0.05 and exact_match > 0.50:
+        print("✓ OCR model is working excellently!")
+        print("  High accuracy and reliability.")
+        print("  Ready for production use.")
+    elif cer < 0.10 and exact_match > 0.30:
+        print("✓ OCR model is working well!")
+        print("  Good baseline accuracy.")
+        print("  Consider training longer for better quality.")
+    else:
+        print("⚠ OCR model needs more training.")
+        print("  Current accuracy is below production standards.")
+        print("  Recommendation: Train for more steps or increase model size.")
+    
+    print(f"{'='*70}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Test OCR model")
+    parser = argparse.ArgumentParser(description="Test OCR model with accuracy metrics")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/ocr_tiny",
                        help="Path to OCR checkpoint directory")
     parser.add_argument("--num_samples", type=int, default=100,
                        help="Number of samples to evaluate (default: 100)")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                        help="Device to use (cuda/cpu)")
+    parser.add_argument("--quick", action="store_true",
+                       help="Quick test with 10 samples")
+    parser.add_argument("--beam_search", action="store_true",
+                       help="Use beam search decoding (slower, better quality)")
     args = parser.parse_args()
     
-    print("=" * 60)
-    print("OCR Model Test")
-    print("=" * 60)
+    if args.quick:
+        args.num_samples = 10
+    
+    print("=" * 70)
+    print("OCR MODEL ACCURACY TEST")
+    print("=" * 70)
     
     # Load model
     try:
-        model, idx_to_char, char_to_idx, cfg = load_model(args.checkpoint, args.device)
+        model, char_to_idx, idx_to_char, cfg = load_model_and_vocab(args.checkpoint, args.device)
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"✗ Error loading model: {e}")
         import traceback
         traceback.print_exc()
         return
     
-    # Evaluate on multiple samples from dataset
+    # Evaluate
     try:
-        metrics = evaluate_ocr_model(model, idx_to_char, char_to_idx, cfg, args.device, args.num_samples)
+        metrics = evaluate_ocr_accuracy(
+            model, char_to_idx, idx_to_char, cfg,
+            device=args.device,
+            num_samples=args.num_samples,
+            use_beam_search=args.beam_search,
+            verbose=True
+        )
         
-        print(f"\n{'=' * 60}")
-        print("EVALUATION RESULTS:")
-        print(f"{'=' * 60}")
-        print(f"Samples evaluated: {metrics['num_samples']}")
-        print(f"Average Loss: {metrics['loss']:.4f}")
-        print(f"Exact Match Rate: {metrics['exact_match_rate']:.2f}%")
-        print(f"Character Accuracy: {metrics['char_accuracy']:.2f}%")
-        print(f"Average Edit Distance: {metrics['avg_edit_distance']:.2f}")
-        print(f"{'=' * 60}")
+        print_results(metrics)
         
-        # Interpretation
-        if metrics['exact_match_rate'] > 80:
-            print("✓ Excellent OCR performance!")
-        elif metrics['exact_match_rate'] > 50:
-            print("✓ Good OCR performance")
-        elif metrics['exact_match_rate'] > 20:
-            print("⚠️  Moderate performance - model may need more training")
-        else:
-            print("⚠️  Poor performance - model needs significant training")
-            
     except Exception as e:
-        print(f"❌ Error during evaluation: {e}")
+        print(f"✗ Error during evaluation: {e}")
         import traceback
         traceback.print_exc()
         return
 
+
 if __name__ == "__main__":
     main()
-
