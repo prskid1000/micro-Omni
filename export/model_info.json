@@ -1,0 +1,13 @@
+{
+  "model_type": "muomni",
+  "components": {
+    "thinker": true,
+    "audio_encoder": true,
+    "vision_encoder": true,
+    "talker": true,
+    "ocr": false
+  },
+  "configs_dir": "configs",
+  "tokenizer": "tokenizer.model",
+  "safetensors_file": "export.safetensors"
+}

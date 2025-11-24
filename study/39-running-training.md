@@ -1,0 +1,346 @@
+# Chapter 39: Running Training - Complete Walkthrough
+
+[← Previous: Setup Environment](38-setup-environment.md) | [Back to Index](00-INDEX.md) | [Next: Inference Examples →](40-inference-examples.md)
+
+---
+
+## 🚀 Complete Training Pipeline
+
+Step-by-step guide to training μOmni from scratch.
+
+---
+
+## 📝 Prerequisites
+
+✅ Environment setup complete (Chapter 38)  
+✅ Data prepared (Chapter 35)  
+✅ GPU available (12GB+)
+
+---
+
+## 🎯 Training Sequence
+
+### Stage A: Thinker (Text-Only)
+
+```bash
+# Train language model
+python train_text.py --config configs/thinker_tiny.json
+
+# Expected time: 8-12 hours
+# Expected result: Perplexity < 10
+# Output: checkpoints/thinker_tiny/model.pt + model_metadata.json
+```
+
+**Monitor:**
+
+```bash
+# Watch GPU
+watch -n 1 nvidia-smi
+
+# Check logs
+tail -f checkpoints/thinker_tiny/training.log
+```
+
+### Stage B: Audio Encoder
+
+```bash
+python train_audio_enc.py --config configs/audio_enc_tiny.json
+
+# Time: 6-10 hours
+# Target: WER < 20%
+# Output: checkpoints/audio_enc_tiny/model.pt + model_metadata.json
+```
+
+**Configuration Note:**
+
+- `max_mel_length` is **auto-calculated** from your dataset (95th percentile)
+- No manual configuration needed - training script analyzes dataset automatically
+- Can override with `max_mel_length` or adjust `max_mel_length_percentile` if needed
+- Optional: Check your dataset: `python scripts/check_mel_lengths.py --csv data/audio/production_asr.csv`
+
+### Stage C: Vision Encoder
+
+```bash
+python train_vision.py --config configs/vision_tiny.json
+
+# Time: 4-8 hours
+# Target: Low contrastive loss (good vision-language alignment)
+# Output: checkpoints/vision_tiny/model.pt + model_metadata.json
+```
+
+**Configuration Note:**
+
+- Uses trained tokenizer from Stage A (`thinker_ckpt/tokenizer.model`)
+- Configurable text encoding: `use_thinker_for_text` (default: true)
+  - `true`: Uses frozen Thinker model for contextual embeddings (recommended)
+  - `false`: Uses simple tokenizer + embedding layer (lighter option)
+- If tokenizer not found, trains new one from image captions
+
+### Stage D: Talker + RVQ
+
+```bash
+python train_talker.py --config configs/talker_tiny.json
+
+# Time: 10-15 hours
+# Target: Intelligible speech
+# Output: checkpoints/talker_tiny/model.pt + model_metadata.json
+```
+
+**Configuration Note:**
+
+- `max_mel_length` is **auto-calculated** from your dataset (95th percentile)
+- No manual configuration needed - training script analyzes dataset automatically
+- Talker uses different frame rate (12.5 fps with frame_ms=80) than audio encoder (100 fps)
+- Can override with `max_mel_length` or adjust `max_mel_length_percentile` if needed
+
+### Stage E: Multimodal SFT
+
+```bash
+python sft_omni.py --config configs/omni_sft_tiny.json
+
+# Time: 6-12 hours
+# Target: Good multimodal Q&A
+# Output: checkpoints/omni_sft_tiny/model.pt + model_metadata.json
+```
+
+### Optional: HiFi-GAN Vocoder Training
+
+```bash
+# Train neural vocoder for better speech quality (optional)
+python train_vocoder.py --config configs/vocoder_tiny.json
+
+# Time: 2-4 hours (on 12GB GPU with optimizations)
+# Target: Natural-sounding speech
+# Output: checkpoints/vocoder_tiny/model.pt + model_metadata.json
+# Note: Falls back to Griffin-Lim if checkpoint not available
+```
+
+**When to train:**
+
+- After Stage D (Talker) is complete
+- If you want higher quality speech output
+- Griffin-Lim works fine for basic TTS, but HiFi-GAN is better
+
+**Performance Optimizations:**
+
+- ✅ torch.compile() enabled (10-20% speedup)
+- ✅ cuDNN benchmark mode (5-15% speedup for convolutions)
+- ✅ channels_last memory format (10-30% performance boost)
+- ✅ Cached discriminator features (20-25% faster, no redundant forward passes)
+- ✅ Mixed precision training (FP16) - 50% memory savings, 2x faster
+- ✅ Gradient accumulation for memory efficiency
+- ✅ Total speedup: 3-4x faster training vs baseline
+
+**Implementation Notes:**
+
+- ✅ Generator correctly handles tensor dimensions (outputs `(B, T_audio)` for batches)
+- ✅ Audio loading automatically falls back to `torchaudio.load()` if torchcodec unavailable
+- ✅ Discriminator inputs properly shaped as `(B, 1, T)` automatically
+- ✅ All shape handling verified and working correctly
+- ✅ CNN-specific optimizations (cuDNN autotuner, channels_last format)
+- ✅ Feature caching eliminates redundant discriminator forward passes
+
+### Optional: OCR Training
+
+```bash
+# Train OCR model for text extraction from images (optional)
+python train_ocr.py --config configs/ocr_tiny.json
+
+# Time: 4-8 hours (on 12GB GPU)
+# Target: Accurate text extraction from images
+# Output: checkpoints/ocr_tiny/model.pt + model_metadata.json
+# Note: Can be used with --ocr flag in inference
+```
+
+**Configuration Note:**
+
+- `max_text_length` is **auto-calculated** from your dataset (95th percentile)
+- No manual configuration needed - training script analyzes dataset automatically
+- Can override with `max_text_length` or adjust `max_text_length_percentile` if needed
+- Default: 256 characters
+- Adjust based on your text lengths (short: 128, long: 512)
+
+**When to train:**
+
+- If you need text extraction from images
+- For document processing, scene text recognition
+- Can be combined with multimodal understanding in Stage E
+
+---
+
+## 📊 Monitoring Training
+
+### Key Metrics to Watch
+
+**Stage A (Thinker):**
+
+- Loss decreasing steadily
+- Perplexity < 10 (target)
+- No NaN/Inf values
+
+**Stage B (Audio):**
+
+- CTC loss decreasing
+- WER improving (lower is better)
+- Target: WER < 20%
+
+**Stage C (Vision):**
+
+- Accuracy increasing
+- Loss decreasing
+- Target: Accuracy > 70%
+
+**Stage D (Talker):**
+
+- Reconstruction error < 0.05
+- Speech codes perplexity < 15
+- Generated speech intelligible
+
+**Stage E (SFT):**
+
+- All modalities improving
+- Cross-modal accuracy increasing
+- Target: >60% on mixed tasks
+
+---
+
+## 🛡️ Training Stability & Auto-Reload
+
+**Validation Loss Spike Protection:**
+
+All training scripts include a stability feature that automatically reloads the model from the last checkpoint if the validation loss spikes significantly.
+
+**How it works:**
+
+1.  **Threshold Check:** During validation, the script checks:
+    `current_val_loss > last_checkpoint_val_loss + val_loss_threshold`
+2.  **Trigger:** If the condition is met (loss spiked), a reload is triggered.
+3.  **Action:**
+    - Reloads model, optimizer, scheduler, and scaler from the **last saved checkpoint**.
+    - Resets the data loader to the correct position.
+    - Resumes training, effectively discarding the unstable steps since the last checkpoint.
+
+**Configuration:**
+
+```json
+{
+  "val_loss_threshold": 0.05 // Default: infinity (disabled) if not set
+}
+```
+
+- Set to a reasonable value (e.g., `0.05` or `0.1`) to enable.
+- Prevents training divergence and saves time by automatically recovering from instability.
+
+---
+
+## 🛠️ Resuming Training
+
+**Automatic Resuming:** All training scripts automatically detect and resume from the latest checkpoint. Simply rerun the training command:
+
+```bash
+# Training interrupted? Just rerun - it will auto-resume!
+python train_text.py --config configs/thinker_tiny.json
+
+# The script automatically:
+# ✅ Finds `model.pt` and `model_metadata.json` in save_dir
+# ✅ Loads all states (model, optimizer, scheduler, scaler)
+# ✅ Loads training state (step, epoch, config) from metadata
+# ✅ Skips already-processed samples via skip_samples
+# ✅ Continues from correct epoch and batch position
+# ✅ Shows accurate progress bar
+```
+
+**What happens during resume:**
+
+1. Script checks `save_dir` for `model.pt` and `model_metadata.json`
+2. Loads training metadata (step, epoch, config) from JSON file
+3. Loads model weights, optimizer state, scheduler state, and scaler from `model.pt`
+4. Calculates `skip_samples = step * batch_size` and sets on dataset
+5. Recreates DataLoader so workers pick up the new `skip_samples` value
+6. Calculates starting epoch and batch index based on metadata
+7. Initializes progress bar at correct position
+8. Training continues seamlessly from where it stopped
+
+**Epoch completion:**
+
+- Training continues through all epochs until `max_steps` is reached
+- Model is saved at the end of each epoch for checkpointing
+- Training only stops when `max_steps` is reached or manually interrupted
+- DataLoader is recreated for each new epoch (IterableDatasets are exhausted after one iteration)
+- `skip_samples` is automatically reset to 0 by the dataset after each iteration completes
+- This ensures each epoch starts from the beginning of the dataset
+
+**Dataset exhaustion handling:**
+The training scripts handle three scenarios gracefully:
+
+1. **Dataset exceeds max_steps:**
+
+   - Training stops when `max_steps` is reached (checked after each epoch)
+   - All available data is processed up to the step limit
+   - Model is saved at the final checkpoint
+
+2. **Dataset smaller than one epoch:**
+
+   - Processes all available batches in the epoch
+   - Dataset automatically resets `skip_samples` to 0 after iteration completes
+   - Next epoch starts from the beginning of the dataset
+   - Training continues until `max_steps` is reached
+
+3. **Dataset smaller than total epochs:**
+   - Each epoch processes all available data from the beginning
+   - `skip_samples` automatically resets to 0 after each iteration
+   - Training continues through all epochs until `max_steps` is reached
+   - Useful for small datasets that need multiple passes
+
+**Automatic skip_samples reset:**
+
+- All `IterableDataset` classes automatically reset `skip_samples` to 0 after the first iteration completes
+- This happens in the dataset's `__iter__` method when the generator is exhausted
+- Ensures subsequent epochs always start from the beginning of the dataset
+- Works correctly even if the dataset is exhausted mid-epoch
+
+**Validation during resume:**
+
+- Validation always processes the full validation set
+- `skip_samples` is temporarily reset to 0 during validation
+- Original `skip_samples` is restored after validation
+- This ensures validation metrics are always computed on complete data
+
+**No manual intervention needed** - resuming is fully automatic!
+
+---
+
+## 💡 Tips
+
+✅ **Run stages in parallel** (if multiple GPUs)  
+✅ **Start with small data** to verify pipeline  
+✅ **Monitor GPU memory** with `nvidia-smi`  
+✅ **Save checkpoints frequently** (every 1000 steps)  
+✅ **Use tmux/screen** for long training sessions  
+✅ **Automatic resuming** - just rerun training command if interrupted  
+✅ **Consistent utilities** - all scripts share common checkpoint/resume logic
+
+---
+
+## 📦 After Training: Export for Deployment
+
+Once all stages are complete, you can export your trained model for deployment:
+
+```bash
+# Export all components to safetensors
+python export.py \
+    --omni_ckpt checkpoints/omni_sft_tiny \
+    --thinker_ckpt checkpoints/thinker_tiny \
+    --audio_ckpt checkpoints/audio_enc_tiny \
+    --vision_ckpt checkpoints/vision_tiny \
+    --talker_ckpt checkpoints/talker_tiny \
+    --output_dir merged_model
+```
+
+See [Chapter 46: Model Export and Deployment](46-model-export-deployment.md) for detailed instructions, or [Chapter 47: Quick Start Export](47-quick-start-export.md) for a quick reference.
+
+---
+
+[Continue to Chapter 40: Inference Examples →](40-inference-examples.md)
+
+---

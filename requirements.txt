@@ -1,0 +1,19 @@
+--index-url https://download.pytorch.org/whl/cu129
+
+# Core PyTorch (2.9.0+ required for Triton 3.5.0 compatibility)
+torch
+torchaudio
+torchvision
+#torchcodec
+numpy
+scipy
+Pillow
+librosa
+soundfile
+sentencepiece
+tqdm
+einops
+requests
+av
+safetensors
+transformers
