@@ -844,7 +844,7 @@ def calculate_resume_position(step, steps_per_epoch):
 def collate_mel_fn(batch, max_mel_length=None):
     """
     Collate function that pads all mel spectrograms to a fixed maximum length.
-    This ensures uniform batch sizes for CUDA graphs compilation.
+    No truncation is performed - datasets filter outliers during iteration.
     
     Args:
         batch: List of mel spectrograms
@@ -853,7 +853,7 @@ def collate_mel_fn(batch, max_mel_length=None):
     Returns:
         tuple: (padded_mels, mel_lengths) where:
             - padded_mels is (B, T, n_mels) - padded mel spectrograms
-            - mel_lengths is (B,) tensor of original mel lengths (before padding)
+            - mel_lengths is (B,) tensor of original mel lengths
     """
     n_mels = batch[0].shape[1]
     
@@ -867,25 +867,20 @@ def collate_mel_fn(batch, max_mel_length=None):
     mel_lengths = []
     for m in batch:
         current_len = m.shape[0]
-        original_len = current_len  # Store original length before truncation
-        if current_len > max_len:
-            # Truncate if longer than max (shouldn't happen with proper config)
-            m = m[:max_len]
-            current_len = max_len
-        
+        # No truncation needed - datasets filter outliers during iteration
         pad_len = max_len - current_len
         if pad_len > 0:
             pad = m.new_zeros(pad_len, n_mels)
             m = torch.cat([m, pad], dim=0)
         padded.append(m)
-        mel_lengths.append(min(original_len, max_len))  # Store actual length used (may be truncated)
+        mel_lengths.append(current_len)
     
     return torch.stack(padded), torch.tensor(mel_lengths, dtype=torch.long)
 
 def collate_mel_text_fn(batch, max_mel_length=None):
     """
     Collate function that pads mel spectrograms and returns text list.
-    This ensures uniform batch sizes for CUDA graphs compilation.
+    No truncation is performed - datasets filter outliers during iteration.
     
     Args:
         batch: List of (mel, text) tuples
@@ -895,7 +890,7 @@ def collate_mel_text_fn(batch, max_mel_length=None):
         tuple: (padded_mels, texts, mel_lengths) where:
             - padded_mels is (B, T, n_mels) - padded mel spectrograms
             - texts is a list of text strings
-            - mel_lengths is (B,) tensor of original mel lengths (before padding)
+            - mel_lengths is (B,) tensor of original mel lengths
     """
     mels, texts = zip(*batch)
     n_mels = mels[0].shape[1]
@@ -910,25 +905,20 @@ def collate_mel_text_fn(batch, max_mel_length=None):
     mel_lengths = []
     for m in mels:
         current_len = m.shape[0]
-        original_len = current_len  # Store original length before truncation
-        if current_len > max_len:
-            # Truncate if longer than max (shouldn't happen with proper config)
-            m = m[:max_len]
-            current_len = max_len
-        
+        # No truncation needed - datasets filter outliers during iteration
         pad_len = max_len - current_len
         if pad_len > 0:
             pad = m.new_zeros(pad_len, n_mels)
             m = torch.cat([m, pad], dim=0)
         padded_mels.append(m)
-        mel_lengths.append(min(original_len, max_len))  # Store actual length used (may be truncated)
+        mel_lengths.append(current_len)
     
     return torch.stack(padded_mels), list(texts), torch.tensor(mel_lengths, dtype=torch.long)
 
 def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
     """
     Collate function for mel spectrograms and audio pairs.
-    Pads both mels and audios to fixed lengths for uniform batch sizes.
+    No truncation is performed - datasets filter outliers during iteration.
     
     Args:
         batch: List of (mel, audio) tuples
@@ -939,8 +929,8 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
         tuple: (padded_mels, padded_audios, mel_lengths, audio_lengths) where:
             - padded_mels is (B, T_mel, n_mels) - padded mel spectrograms
             - padded_audios is (B, T_audio) - padded audio waveforms
-            - mel_lengths is (B,) tensor of original mel lengths (before padding)
-            - audio_lengths is (B,) tensor of original audio lengths (before padding)
+            - mel_lengths is (B,) tensor of original mel lengths
+            - audio_lengths is (B,) tensor of original audio lengths
     """
     mels, audios = zip(*batch)
     
@@ -955,16 +945,13 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
     mel_lengths = []
     for m in mels:
         current_len = m.shape[0]
-        original_len = current_len  # Store original length before truncation
-        if current_len > max_mel_len:
-            m = m[:max_mel_len]
-            current_len = max_mel_len
+        # No truncation needed - datasets filter outliers during iteration
         pad_len = max_mel_len - current_len
         if pad_len > 0:
             pad = m.new_zeros(pad_len, n_mels)
             m = torch.cat([m, pad], dim=0)
         padded_mels.append(m)
-        mel_lengths.append(min(original_len, max_mel_len))  # Store actual length used (may be truncated)
+        mel_lengths.append(current_len)
     
     # Pad audio waveforms
     if max_audio_length is not None:
@@ -976,15 +963,12 @@ def collate_mel_audio_fn(batch, max_mel_length=None, max_audio_length=None):
     audio_lengths = []
     for a in audios:
         current_len = a.shape[0]
-        original_len = current_len  # Store original length before truncation
-        if current_len > max_audio_len:
-            a = a[:max_audio_len].clone()  # Clone to free original if longer
-            current_len = max_audio_len
+        # No truncation needed - datasets filter outliers during iteration
         pad_len = max_audio_len - current_len
         if pad_len > 0:
             a = torch.cat([a, torch.zeros(pad_len, dtype=a.dtype, device=a.device)], dim=0)
         padded_audios.append(a)
-        audio_lengths.append(min(original_len, max_audio_len))  # Store actual length used (may be truncated)
+        audio_lengths.append(current_len)
     
     return (
         torch.stack(padded_mels), 
@@ -1585,8 +1569,15 @@ class ASRDataset(IterableDataset):
         self._num_rows = None
         # Error handling configuration
         self.warn_on_errors = cfg.get("warn_on_dataset_errors", False) if cfg else False
-        self._error_counts = {"missing_file": 0, "load_error": 0, "empty_text": 0}
+        self._error_counts = {"missing_file": 0, "load_error": 0, "empty_text": 0, "exceeds_max_len": 0}
         self._first_error_logged = False
+        
+        # Percentile-based filtering (skip samples exceeding thresholds)
+        self.text_percentile = cfg.get("text_percentile", None) if cfg else None
+        self.mel_percentile = cfg.get("mel_percentile", None) if cfg else None
+        self.max_text_len = cfg.get("max_text_len", None) if cfg else None
+        self.max_mel_length = cfg.get("max_mel_length", None) if cfg else None
+        self.filter_outliers = cfg.get("filter_outliers", True) if cfg else True  # Skip samples exceeding max lengths
     
     def get_length(self):
         """Count CSV rows (expensive, cached after first call)"""
@@ -1669,6 +1660,17 @@ class ASRDataset(IterableDataset):
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
                     mel = self.melspec(wav)[0].T
                     
+                    # Filter outliers: skip samples exceeding max lengths
+                    if self.filter_outliers:
+                        # Check text length
+                        if self.max_text_len is not None and len(text) > self.max_text_len:
+                            self._error_counts["exceeds_max_len"] += 1
+                            continue
+                        # Check mel length
+                        if self.max_mel_length is not None and mel.shape[0] > self.max_mel_length:
+                            self._error_counts["exceeds_max_len"] += 1
+                            continue
+                    
                     # Buffer-based shuffling
                     if self.shuffle_buffer_size > 0:
                         buffer.append((mel, text))
@@ -1709,6 +1711,16 @@ class OCRDataset(IterableDataset):
         else:
             self.char_to_idx, self.idx_to_char = {}, {}
             self._build_vocab(csv_path)
+        
+        # Percentile-based filtering (skip samples exceeding thresholds)
+        self.text_percentile = cfg.get("text_percentile", None) if cfg else None
+        self.max_text_length = cfg.get("max_text_length", None) if cfg else None
+        self.filter_outliers = cfg.get("filter_outliers", True) if cfg else True  # Skip samples exceeding max lengths
+        self._error_counts = {"exceeds_max_len": 0}
+    
+    def get_error_stats(self):
+        """Get statistics about skipped samples due to exceeding max lengths."""
+        return self._error_counts.copy()
     
     def get_length(self):
         """Count CSV rows (expensive, cached after first call)"""
@@ -1774,6 +1786,12 @@ class OCRDataset(IterableDataset):
                     continue
                 text = row.get("text", "") or row.get("label", "") or row.get("text_label", "")
                 
+                # Filter outliers: skip samples with text exceeding max length
+                if self.filter_outliers and self.max_text_length is not None:
+                    if len(text) > self.max_text_length:
+                        self._error_counts["exceeds_max_len"] += 1
+                        continue
+                
                 try:
                     full_img_path = os.path.join(self.image_root, img_path) if not os.path.isabs(img_path) else img_path
                     img = Image.open(full_img_path).convert("RGB")
@@ -1811,6 +1829,16 @@ class TTSDataset(IterableDataset):
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=hop_length, win_length=win_length, n_mels=n_mels)
         self.frame = int(sr * 0.08)
         self._num_rows = None
+        
+        # Percentile-based filtering (skip samples exceeding thresholds)
+        self.mel_percentile = cfg.get("mel_percentile", None) if cfg else None
+        self.max_mel_length = cfg.get("max_mel_length", None) if cfg else None
+        self.filter_outliers = cfg.get("filter_outliers", True) if cfg else True  # Skip samples exceeding max lengths
+        self._error_counts = {"exceeds_max_len": 0}
+    
+    def get_error_stats(self):
+        """Get statistics about skipped samples due to exceeding max lengths."""
+        return self._error_counts.copy()
     
     def get_length(self):
         """Count CSV rows (expensive, cached after first call)"""
@@ -1855,6 +1883,12 @@ class TTSDataset(IterableDataset):
                     if sr != self.sr:
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
                     mel = self.melspec(wav)[0].T
+                    
+                    # Filter outliers: skip samples exceeding max mel length
+                    if self.filter_outliers and self.max_mel_length is not None:
+                        if mel.shape[0] > self.max_mel_length:
+                            self._error_counts["exceeds_max_len"] += 1
+                            continue
                     
                     # Buffer-based shuffling
                     if self.shuffle_buffer_size > 0:
@@ -1955,8 +1989,19 @@ class VocoderDataset(IterableDataset):
         self.csv_path, self.sr, self.n_mels = csv_path, sr, n_mels
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.max_audio_length = cfg.get("max_audio_length", None) if cfg else None
+        self.max_mel_length = cfg.get("max_mel_length", None) if cfg else None
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=n_fft, hop_length=hop_length, win_length=n_fft, n_mels=n_mels)
         self._num_rows = None
+        
+        # Percentile-based filtering (skip samples exceeding thresholds)
+        self.audio_percentile = cfg.get("audio_percentile", None) if cfg else None
+        self.mel_percentile = cfg.get("mel_percentile", None) if cfg else None
+        self.filter_outliers = cfg.get("filter_outliers", True) if cfg else True  # Skip samples exceeding max lengths
+        self._error_counts = {"exceeds_max_len": 0}
+    
+    def get_error_stats(self):
+        """Get statistics about skipped samples due to exceeding max lengths."""
+        return self._error_counts.copy()
     
     def get_length(self):
         """Count CSV rows (expensive, cached after first call)"""
@@ -2005,14 +2050,22 @@ class VocoderDataset(IterableDataset):
                         audio = audio.mean(dim=0, keepdim=True)
                     audio = audio.squeeze(0)
                     
-                    # Crop audio EARLY to minimize memory usage
-                    # This prevents loading large audio files into memory unnecessarily
-                    if self.max_audio_length and audio.shape[0] > self.max_audio_length:
-                        start_idx = torch.randint(0, audio.shape[0] - self.max_audio_length + 1, (1,)).item() if self.max_audio_length < audio.shape[0] else 0
-                        audio = audio[start_idx:start_idx + self.max_audio_length].clone()  # Clone to free original
+                    # Filter outliers: skip samples exceeding max audio length
+                    if self.filter_outliers and self.max_audio_length is not None:
+                        if audio.shape[0] > self.max_audio_length:
+                            self._error_counts["exceeds_max_len"] += 1
+                            continue
                     
-                    # Compute mel from cropped audio (much smaller)
+                    # Compute mel spectrogram
                     mel = self.melspec(audio.unsqueeze(0))[0].T
+                    
+                    # Filter outliers: skip samples exceeding max mel length
+                    if self.filter_outliers and self.max_mel_length is not None:
+                        if mel.shape[0] > self.max_mel_length:
+                            self._error_counts["exceeds_max_len"] += 1
+                            continue
+                    
+                    # Normalize mel
                     mel_min, mel_max = mel.min(), mel.max()
                     if mel_max > mel_min + 1e-6:
                         mel = (mel - mel_min) / (mel_max - mel_min + 1e-8)
