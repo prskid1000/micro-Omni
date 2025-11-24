@@ -30,29 +30,22 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
     
     print(f"Loading checkpoint from: {checkpoint_path}")
     
-    # Get config from checkpoint or use defaults
+    # Get config from checkpoint or load from config file
     if "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
-        # Try loading from config file
-        config_path = "configs/vision_tiny.json"
+        # Load config from JSON file based on checkpoint directory
+        checkpoint_name = os.path.basename(checkpoint_dir)
+        config_path = f"configs/{checkpoint_name}.json"
+        
         if os.path.exists(config_path):
-            with open(config_path, "r") as f:
+            print(f"Loading config from: {config_path}")
+            with open(config_path, 'r') as f:
                 cfg = json.load(f)
         else:
-            cfg = {
-                "img_size": 224,
-                "patch": 16,
-                "d_model": 128,
-                "n_layers": 4,
-                "n_heads": 2,
-                "d_ff": 512,
-                "dropout": 0.1,
-                "embed_dim": 128,
-                "use_thinker_for_text": True,
-                "thinker_ckpt": "checkpoints/thinker_tiny",
-                "ctx_len": 512,
-            }
+            raise FileNotFoundError(
+                f"Config not found in checkpoint and config file not found: {config_path}"
+            )
     
     d_model = cfg.get("d_model", 128)
     embed_dim = cfg.get("embed_dim", d_model)

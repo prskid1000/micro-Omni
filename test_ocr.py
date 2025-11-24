@@ -22,27 +22,22 @@ def load_model(checkpoint_dir, device="cuda"):
     
     print(f"Loading checkpoint from: {checkpoint_path}")
     
-    # Get config from checkpoint or use defaults
+    # Get config from checkpoint or load from config file
     if "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
-        # Default config matching ocr_tiny.json
-        cfg = {
-            "img_size": 224,
-            "patch": 16,
-            "vision_d_model": 128,
-            "vision_layers": 4,
-            "vision_heads": 2,
-            "vision_d_ff": 512,
-            "decoder_d_model": 256,
-            "decoder_layers": 4,
-            "decoder_heads": 4,
-            "decoder_d_ff": 1024,
-            "dropout": 0.1,
-            "use_gqa": False,
-            "use_swiglu": True,
-            "use_flash": True,
-        }
+        # Load config from JSON file based on checkpoint directory
+        checkpoint_name = os.path.basename(checkpoint_dir)
+        config_path = f"configs/{checkpoint_name}.json"
+        
+        if os.path.exists(config_path):
+            print(f"Loading config from: {config_path}")
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+        else:
+            raise FileNotFoundError(
+                f"Config not found in checkpoint and config file not found: {config_path}"
+            )
     
     # Get vocabulary - try checkpoint first, then metadata file
     if "char_to_idx" in checkpoint and "idx_to_char" in checkpoint:

@@ -25,31 +25,22 @@ def load_model_and_tokenizer(checkpoint_dir, device="cuda"):
     
     print(f"Loading checkpoint from: {checkpoint_path}")
     
-    # Get config from checkpoint or use defaults
+    # Get config from checkpoint or load from config file
     if "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
-        # Try loading from config file
-        config_path = "configs/thinker_tiny.json"
+        # Load config from JSON file based on checkpoint directory
+        checkpoint_name = os.path.basename(checkpoint_dir)
+        config_path = f"configs/{checkpoint_name}.json"
+        
         if os.path.exists(config_path):
-            with open(config_path, "r") as f:
+            print(f"Loading config from: {config_path}")
+            with open(config_path, 'r') as f:
                 cfg = json.load(f)
         else:
-            cfg = {
-                "vocab_size": 32000,
-                "n_layers": 4,
-                "d_model": 256,
-                "n_heads": 4,
-                "d_ff": 1024,
-                "dropout": 0.1,
-                "rope_theta": 10000,
-                "ctx_len": 512,
-                "use_gqa": False,
-                "use_swiglu": True,
-                "use_moe": False,
-                "num_experts": 8,
-                "num_experts_per_tok": 2,
-            }
+            raise FileNotFoundError(
+                f"Config not found in checkpoint and config file not found: {config_path}"
+            )
     
     # Load tokenizer
     tokenizer_path = os.path.join(checkpoint_dir, "tokenizer.model")

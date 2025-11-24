@@ -39,25 +39,22 @@ def load_model_and_config(checkpoint_dir, device="cuda"):
     
     print(f"Loading checkpoint from: {checkpoint_path}")
     
-    # Get config from checkpoint or use defaults
+    # Get config from checkpoint or load from config file
     if "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
-        # Try loading from config file
-        config_path = "configs/vocoder_tiny.json"
+        # Load config from JSON file based on checkpoint directory
+        checkpoint_name = os.path.basename(checkpoint_dir)
+        config_path = f"configs/{checkpoint_name}.json"
+        
         if os.path.exists(config_path):
-            with open(config_path, "r") as f:
+            print(f"Loading config from: {config_path}")
+            with open(config_path, 'r') as f:
                 cfg = json.load(f)
         else:
-            cfg = {
-                "sample_rate": 16000,
-                "n_mels": 128,
-                "n_fft": 1024,
-                "hop_length": 256,
-                "upsample_initial_channel": 256,
-                "resblock_kernel_sizes": [3, 5, 7],
-                "resblock_dilation_sizes": [[1, 2], [1, 2], [1, 2]],
-            }
+            raise FileNotFoundError(
+                f"Config not found in checkpoint and config file not found: {config_path}"
+            )
     
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("n_mels", 128)

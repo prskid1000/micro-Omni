@@ -84,25 +84,22 @@ def load_asr_models(audio_ckpt_dir, device="cuda"):
     
     print(f"Loading Audio Encoder from: {checkpoint_path}")
     
-    # Get config from checkpoint or use defaults
+    # Get config from checkpoint or load from config file
     if "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
-        config_path = "configs/audio_enc_tiny.json"
+        # Load config from JSON file based on checkpoint directory
+        checkpoint_name = os.path.basename(audio_ckpt_dir)
+        config_path = f"configs/{checkpoint_name}.json"
+        
         if os.path.exists(config_path):
-            with open(config_path, "r") as f:
+            print(f"Loading config from: {config_path}")
+            with open(config_path, 'r') as f:
                 cfg = json.load(f)
         else:
-            cfg = {
-                "d_model": 192,
-                "n_heads": 3,
-                "d_ff": 768,
-                "n_layers": 4,
-                "dropout": 0.1,
-                "downsample_time": 8,
-                "sample_rate": 16000,
-                "mel_bins": 128,
-            }
+            raise FileNotFoundError(
+                f"Config not found in checkpoint and config file not found: {config_path}"
+            )
     
     # Try to load vocabulary from checkpoint first (preferred)
     char_to_idx = None
