@@ -209,7 +209,7 @@ EPOCH 1 (Random initialization):
 
 Step 1:
 Context: "The cat sat on the"
-Predictions: Random! [0.0002, 0.0003, ..., 0.0001]
+Predictions: Random! [0.0002, 0.0005, ..., 0.0001]
 Generated: "purple banana democracy" ← Nonsense!
 Loss: 8.5 (very high)
 Perplexity: 4914 (terrible!)
@@ -291,7 +291,7 @@ Model has learned language! ✓
   // More epochs = more learning
 
   "learning_rate": 3e-4, // How fast to update weights
-  // 0.0003 = standard for Adam
+  // 0.0005 = standard for Adam
 
   "warmup_steps": 1000, // Gradually increase LR
   // Prevents early instability
@@ -494,15 +494,15 @@ Using device: cuda:0
 Starting training...
 
 Epoch 1/10:
-[Step 100/5000] loss=4.234 ppl=68.9 lr=0.00030 | 2.3s/step
-[Step 1000/5000] loss=3.156 ppl=23.4 lr=0.00030 | 2.1s/step
+[Step 100/5000] loss=4.234 ppl=68.9 lr=0.00050 | 2.3s/step
+[Step 1000/5000] loss=3.156 ppl=23.4 lr=0.00050 | 2.1s/step
 → Validation: loss=3.201 ppl=24.5
 ✓ Saved checkpoint: model.pt + metadata
 
 ...
 
 Epoch 10/10:
-[Step 5000/5000] loss=1.987 ppl=7.3 lr=0.00030 | 2.0s/step
+[Step 5000/5000] loss=1.987 ppl=7.3 lr=0.00050 | 2.0s/step
 → Final validation: loss=2.012 ppl=7.5
 ✓ Saved checkpoint: model.pt + metadata
 

@@ -46,7 +46,7 @@ configs/
 {
   "batch_size": 16, // Examples per batch
   "num_epochs": 10, // Training epochs
-  "learning_rate": 3e-4, // LR (0.0003)
+  "learning_rate": 3e-4, // LR (0.0005)
   "warmup_steps": 1000, // LR warmup
   "max_grad_norm": 1.0, // Gradient clipping
   "weight_decay": 0.01, // L2 regularization

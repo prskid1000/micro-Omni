@@ -7,6 +7,7 @@
 ## 🎯 Learning Objectives
 
 By the end of this chapter, you will understand:
+
 - Why normalization is crucial for training stability
 - The exploding/vanishing gradient problem
 - How LayerNorm and RMSNorm work
@@ -68,7 +69,7 @@ Layer 2 output: [5.2, -8.1, 12.3, 3.7]  (scale increasing!)
       ↓
 Layer 3 output: [102, -45, 87, -156]  (exploding! 🔥)
       ↓
-Layer 4 output: [0.0001, -0.0003, 0.0002, 0.0001]  (vanishing! ❄️)
+Layer 4 output: [0.0001, -0.0005, 0.0002, 0.0001]  (vanishing! ❄️)
 
 Problems:
 ❌ Exploding gradients: Numbers get too large (NaN/Inf)
@@ -264,24 +265,24 @@ class LayerNorm(nn.Module):
     def __init__(self, dim, eps=1e-6):
         super().__init__()
         self.eps = eps
-        
+
         # Learnable parameters
         self.gamma = nn.Parameter(torch.ones(dim))  # Scale
         self.beta = nn.Parameter(torch.zeros(dim))  # Shift
-    
+
     def forward(self, x):
         # x: (batch, seq_len, dim)
-        
+
         # Compute mean and std across last dimension (features)
         mean = x.mean(dim=-1, keepdim=True)  # (batch, seq_len, 1)
         std = x.std(dim=-1, keepdim=True)    # (batch, seq_len, 1)
-        
+
         # Normalize
         x_normalized = (x - mean) / (std + self.eps)
-        
+
         # Apply learnable affine transform
         output = self.gamma * x_normalized + self.beta
-        
+
         return output
 ```
 
@@ -381,23 +382,23 @@ class RMSNorm(nn.Module):
     def __init__(self, dim, eps=1e-6):
         super().__init__()
         self.eps = eps
-        
+
         # Only scale parameter (no bias!)
         self.weight = nn.Parameter(torch.ones(dim))
-    
+
     def forward(self, x):
         # x: (batch, seq_len, dim)
-        
+
         # Compute RMS: sqrt of mean of squares
         rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
         # rms: (batch, seq_len, 1)
-        
+
         # Normalize by RMS
         x_normalized = x / rms
-        
+
         # Apply learnable scale (no shift!)
         output = self.weight * x_normalized
-        
+
         return output
 
 # Even more efficient version:
@@ -406,7 +407,7 @@ class RMSNorm_Fast(nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
-    
+
     def forward(self, x):
         # Fused operations for speed
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
@@ -513,10 +514,10 @@ PRE-NORM TRANSFORMER BLOCK (μOmni uses this!):
 def forward(x):
     # Self-attention sublayer
     x = x + attention(norm(x))  # Norm BEFORE attention
-    
+
     # Feedforward sublayer
     x = x + ffn(norm(x))        # Norm BEFORE ffn
-    
+
     return x
 
 Benefits:
@@ -537,22 +538,22 @@ class Block(nn.Module):
     """Transformer block with pre-norm RMSNorm"""
     def __init__(self, d_model):
         super().__init__()
-        
+
         # RMSNorm layers (one for attention, one for FFN)
         self.norm1 = RMSNorm(d_model)
         self.norm2 = RMSNorm(d_model)
-        
+
         # Attention and FFN
         self.attention = Attention(d_model)
         self.ffn = MLP(d_model)
-    
+
     def forward(self, x):
         # Pre-norm attention sublayer
         x = x + self.attention(self.norm1(x))
-        
+
         # Pre-norm FFN sublayer
         x = x + self.ffn(self.norm2(x))
-        
+
         return x
 
 # Configuration:
@@ -630,4 +631,3 @@ Reasons:
 **Chapter Progress:** μOmni Architecture ●●●○○○○ (3/7 complete)
 
 ---
-
