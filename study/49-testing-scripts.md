@@ -730,5 +730,32 @@ python test_asr_tts.py \
 
 ---
 
+## PowerShell (Windows) Examples
+
+If you are running on Windows PowerShell / `pwsh`, here are handy commands to run tests from the repo root.
+
+Run a single test (example):
+```powershell
+python .\test_thinker.py --checkpoint checkpoints\thinker_tiny
+```
+
+Run the export safetensor check:
+```powershell
+python .\export\test_safetensor.py
+```
+
+Run all `test_*.py` scripts recursively (prints name then runs each):
+```powershell
+Get-ChildItem -Path . -Filter 'test_*.py' -Recurse | ForEach-Object {
+    Write-Host "Running $($_.FullName)" -ForegroundColor Cyan
+    python $($_.FullName)
+}
+```
+
+Notes:
+- For CI or scripted runs, prefer explicit script ordering (component tests → integration tests).
+- To force CPU-only runs, add `--device cpu` to each invocation.
+
+
 **Last Updated**: December 2024  
 **Version**: 1.0

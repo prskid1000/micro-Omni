@@ -747,3 +747,43 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --video path/to.mp4 --
 
 ## License
 MIT for this scaffold. Replace datasets with those compatible with your needs.
+
+## Testing
+
+Below are the test scripts included in this repository and quick PowerShell commands to run them on Windows (`pwsh`). These test scripts are standalone Python runners (not pytest tests) and load checkpoints and small validation samples by default.
+
+- **Component tests**:
+   - `test_thinker.py` (Thinker LM)
+   - `test_ocr.py` (OCR model)
+   - `test_audio_enc.py` (Audio encoder)
+   - `test_vision.py` (Vision encoder)
+   - `test_talker.py` (Talker + RVQ)
+   - `test_vocoder.py` (Vocoder)
+   - `test_asr_tts.py` (ASR + TTS round-trip)
+   - `test_all_media.py` (integration / media-focused checks)
+   - `export/test_safetensor.py` (export / safetensor validation)
+
+Examples (PowerShell / pwsh):
+
+Run a single component test (replace checkpoint path as needed):
+```powershell
+python .\test_thinker.py --checkpoint checkpoints\thinker_tiny
+```
+
+Run all `test_*.py` scripts found in the repository (recursively):
+```powershell
+Get-ChildItem -Path . -Filter 'test_*.py' -Recurse | ForEach-Object {
+      Write-Host "Running $($_.FullName)" -ForegroundColor Cyan
+      python $($_.FullName)
+}
+```
+
+Run the export safetensor test specifically:
+```powershell
+python .\export\test_safetensor.py
+```
+
+Notes:
+- Use `--device cpu` to run tests on CPU if CUDA is not available.
+- Many tests accept `--num_samples` and `--checkpoint` arguments.
+- If you prefer `pytest`, you can wrap scripts or add small pytest wrappers, but these scripts are intended to be run directly.
