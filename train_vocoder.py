@@ -18,7 +18,7 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator
 from omni.utils import (
-    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset,
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
     save_training_metadata, load_training_metadata, analyze_vocoder_dataset
@@ -260,6 +260,14 @@ def main(cfg):
         weight_decay=cfg.get("wd", 1e-6)
     )
     
+    # EMA for generator (optional, improves quality)
+    use_ema = cfg.get("use_ema", False)
+    ema_decay = cfg.get("ema_decay", 0.999)
+    ema = None
+    if use_ema:
+        ema = EMA(generator, decay=ema_decay, device=device)
+        print(f"✓ EMA enabled for generator with decay={ema_decay}")
+    
     # Learning rate schedulers
     warmup_steps = cfg.get("warmup_steps", 1000)
     max_steps = cfg.get("max_steps", 100000)
@@ -386,13 +394,15 @@ def main(cfg):
             "opt_g": (opt_g, opt_g.load_state_dict),
             "opt_d": (opt_d, opt_d.load_state_dict),
             "scheduler_g": (scheduler_g, scheduler_g.load_state_dict),
-            "scheduler_d": (scheduler_d, scheduler_d.load_state_dict)
+            "scheduler_d": (scheduler_d, scheduler_d.load_state_dict),
+            "ema": (ema, ema.load_state_dict) if ema is not None else None
         }
     )
     
     # Track validation loss for reload logic
     last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
     most_recent_val_loss = last_checkpoint_val_loss
+    consecutive_reloads = 0  # Track consecutive reloads due to validation loss spikes
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 4)
@@ -756,6 +766,11 @@ def main(cfg):
                     scaler_g.step(opt_g)
                     scaler_g.update()
                     scheduler_g.step()
+                    
+                    # Update EMA after generator optimizer step
+                    if ema is not None:
+                        ema.update()
+                    
                     opt_g.zero_grad()
                     step += 1  # Increment immediately after optimizer step
             else:
@@ -859,6 +874,10 @@ def main(cfg):
             # Validation
             if step > 0 and step % val_freq == 0:
                 with ValidationSkipSamplesContext(train_ds):
+                    # Apply EMA weights for validation if enabled
+                    if ema is not None:
+                        ema.apply_shadow()
+                    
                     generator.eval()
                     mpd.eval()
                     msd.eval()
@@ -917,12 +936,27 @@ def main(cfg):
                     val_loss_d /= val_samples
                     logger.info(f"Step {step} | val_loss_g={val_loss_g:.4f} | val_loss_d={val_loss_d:.4f}")
                     
+                    # Restore original weights after validation
+                    if ema is not None:
+                        ema.restore()
+                    
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
                         if val_loss_g > last_checkpoint_val_loss + val_loss_threshold:
                              logger.warning(f"Validation loss spiked! {val_loss_g:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
+                             consecutive_reloads += 1
+                             if consecutive_reloads >= 2:
+                                 logger.error(f"Training stopped: Validation loss spiked {consecutive_reloads} times consecutively.")
+                                 logger.error("This indicates the model is not learning effectively. Consider:")
+                                 logger.error("  - Reducing learning rate")
+                                 logger.error("  - Adjusting val_loss_threshold")
+                                 logger.error("  - Checking data quality")
+                                 logger.training_end(step)
+                                 return
                              reload_needed = True
                              break
+                        else:
+                            consecutive_reloads = 0  # Reset counter on successful validation
                     most_recent_val_loss = val_loss_g
                     
                     generator.train()
@@ -935,7 +969,7 @@ def main(cfg):
             # Checkpointing
             if step > 0 and step % checkpoint_freq == 0:
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
-                torch.save({
+                checkpoint_data = {
                     "generator": generator.state_dict(),
                     "mpd": mpd.state_dict(),
                     "msd": msd.state_dict(),
@@ -943,7 +977,10 @@ def main(cfg):
                     "opt_d": opt_d.state_dict(),
                     "scheduler_g": scheduler_g.state_dict(),
                     "scheduler_d": scheduler_d.state_dict(),
-                }, model_path)
+                }
+                if ema is not None:
+                    checkpoint_data["ema"] = ema.state_dict()
+                torch.save(checkpoint_data, model_path)
                 
                 # Save training metadata
                 training_metadata = {

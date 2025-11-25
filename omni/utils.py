@@ -104,6 +104,302 @@ def make_positions(T: int, device: torch.device) -> torch.Tensor:
     """Create position indices from 0 to T-1."""
     return torch.arange(T, device=device).long()
 
+# Exponential Moving Average (EMA) for model parameters
+class EMA:
+    """
+    Exponential Moving Average of model parameters.
+    Improves model generalization and stability.
+    
+    Usage:
+        ema = EMA(model, decay=0.999)
+        
+        # During training:
+        optimizer.step()
+        ema.update()
+        
+        # For validation/inference:
+        ema.apply_shadow()  # Use EMA weights
+        ... validate ...
+        ema.restore()  # Restore original weights
+    """
+    def __init__(self, model, decay=0.999, device=None):
+        """
+        Args:
+            model: PyTorch model
+            decay: EMA decay rate (0.999 = slow update, 0.99 = faster update)
+            device: Device to store shadow parameters
+        """
+        self.model = model
+        self.decay = decay
+        self.device = device if device else next(model.parameters()).device
+        self.shadow = {}
+        self.backup = {}
+        
+        # Initialize shadow parameters
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone().to(self.device)
+    
+    def update(self):
+        """Update EMA shadow parameters after optimizer step."""
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[name]
+                self.shadow[name] = new_average.clone()
+    
+    def apply_shadow(self):
+        """Apply EMA weights to model (for validation/inference)."""
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                self.backup[name] = param.data.clone()
+                param.data = self.shadow[name].clone()
+    
+    def restore(self):
+        """Restore original model weights (after validation)."""
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                assert name in self.backup
+                param.data = self.backup[name].clone()
+        self.backup = {}
+    
+    def state_dict(self):
+        """Get EMA state for checkpointing."""
+        return {
+            'decay': self.decay,
+            'shadow': self.shadow
+        }
+    
+    def load_state_dict(self, state_dict):
+        """Load EMA state from checkpoint."""
+        self.decay = state_dict['decay']
+        self.shadow = state_dict['shadow']
+
+class LRFinder:
+    """
+    Learning Rate Finder for automatic LR discovery.
+    Based on the method from "Cyclical Learning Rates for Training Neural Networks" (Smith, 2017).
+    
+    Usage:
+        lr_finder = LRFinder(model, optimizer, criterion, device)
+        lr_finder.range_test(train_loader, start_lr=1e-7, end_lr=1, num_iter=100)
+        lr_finder.plot()  # Visualize results
+        suggested_lr = lr_finder.suggest_lr()
+    """
+    def __init__(self, model, optimizer, criterion, device='cuda'):
+        """
+        Args:
+            model: PyTorch model
+            optimizer: PyTorch optimizer
+            criterion: Loss function
+            device: Device for training
+        """
+        self.model = model
+        self.optimizer = optimizer
+        self.criterion = criterion
+        self.device = device
+        
+        # Save initial state
+        self.model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        self.optimizer_state = optimizer.state_dict()
+        
+        # Results
+        self.lrs = []
+        self.losses = []
+        self.best_loss = float('inf')
+    
+    def range_test(self, train_loader, start_lr=1e-7, end_lr=1, num_iter=100, smooth_f=0.05):
+        """
+        Perform LR range test.
+        
+        Args:
+            train_loader: DataLoader for training data
+            start_lr: Starting learning rate
+            end_lr: Ending learning rate
+            num_iter: Number of iterations to run
+            smooth_f: Smoothing factor for loss (0-1, higher = more smoothing)
+        """
+        # Reset to initial state
+        self.model.load_state_dict(self.model_state)
+        self.optimizer.load_state_dict(self.optimizer_state)
+        
+        self.model.train()
+        self.lrs = []
+        self.losses = []
+        
+        # Calculate LR multiplier
+        lr_mult = (end_lr / start_lr) ** (1 / num_iter)
+        
+        # Set starting LR
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = start_lr
+        
+        avg_loss = 0.0
+        best_loss = float('inf')
+        iter_count = 0
+        
+        print(f"\n🔍 LR Finder: Testing LR range from {start_lr:.2e} to {end_lr:.2e}")
+        
+        for batch_idx, batch in enumerate(train_loader):
+            if iter_count >= num_iter:
+                break
+            
+            # Get batch data (handle different dataset formats)
+            if isinstance(batch, (list, tuple)):
+                if len(batch) == 2:
+                    inputs, targets = batch
+                    inputs = inputs.to(self.device)
+                    targets = targets.to(self.device)
+                else:
+                    # Skip complex batches
+                    continue
+            else:
+                # Skip non-standard batches
+                continue
+            
+            # Forward pass
+            self.optimizer.zero_grad()
+            outputs = self.model(inputs)
+            
+            # Compute loss (handle different output formats)
+            if isinstance(outputs, tuple):
+                outputs = outputs[0]  # Take first output if tuple
+            
+            # Reshape for loss computation if needed
+            if outputs.dim() > 2 and targets.dim() == 1:
+                loss = self.criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
+            elif outputs.dim() > 2 and targets.dim() == 2:
+                loss = self.criterion(outputs.reshape(-1, outputs.size(-1)), targets.reshape(-1))
+            else:
+                loss = self.criterion(outputs, targets)
+            
+            # Check for NaN/Inf
+            if not torch.isfinite(loss):
+                print(f"\n⚠️  LR Finder stopped early: Loss became {loss.item():.2e} at LR={self.optimizer.param_groups[0]['lr']:.2e}")
+                break
+            
+            # Smoothed loss
+            if iter_count == 0:
+                avg_loss = loss.item()
+            else:
+                avg_loss = smooth_f * loss.item() + (1 - smooth_f) * avg_loss
+            
+            # Track best loss
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+            
+            # Stop if loss is exploding (4x best loss)
+            if avg_loss > 4 * best_loss:
+                print(f"\n⚠️  LR Finder stopped early: Loss exploded at LR={self.optimizer.param_groups[0]['lr']:.2e}")
+                break
+            
+            # Record
+            current_lr = self.optimizer.param_groups[0]['lr']
+            self.lrs.append(current_lr)
+            self.losses.append(avg_loss)
+            
+            # Backward pass
+            loss.backward()
+            self.optimizer.step()
+            
+            # Update LR
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] *= lr_mult
+            
+            iter_count += 1
+            
+            # Progress
+            if (iter_count + 1) % 10 == 0:
+                print(f"  Iteration {iter_count}/{num_iter} | LR: {current_lr:.2e} | Loss: {avg_loss:.4f}")
+        
+        print(f"\n✓ LR Finder completed: Tested {len(self.lrs)} learning rates")
+        
+        # Restore initial state
+        self.model.load_state_dict(self.model_state)
+        self.optimizer.load_state_dict(self.optimizer_state)
+    
+    def suggest_lr(self, skip_start=10, skip_end=5):
+        """
+        Suggest optimal learning rate.
+        Returns LR with steepest negative gradient (fastest learning).
+        
+        Args:
+            skip_start: Skip first N points (unstable)
+            skip_end: Skip last N points (diverging)
+        
+        Returns:
+            float: Suggested learning rate
+        """
+        if len(self.losses) < skip_start + skip_end + 1:
+            print("⚠️  Not enough data points for LR suggestion")
+            return None
+        
+        # Calculate gradient of loss w.r.t. log(LR)
+        losses = self.losses[skip_start:-skip_end if skip_end > 0 else None]
+        lrs = self.lrs[skip_start:-skip_end if skip_end > 0 else None]
+        
+        # Find steepest descent
+        min_grad_idx = None
+        min_grad = float('inf')
+        
+        for i in range(1, len(losses)):
+            grad = (losses[i] - losses[i-1]) / (math.log10(lrs[i]) - math.log10(lrs[i-1]))
+            if grad < min_grad:
+                min_grad = grad
+                min_grad_idx = i
+        
+        if min_grad_idx is None:
+            # Fallback: use LR at minimum loss
+            min_loss_idx = losses.index(min(losses))
+            suggested_lr = lrs[min_loss_idx]
+            print(f"\n💡 Suggested LR (at min loss): {suggested_lr:.2e}")
+        else:
+            # Use LR at steepest descent, divided by 10 for safety
+            suggested_lr = lrs[min_grad_idx] / 10
+            print(f"\n💡 Suggested LR (steepest descent / 10): {suggested_lr:.2e}")
+            print(f"   Alternative (at min loss): {lrs[losses.index(min(losses))]:.2e}")
+        
+        return suggested_lr
+    
+    def plot(self, save_path=None):
+        """
+        Plot LR vs Loss curve.
+        
+        Args:
+            save_path: Optional path to save plot
+        """
+        try:
+            import matplotlib.pyplot as plt
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.plot(self.lrs, self.losses)
+            ax.set_xscale('log')
+            ax.set_xlabel('Learning Rate')
+            ax.set_ylabel('Loss')
+            ax.set_title('Learning Rate Finder')
+            ax.grid(True, alpha=0.3)
+            
+            # Mark suggested LR
+            suggested_lr = self.suggest_lr()
+            if suggested_lr:
+                ax.axvline(suggested_lr, color='r', linestyle='--', label=f'Suggested LR: {suggested_lr:.2e}')
+                ax.legend()
+            
+            if save_path:
+                plt.savefig(save_path, dpi=150, bbox_inches='tight')
+                print(f"📊 Plot saved to: {save_path}")
+            else:
+                plt.show()
+            
+            plt.close()
+        except ImportError:
+            print("⚠️  matplotlib not installed. Install with: pip install matplotlib")
+            print("📊 LR Finder Results:")
+            print(f"   LR range: {min(self.lrs):.2e} to {max(self.lrs):.2e}")
+            print(f"   Loss range: {min(self.losses):.4f} to {max(self.losses):.4f}")
+            print(f"   Min loss at LR: {self.lrs[self.losses.index(min(self.losses))]:.2e}")
+
 # Checkpoint utilities
 def find_checkpoint(checkpoint_dir, standard_name, step_prefix, device="cpu"):
     """

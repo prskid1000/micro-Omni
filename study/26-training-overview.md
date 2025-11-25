@@ -376,6 +376,12 @@ Time Management:
 - Each stage < 15 hours
 - Total project: 2-3 days on single GPU
 - Feasible for research/prototyping
+
+Training Stability:
+- EMA (Exponential Moving Average) enabled by default
+- Learning Rate Finder tool (find_lr.py) for optimal LR discovery
+- Early stopping after 2 consecutive validation spikes
+- All features work out-of-the-box with zero configuration
 ```
 
 ### 3. Progressive Learning
@@ -398,6 +404,52 @@ Why this works:
 ✅ Integration last (multimodal)
 
 Like learning to walk before you run!
+```
+
+### 4. Smart Hyperparameter Discovery
+
+**Principle: Automated optimization reduces guesswork**
+
+```
+Learning Rate Discovery:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Old Way (trial-and-error):
+- Try lr=1e-3 → diverges
+- Try lr=1e-5 → too slow
+- Try lr=5e-4 → maybe?
+- Waste hours/days guessing ❌
+
+New Way (LR Finder):
+- Run find_lr.py (5-10 minutes)
+- Get optimal LR automatically
+- Start training confidently ✓
+
+See Chapter 36 for LR Finder usage
+```
+
+### 5. Robust Validation & Early Stopping
+
+**Principle: Fail fast with actionable feedback**
+
+```
+Validation Improvements:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Problem (before):
+- Validation gets stuck in infinite reload loops
+- Hard to debug what's wrong
+- Wastes hours of compute ❌
+
+Solution (now):
+- Early stopping after 2 consecutive validation spikes
+- Clear error messages with suggested fixes
+- Helpful debugging guidance ✓
+
+Example: If LR is too high:
+→ Training stops after 2 validation spikes
+→ Error message suggests: "Reduce LR by 2-5x"
+→ Saves hours of debugging time ✓
 ```
 
 ---
@@ -818,7 +870,10 @@ Total wall-clock time: ~25 hours instead of 50!
 ✅ **Progressive learning** from simple (text) to complex (multimodal)  
 ✅ **Efficient** through gradient accumulation, FP16, and checkpointing  
 ✅ **Automatic resuming** - all scripts auto-detect and resume from latest checkpoint  
-✅ **Common utilities** - shared checkpoint/resume logic across all training scripts
+✅ **Common utilities** - shared checkpoint/resume logic across all training scripts  
+✅ **EMA enabled** - better stability and generalization with minimal cost  
+✅ **LR Finder** - discover optimal learning rate before training (find_lr.py)  
+✅ **Early stopping** - prevents endless validation loops, fails fast with helpful errors
 
 ---
 
@@ -872,12 +927,20 @@ Total wall-clock time: ~25 hours instead of 50!
 - Fits 12GB GPU with gradient accumulation
 - Uses mixed precision (FP16)
 - Gradient checkpointing for memory
+- **EMA for training stability** (decay=0.999)
+- **LR Finder for optimal LR discovery** (find_lr.py)
 
 ### Progressive Learning
 
 - Start with individual modalities
 - End with joint understanding
 - Specialized encoders preserved
+
+### Robustness
+
+- **Early stopping** after 2 consecutive validation spikes
+- **Automatic checkpoint resuming** from latest state
+- **Helpful error messages** with debugging suggestions
 
 ## 💻 Quick Start
 

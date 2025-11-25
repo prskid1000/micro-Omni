@@ -47,5 +47,7 @@
     "use_moe": false
   },
   "temperature": 0.07,
+  "use_ema": true,
+  "ema_decay": 0.999,
   "save_dir": "checkpoints/vision_tiny"
 }

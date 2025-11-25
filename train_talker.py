@@ -8,7 +8,7 @@ from omni.codec import RVQ
 from omni.talker import TalkerTiny
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, TTSDataset,
+    check_gradient_explosion, TTSDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, collate_mel_fn, analyze_tts_dataset,
     save_training_metadata, load_training_metadata
@@ -49,6 +49,21 @@ def main(cfg):
         compile_model=use_compile
     ).to(device)
     opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
+    
+    # EMA for improved model quality (optional)
+    use_ema = cfg.get("use_ema", False)
+    ema_decay = cfg.get("ema_decay", 0.999)
+    ema = None
+    if use_ema:
+        class EMAWrapper(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.rvq = rvq
+                self.talker = talker
+        ema_model = EMAWrapper()
+        ema = EMA(ema_model, decay=ema_decay, device=device)
+        print(f"✓ EMA enabled with decay={ema_decay}")
+    
     # Use reduction='none' to get per-element losses, then we'll mask padding manually
     # Note: RVQ codes are 0-127, so we can't use ignore_index=0 (0 is a valid code)
     loss_fn = nn.CrossEntropyLoss(reduction='none')  # Get per-element losses for masking
@@ -193,13 +208,15 @@ def main(cfg):
             "talker": (talker, talker.load_state_dict),
             "optimizer": (opt, opt.load_state_dict),
             "scheduler": (scheduler, scheduler.load_state_dict),
-            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
+            "ema": (ema, ema.load_state_dict) if ema is not None else None
         }
     )
     
     # Track validation loss for reload logic
     last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
     most_recent_val_loss = last_checkpoint_val_loss
+    consecutive_reloads = 0  # Track consecutive reloads due to validation loss spikes
     # Load scaler from model file if needed
     if step > 0 and scaler is not None:
         model_path = os.path.join(save_dir, f"{model_name}.pt")
@@ -453,6 +470,8 @@ def main(cfg):
                 }
                 if scaler is not None:
                     model_data["scaler"] = scaler.state_dict()
+                if ema is not None:
+                    model_data["ema"] = ema.state_dict()
                 torch.save(model_data, model_path)
                 
                 # Save training metadata (step, calculated values, etc.)
@@ -472,6 +491,10 @@ def main(cfg):
             # Validation
             if step % val_freq == 0 and step > 0:
                 with ValidationSkipSamplesContext(train_ds):
+                    # Apply EMA weights for validation if enabled
+                    if ema is not None:
+                        ema.apply_shadow()
+                    
                     rvq.eval()
                     talker.eval()
                     val_loss_sum = 0.0
@@ -555,12 +578,27 @@ def main(cfg):
                     avg_val_loss = val_loss_sum / max(val_count, 1)
                     logger.val_step(step, avg_val_loss, epoch)
                     
+                    # Restore original weights after validation
+                    if ema is not None:
+                        ema.restore()
+                    
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
                         if avg_val_loss > last_checkpoint_val_loss + val_loss_threshold:
                              logger.warning(f"Validation loss spiked! {avg_val_loss:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
+                             consecutive_reloads += 1
+                             if consecutive_reloads >= 2:
+                                 logger.error(f"Training stopped: Validation loss spiked {consecutive_reloads} times consecutively.")
+                                 logger.error("This indicates the model is not learning effectively. Consider:")
+                                 logger.error("  - Reducing learning rate")
+                                 logger.error("  - Adjusting val_loss_threshold")
+                                 logger.error("  - Checking data quality")
+                                 logger.training_end(step)
+                                 return
                              reload_needed = True
                              break
+                        else:
+                            consecutive_reloads = 0  # Reset counter on successful validation
                     most_recent_val_loss = avg_val_loss
                     
                     rvq.train()

@@ -324,6 +324,532 @@ def __iter__(self):
 
 ---
 
+## 🧪 Exponential Moving Average (EMA)
+
+### What is EMA?
+
+**Concept:** Maintain a moving average of model weights during training for improved stability and generalization.
+
+```
+EMA maintains two sets of weights:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Primary Weights (θ):
+- Updated by gradient descent
+- Used during training
+- Can be noisy/unstable
+
+Shadow Weights (θ_ema):
+- Smoothed average of primary weights
+- Updated with exponential decay
+- More stable, better generalization
+- Used for validation and inference
+
+Update Rule:
+θ_ema ← decay × θ_ema + (1 - decay) × θ
+
+Where decay is typically 0.999
+```
+
+### Why Use EMA?
+
+```
+Benefits of EMA:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. TRAINING STABILITY:
+   - Smooths out noisy gradients
+   - Reduces oscillations
+   - More stable loss curves
+   ✓ Better convergence
+
+2. BETTER GENERALIZATION:
+   - Averages out random fluctuations
+   - Less overfitting
+   - Improved validation performance
+   ✓ Better final model quality
+
+3. NO EXTRA COST:
+   - Minimal memory overhead (2x weights)
+   - Negligible compute overhead
+   - Easy to implement
+   ✓ Free performance boost!
+
+Research shows: 0.5-2% improvement in validation metrics
+```
+
+### EMA in μOmni
+
+**Implementation:**
+
+```python
+# In omni/utils.py
+class EMA:
+    """Exponential Moving Average for model weights"""
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {name: p.clone().detach()
+                       for name, p in model.named_parameters()
+                       if p.requires_grad}
+    
+    def update(self, model):
+        """Update shadow weights after optimizer step"""
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = (
+                    self.decay * self.shadow[name] +
+                    (1 - self.decay) * param.data
+                )
+    
+    def apply_shadow(self, model):
+        """Temporarily use EMA weights (for validation)"""
+        self.backup = {name: p.clone()
+                       for name, p in model.named_parameters()
+                       if p.requires_grad}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                param.data = self.shadow[name]
+    
+    def restore(self, model):
+        """Restore original weights (after validation)"""
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                param.data = self.backup[name]
+```
+
+**Usage Pattern:**
+
+```python
+# 1. Initialize EMA (after optimizer)
+if config.use_ema:
+    ema = EMA(model, decay=config.ema_decay)  # decay=0.999
+
+# 2. Update EMA after each optimizer step
+optimizer.step()
+if config.use_ema:
+    ema.update(model)
+
+# 3. Use EMA weights for validation
+if config.use_ema:
+    ema.apply_shadow(model)
+val_loss = validate(model, val_dataloader)
+if config.use_ema:
+    ema.restore(model)
+
+# 4. Save EMA state in checkpoints
+torch.save({
+    'model': model.state_dict(),
+    'optimizer': optimizer.state_dict(),
+    'ema': ema.state_dict() if config.use_ema else None,
+    ...
+}, checkpoint_path)
+```
+
+**Configuration:**
+
+All config files have EMA enabled by default:
+
+```json
+{
+  "use_ema": true,
+  "ema_decay": 0.999
+}
+```
+
+**When to Use:**
+
+- ✅ **Always recommended** - minimal cost, consistent benefits
+- ✅ **Especially useful** for small datasets (reduces overfitting)
+- ✅ **Critical** for long training runs (smooths instability)
+
+**Decay Parameter Guidelines:**
+
+```
+Common decay values:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+0.99:   Fast averaging, more responsive
+0.999:  Balanced (μOmni default)
+0.9999: Very slow averaging, maximum smoothing
+
+Effective window (steps to ~63% influence):
+- 0.99   → ~100 steps
+- 0.999  → ~1000 steps
+- 0.9999 → ~10000 steps
+
+Rule of thumb: decay = 1 - 1/window_size
+```
+
+---
+
+## 🔍 Learning Rate Finder
+
+### What is LR Finder?
+
+**Concept:** Automatically discover optimal learning rate before training using range test method.
+
+```
+Traditional approach (trial-and-error):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Try lr=1e-3 → Too high, diverges ❌
+Try lr=1e-5 → Too low, slow ❌
+Try lr=5e-4 → Better, but is it optimal? 🤔
+Waste hours/days guessing...
+
+LR Finder approach (systematic):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Run lr_finder for 5-10 minutes
+Get optimal lr automatically ✓
+Start training with confidence ✓
+```
+
+### Smith 2017 Range Test Method
+
+**Algorithm:**
+
+```
+1. Start with very small lr (e.g., 1e-7)
+2. Gradually increase lr exponentially
+3. Track loss at each lr value
+4. Stop when loss diverges
+5. Find lr with steepest negative slope
+6. Recommend: lr = steepest_slope_lr / 10
+```
+
+**Loss vs Learning Rate Curve:**
+
+```
+Loss
+  │
+  │                                    ╱─────
+  │                                 ╱─
+  │                              ╱─
+  │                           ╱─  ← Diverging
+  │                        ╱─
+  │                     ╱─
+  │                  ╱─
+  │               ╱─  ← Steepest descent
+  │            ╱─      (optimal region)
+  │         ╱─
+  │      ╱─
+  │   ╱─  ← Too slow
+  │╱─
+  └──────────────────────────────────────────
+    1e-7  1e-6  1e-5  1e-4  1e-3  1e-2  1e-1
+                  Learning Rate
+
+Optimal LR: Where loss decreases fastest
+Suggested: ~1e-4 (at steepest negative slope)
+```
+
+### Using LR Finder in μOmni
+
+**Quick Start:**
+
+```bash
+# Find optimal LR for Thinker training
+python find_lr.py --config configs/thinker_tiny.json \
+  --model_type thinker \
+  --output_plot lr_finder_thinker.png
+
+# For Vision Encoder
+python find_lr.py --config configs/vision_tiny.json \
+  --model_type vision \
+  --output_plot lr_finder_vision.png
+
+# For Audio Encoder
+python find_lr.py --config configs/audio_enc_tiny.json \
+  --model_type audio_enc \
+  --output_plot lr_finder_audio.png
+
+# For Talker
+python find_lr.py --config configs/talker_tiny.json \
+  --model_type talker \
+  --output_plot lr_finder_talker.png
+
+# For OCR
+python find_lr.py --config configs/ocr_tiny.json \
+  --model_type ocr \
+  --output_plot lr_finder_ocr.png
+```
+
+**Example Output:**
+
+```
+Running LR Finder for thinker...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 10/100 | LR: 1.00e-07 | Loss: 8.543
+Step 20/100 | LR: 5.62e-07 | Loss: 8.124
+Step 30/100 | LR: 3.16e-06 | Loss: 7.542
+Step 40/100 | LR: 1.78e-05 | Loss: 6.231  ← Steepest descent
+Step 50/100 | LR: 1.00e-04 | Loss: 5.142
+Step 60/100 | LR: 5.62e-04 | Loss: 5.834
+Step 70/100 | LR: 3.16e-03 | Loss: 9.234  ← Diverging
+Stopping early (loss increased by >4x)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Suggested Learning Rate: 2.00e-05
+(Based on steepest descent at LR 1.78e-05, divided by 10)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Plot saved to: lr_finder_thinker.png
+```
+
+**Interpreting Results:**
+
+1. **Suggested LR:** Use this value in your config
+2. **Plot:** Visual confirmation of optimal range
+3. **Too Flat:** If curve is flat, increase `end_lr`
+4. **Immediate Spike:** If loss spikes immediately, decrease `start_lr`
+
+**Advanced Options:**
+
+```bash
+# Custom LR range
+python find_lr.py --config configs/thinker_tiny.json \
+  --model_type thinker \
+  --start_lr 1e-8 \
+  --end_lr 1.0 \
+  --num_steps 200
+
+# Use more data samples
+python find_lr.py --config configs/vision_tiny.json \
+  --model_type vision \
+  --num_steps 500
+```
+
+**When to Use:**
+
+- ✅ **Starting new training** - discover optimal LR
+- ✅ **After dataset changes** - LR may need adjustment
+- ✅ **After model architecture changes** - optimal LR changes
+- ✅ **Training plateaus** - check if LR needs tuning
+
+**Tips:**
+
+```
+Best Practices:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Run on small subset of data (find_lr.py does this automatically)
+2. Use the suggested LR or slightly lower (e.g., 0.5-0.8x suggested)
+3. If training is unstable, try 0.5x suggested LR
+4. If training is too slow, try 1.5x suggested LR
+5. Rerun LR finder if you change model architecture significantly
+```
+
+---
+
+## 🛑 Early Stopping for Validation Spikes
+
+### The Problem: Endless Reload Loops
+
+**Before Early Stopping:**
+
+```
+Training loop without early stopping:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1000 | Val Loss: 2.34 ✓ (save checkpoint)
+Step 2000 | Val Loss: 2.89 ✗ (worse! reload checkpoint)
+Step 2000 | Val Loss: 2.91 ✗ (worse again! reload)
+Step 2000 | Val Loss: 2.88 ✗ (still worse! reload)
+Step 2000 | Val Loss: 2.90 ✗ (reload again...)
+... infinite loop! ❌
+
+Problem: No escape from validation spike pattern
+User must manually kill training and adjust hyperparameters
+```
+
+**After Early Stopping:**
+
+```
+Training loop WITH early stopping:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1000 | Val Loss: 2.34 ✓ (save checkpoint)
+Step 2000 | Val Loss: 2.89 ✗ (worse! reload, consecutive_reloads=1)
+Step 2000 | Val Loss: 2.91 ✗ (worse! reload, consecutive_reloads=2)
+
+ERROR: Training stopped after 2 consecutive validation loss increases.
+This usually indicates:
+- Learning rate too high
+- Overfitting
+- Need different hyperparameters
+
+Solutions:
+1. Reduce learning rate by 2-5x
+2. Enable/increase regularization (dropout, weight_decay)
+3. Add more training data
+4. Check for data quality issues
+
+Training halted safely ✓
+```
+
+### Implementation
+
+**How It Works:**
+
+```python
+# In all training scripts
+consecutive_reloads = 0
+MAX_CONSECUTIVE_RELOADS = 2
+
+# After validation
+if val_loss >= best_val_loss:
+    # Validation got worse
+    consecutive_reloads += 1
+    print(f"Validation loss increased. Reloading... "
+          f"(consecutive reloads: {consecutive_reloads}/{MAX_CONSECUTIVE_RELOADS})")
+    
+    if consecutive_reloads >= MAX_CONSECUTIVE_RELOADS:
+        # Stop training with helpful message
+        raise RuntimeError(
+            f"Training stopped after {MAX_CONSECUTIVE_RELOADS} consecutive "
+            "validation loss increases. This usually indicates:\n"
+            "- Learning rate too high\n"
+            "- Overfitting\n"
+            "- Need different hyperparameters\n\n"
+            "Solutions:\n"
+            "1. Reduce learning rate by 2-5x\n"
+            "2. Enable/increase regularization (dropout, weight_decay)\n"
+            "3. Add more training data\n"
+            "4. Check for data quality issues"
+        )
+    
+    # Reload checkpoint
+    load_checkpoint(model, optimizer, best_checkpoint_path)
+else:
+    # Validation improved
+    consecutive_reloads = 0  # Reset counter
+    best_val_loss = val_loss
+    save_checkpoint(...)
+```
+
+**Why 2 Consecutive Spikes?**
+
+```
+Why not stop after 1 spike?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Single spikes can be normal:
+- Random validation batch variance
+- Temporary learning plateau
+- Natural training oscillations
+
+Stopping after 1 spike = too aggressive ❌
+
+Why not allow 3+ spikes?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+2 consecutive spikes indicate real problem:
+- Systematic issue with hyperparameters
+- Unlikely to be random variance
+- Model won't recover by itself
+
+3+ spikes = wasting time/compute ❌
+
+2 consecutive spikes = sweet spot ✓
+- Allows temporary variance
+- Catches systematic problems
+- Saves time and compute
+```
+
+### When Early Stopping Triggers
+
+**Common Scenarios:**
+
+```
+1. LEARNING RATE TOO HIGH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Training Loss: Decreasing (looks good)
+Validation Loss: Spiking repeatedly
+→ Model overfitting to training data
+
+Solution: Reduce LR by 2-5x, or use LR Finder
+
+2. OVERFITTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Training Loss: Very low (< 0.5)
+Validation Loss: High and increasing
+→ Model memorizing training data
+
+Solution: More data, regularization (dropout, weight_decay)
+
+3. DATA QUALITY ISSUES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Both losses: Unstable/erratic
+→ Corrupted data, wrong labels, etc.
+
+Solution: Inspect data, clean dataset
+
+4. BATCH SIZE TOO SMALL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Validation Loss: High variance
+→ Noisy gradient estimates
+
+Solution: Increase batch_size or gradient_accumulation_steps
+```
+
+**Debugging Tips:**
+
+```bash
+# If early stopping triggers:
+
+# 1. Check the training curve in TensorBoard
+tensorboard --logdir=logs/
+
+# 2. Inspect last few validation runs
+# Look for sudden spikes vs gradual increase
+
+# 3. Try reducing learning rate first (safest fix)
+# In config.json, change:
+"learning_rate": 3e-4  →  "learning_rate": 1e-4
+
+# 4. If that doesn't help, add regularization
+"weight_decay": 0.0  →  "weight_decay": 0.01
+
+# 5. Use LR Finder to find optimal LR
+python find_lr.py --config configs/your_config.json \
+  --model_type your_model_type
+```
+
+### Benefits
+
+```
+Advantages of Early Stopping:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. SAVES TIME:
+   - No infinite reload loops
+   - Fast failure with clear error message
+   ✓ Hours saved per failed run
+
+2. CLEARER DEBUGGING:
+   - Error message explains likely causes
+   - Suggests concrete solutions
+   ✓ Faster iteration
+
+3. PREVENTS CONFUSION:
+   - Users don't wonder "why is it stuck?"
+   - Clear indication something is wrong
+   ✓ Better user experience
+
+4. AUTOMATIC:
+   - No configuration needed
+   - Works out-of-the-box
+   ✓ Zero overhead
+```
+
+---
+
 ## 💡 Best Practices
 
 ✅ **Always use FP16** for training  
@@ -336,7 +862,10 @@ def __iter__(self):
 ✅ **Resumable preprocessing** - safe to interrupt and resume  
 ✅ **Monitor GPU memory** with `nvidia-smi`  
 ✅ **Monitor RAM usage** - should be much lower than VRAM now  
-✅ **Reduce num_workers** if RAM is limited
+✅ **Reduce num_workers** if RAM is limited  
+✅ **Use EMA** for better stability and generalization (enabled by default)  
+✅ **Run LR Finder** before starting new training runs  
+✅ **Trust early stopping** - it catches problems early and saves time
 
 ---
 

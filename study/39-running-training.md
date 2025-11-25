@@ -14,7 +14,72 @@ Step-by-step guide to training μOmni from scratch.
 
 ✅ Environment setup complete (Chapter 38)  
 ✅ Data prepared (Chapter 35)  
-✅ GPU available (12GB+)
+✅ GPU available (12GB+)  
+✅ **(Optional) Run LR Finder** to discover optimal learning rate before training  
+✅ **(Automatic) EMA enabled** by default in all configs for better stability  
+✅ **(Automatic) Early stopping** prevents endless validation loops
+
+---
+
+## 🔍 Before Training: Discover Optimal Learning Rate
+
+**Highly recommended:** Run the LR Finder before starting each training stage to automatically discover the optimal learning rate. This saves hours of trial-and-error:
+
+```bash
+# Find optimal LR for Thinker (Stage A)
+python find_lr.py --config configs/thinker_tiny.json \
+  --model_type thinker \
+  --output_plot lr_finder_thinker.png
+
+# Find optimal LR for Audio Encoder (Stage B)
+python find_lr.py --config configs/audio_enc_tiny.json \
+  --model_type audio_enc \
+  --output_plot lr_finder_audio.png
+
+# Find optimal LR for Vision Encoder (Stage C)
+python find_lr.py --config configs/vision_tiny.json \
+  --model_type vision \
+  --output_plot lr_finder_vision.png
+
+# Find optimal LR for Talker (Stage D)
+python find_lr.py --config configs/talker_tiny.json \
+  --model_type talker \
+  --output_plot lr_finder_talker.png
+
+# Find optimal LR for OCR (Optional)
+python find_lr.py --config configs/ocr_tiny.json \
+  --model_type ocr \
+  --output_plot lr_finder_ocr.png
+```
+
+**What it does:**
+
+- Uses Smith 2017 range test method
+- Runs for 5-10 minutes per model
+- Automatically suggests optimal learning rate
+- Generates plot showing loss vs learning rate curve
+- Saves you hours of hyperparameter tuning
+
+**Example output:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Suggested Learning Rate: 2.00e-05
+(Based on steepest descent at LR 1.78e-05)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Plot saved to: lr_finder_thinker.png
+```
+
+**Update config with suggested LR:**
+
+```json
+{
+  "learning_rate": 2.0e-5  // Use the suggested value
+}
+```
+
+See [Chapter 36: Optimization Techniques](36-optimization-techniques.md#learning-rate-finder) for more details.
 
 ---
 
@@ -206,30 +271,105 @@ python train_ocr.py --config configs/ocr_tiny.json
 
 ## 🛡️ Training Stability & Auto-Reload
 
-**Validation Loss Spike Protection:**
+**Modern Training Features:**
 
-All training scripts include a stability feature that automatically reloads the model from the last checkpoint if the validation loss spikes significantly.
+All μOmni training scripts include state-of-the-art stability and optimization features:
 
-**How it works:**
+### 1. Exponential Moving Average (EMA)
 
-1.  **Threshold Check:** During validation, the script checks:
-    `current_val_loss > last_checkpoint_val_loss + val_loss_threshold`
-2.  **Trigger:** If the condition is met (loss spiked), a reload is triggered.
-3.  **Action:**
-    - Reloads model, optimizer, scheduler, and scaler from the **last saved checkpoint**.
-    - Resets the data loader to the correct position.
-    - Resumes training, effectively discarding the unstable steps since the last checkpoint.
-
-**Configuration:**
+**Enabled by default** in all config files for improved training stability and generalization:
 
 ```json
 {
-  "val_loss_threshold": 0.05 // Default: infinity (disabled) if not set
+  "use_ema": true,
+  "ema_decay": 0.999
 }
 ```
 
-- Set to a reasonable value (e.g., `0.05` or `0.1`) to enable.
-- Prevents training divergence and saves time by automatically recovering from instability.
+**What it does:**
+
+- Maintains smoothed "shadow weights" alongside primary weights
+- Uses shadow weights for validation (better performance)
+- Minimal overhead, significant benefits
+- Research shows 0.5-2% improvement in validation metrics
+
+**How it works:**
+
+- Updates shadow weights after each optimizer step: `θ_ema ← 0.999 × θ_ema + 0.001 × θ`
+- Automatically saves/loads EMA state in checkpoints
+- No configuration needed - works out-of-the-box
+
+See [Chapter 36: EMA](36-optimization-techniques.md#exponential-moving-average-ema) for technical details.
+
+### 2. Early Stopping for Validation Spikes
+
+**Automatic protection** against endless validation reload loops:
+
+```python
+# Automatically stops after 2 consecutive validation loss increases
+# No configuration needed
+```
+
+**What happens:**
+
+```
+Step 1000 | Val Loss: 2.34 ✓ (save checkpoint)
+Step 2000 | Val Loss: 2.89 ✗ (worse! reload, consecutive_reloads=1)
+Step 2000 | Val Loss: 2.91 ✗ (worse! reload, consecutive_reloads=2)
+
+ERROR: Training stopped after 2 consecutive validation loss increases.
+This usually indicates:
+- Learning rate too high
+- Overfitting
+- Need different hyperparameters
+
+Solutions:
+1. Reduce learning rate by 2-5x
+2. Enable/increase regularization (dropout, weight_decay)
+3. Add more training data
+4. Check for data quality issues
+```
+
+**Benefits:**
+
+- Prevents infinite reload loops
+- Fails fast with clear error messages
+- Suggests concrete solutions
+- Saves hours of wasted compute
+
+**Common causes and fixes:**
+
+1. **LR too high:** Reduce by 2-5x or rerun LR Finder
+2. **Overfitting:** Add regularization, more data
+3. **Data issues:** Check dataset quality
+4. **Batch size too small:** Increase batch_size or gradient_accumulation_steps
+
+See [Chapter 36: Early Stopping](36-optimization-techniques.md#early-stopping-for-validation-spikes) for more details.
+
+### 3. Legacy Validation Loss Spike Protection (Deprecated)
+
+**Note:** The old `val_loss_threshold` feature is superseded by the new early stopping mechanism above. It is no longer needed as early stopping provides better behavior with helpful error messages.
+
+~~**How it works:**~~
+
+~~1. **Threshold Check:** During validation, the script checks:~~
+   ~~`current_val_loss > last_checkpoint_val_loss + val_loss_threshold`~~
+~~2. **Trigger:** If the condition is met (loss spiked), a reload is triggered.~~
+~~3. **Action:**~~
+   ~~- Reloads model, optimizer, scheduler, and scaler from the **last saved checkpoint**.~~
+   ~~- Resets the data loader to the correct position.~~
+   ~~- Resumes training, effectively discarding the unstable steps since the last checkpoint.~~
+
+~~**Configuration:**~~
+
+~~```json
+{
+  "val_loss_threshold": 0.05 // Default: infinity (disabled) if not set
+}
+```~~
+
+~~- Set to a reasonable value (e.g., `0.05` or `0.1`) to enable.~~
+~~- Prevents training divergence and saves time by automatically recovering from instability.~~
 
 ---
 
@@ -312,13 +452,17 @@ The training scripts handle three scenarios gracefully:
 
 ## 💡 Tips
 
+✅ **Run LR Finder before each stage** to discover optimal learning rate  
+✅ **EMA enabled by default** - better stability and generalization  
+✅ **Early stopping prevents endless loops** - fails fast with helpful errors  
 ✅ **Run stages in parallel** (if multiple GPUs)  
 ✅ **Start with small data** to verify pipeline  
 ✅ **Monitor GPU memory** with `nvidia-smi`  
 ✅ **Save checkpoints frequently** (every 1000 steps)  
 ✅ **Use tmux/screen** for long training sessions  
 ✅ **Automatic resuming** - just rerun training command if interrupted  
-✅ **Consistent utilities** - all scripts share common checkpoint/resume logic
+✅ **Consistent utilities** - all scripts share common checkpoint/resume logic  
+✅ **Trust early stopping** - if it triggers, reduce LR or add regularization
 
 ---
 
