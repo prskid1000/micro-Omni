@@ -30,7 +30,7 @@
   "max_epochs": 2,
   "val_loss_threshold": 0.05,
   "val_split": 0.1,
-  "val_freq": 1000,
+  "val_freq": 5000,
   "val_batches": 100,
   "checkpoint_freq": 10000,
   "max_grad_norm": 1.0,
