@@ -152,7 +152,7 @@ def main(cfg):
         train_text, 
         tok, 
         ctx_len,  # Use calculated or config value
-        shuffle_buffer_size=0,  # No shuffling for validation
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 100),  # Shuffle validation for different batches each time
         seed=seed,  # Same seed for consistent hash-based split
         skip_samples=0,  # Don't skip validation samples
         filter_outliers=True,  # Skip samples exceeding ctx_len

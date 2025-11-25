@@ -199,7 +199,7 @@ def main(cfg):
         sr=sr, 
         n_mels=n_mels, 
         cfg=cfg,
-        shuffle_buffer_size=0,  # No shuffling for validation
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 100),  # Shuffle validation for different batches each time
         seed=seed,  # Same seed for consistent hash-based split
         skip_samples=0  # Don't skip validation samples
     )

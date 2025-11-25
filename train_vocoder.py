@@ -324,7 +324,7 @@ def main(cfg):
         n_fft=n_fft, 
         hop_length=hop_length, 
         cfg=cfg,
-        shuffle_buffer_size=0,  # No shuffling for validation
+        shuffle_buffer_size=cfg.get("shuffle_buffer_size", 100),  # Shuffle validation for different batches each time
         seed=seed,  # Same seed for consistent hash-based split
         skip_samples=0
     )
