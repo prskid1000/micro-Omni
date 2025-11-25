@@ -178,7 +178,8 @@ def calculate_audio_encoder_params(d_model, n_layers, n_heads, d_ff, downsample_
     
     return params
 
-def calculate_vision_encoder_params(img_size, patch, d_model, n_layers, n_heads, d_ff):
+def calculate_vision_encoder_params(img_size, patch, d_model, n_layers, n_heads, d_ff, 
+                                   use_thinker_for_text=False, vocab_size=32000, embed_dim=None):
     """
     Calculate Vision Encoder parameters using standard ViT formulas.
     
@@ -188,6 +189,7 @@ def calculate_vision_encoder_params(img_size, patch, d_model, n_layers, n_heads,
       - MLP: fc1 (bias=True), fc2 (bias=True)
       - LayerNorm: weight + bias (2*d_model per layer)
     - Final norm: RMSNorm (weight only, d_model params)
+    - Optional text encoder: SimpleTextEncoder with AttentionPooling (when not using Thinker)
     """
     params = 0
     
@@ -226,6 +228,22 @@ def calculate_vision_encoder_params(img_size, patch, d_model, n_layers, n_heads,
     
     # Final norm (RMSNorm: weight only)
     params += d_model
+    
+    # Text encoder (when not using Thinker)
+    if not use_thinker_for_text:
+        # SimpleTextEncoder with AttentionPooling
+        # Embedding: vocab_size × d_model
+        params += vocab_size * d_model
+        # AttentionPooling: Linear(d_model, 1) - single attention weight per dimension
+        params += d_model * 1  # No bias in attention layer
+    
+    # Image projection head: d_model → embed_dim (bias=True by default)
+    if embed_dim is None:
+        embed_dim = d_model
+    params += d_model * embed_dim + embed_dim  # Linear with bias
+    
+    # Text projection head: d_model → embed_dim (bias=True by default)
+    params += d_model * embed_dim + embed_dim  # Linear with bias
     
     return params
 
@@ -478,12 +496,17 @@ def calculate_model_sizes():
             d_model=cfg["d_model"],
             n_layers=cfg["n_layers"],
             n_heads=cfg["n_heads"],
-            d_ff=cfg["d_ff"]
+            d_ff=cfg["d_ff"],
+            use_thinker_for_text=cfg.get("use_thinker_for_text", False),
+            vocab_size=cfg.get("vocab_size", 32000),
+            embed_dim=cfg.get("embed_dim", cfg["d_model"])
         )
         total_params += params
         results["vision_encoder"] = params
         print(f"  Config: {cfg['n_layers']} layers, d_model={cfg['d_model']}, n_heads={cfg['n_heads']}, d_ff={cfg['d_ff']}")
         print(f"  Image size: {cfg['img_size']}×{cfg['img_size']}, patch size: {cfg['patch']}")
+        print(f"  Text encoder: {'Thinker (frozen)' if cfg.get('use_thinker_for_text', False) else 'SimpleTextEncoder w/ AttentionPooling'}")
+        print(f"  Embed dim: {cfg.get('embed_dim', cfg['d_model'])}")
         print(f"  Parameters: {params:,} ({format_size(params)})")
     else:
         print("  Config file not found")
