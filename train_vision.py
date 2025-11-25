@@ -41,7 +41,10 @@ def main(cfg):
     # Use contrastive learning (CLIP-style) for proper vision-language alignment
     # Project image CLS token to embedding space for contrastive learning
     embed_dim = cfg.get("embed_dim", d_model)  # Embedding dimension for contrastive learning
-    img_proj = nn.Linear(d_model, embed_dim).to(device)
+    img_proj = nn.Sequential(
+        nn.Linear(d_model, embed_dim),
+        nn.LayerNorm(embed_dim)
+    ).to(device)
     
     # Configurable: Use Thinker model or simple tokenizer+embedding for text encoding
     use_thinker_for_text = cfg.get("use_thinker_for_text", True)
@@ -57,7 +60,10 @@ def main(cfg):
         # Use Thinker model for text encoding (frozen) - better contextual embeddings
         print("Using Thinker model for text encoding (recommended)")
         thinker_d_model = cfg.get("thinker_d_model", 256)
-        text_proj = nn.Linear(thinker_d_model, embed_dim).to(device)
+        text_proj = nn.Sequential(
+            nn.Linear(thinker_d_model, embed_dim),
+            nn.LayerNorm(embed_dim)
+        ).to(device)
         
         # Load Thinker model architecture
         think = ThinkerLM(
@@ -101,7 +107,10 @@ def main(cfg):
     else:
         # Use simple tokenizer + embedding layer (lighter, faster, but less contextual)
         print("Using tokenizer + embedding layer for text encoding (lighter option)")
-        text_proj = nn.Linear(d_model, embed_dim).to(device)
+        text_proj = nn.Sequential(
+            nn.Linear(d_model, embed_dim),
+            nn.LayerNorm(embed_dim)
+        ).to(device)
         # text_embed will be created after tokenizer is loaded
     
     # Load or train tokenizer
@@ -138,6 +147,15 @@ def main(cfg):
     if not use_thinker_for_text:
         text_embed = nn.Embedding(vocab_size, d_model).to(device)
         print(f"✓ Created text embedding layer with vocab_size={vocab_size}, d_model={d_model}")
+    
+    # Initialize projections with smaller weights
+    for module in [img_proj, text_proj]:
+        for m in module.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+    print("✓ Initialized projection weights with std=0.01")
     
     # Optimizer: include text_embed if using simple mode
     opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters())
@@ -365,6 +383,11 @@ def main(cfg):
             # Mark step begin for CUDAGraphs optimization
             if device == "cuda":
                 torch.compiler.cudagraph_mark_step_begin()
+            
+            # Check for NaN inputs before forward pass
+            if torch.isnan(img).any():
+                logger.error(f"Step {step}: NaN in input images, skipping batch")
+                continue
             
             # Encode images and captions
             if use_amp:

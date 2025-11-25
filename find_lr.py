@@ -57,8 +57,22 @@ def setup_vision_model(cfg, device):
     ).to(device)
     
     embed_dim = cfg.get("embed_dim", d_model)
-    img_proj = nn.Linear(d_model, embed_dim).to(device)
-    text_proj = nn.Linear(d_model, embed_dim).to(device)
+    img_proj = nn.Sequential(
+        nn.Linear(d_model, embed_dim),
+        nn.LayerNorm(embed_dim)
+    ).to(device)
+    text_proj = nn.Sequential(
+        nn.Linear(d_model, embed_dim),
+        nn.LayerNorm(embed_dim)
+    ).to(device)
+    
+    # Initialize projections with smaller weights
+    for module in [img_proj, text_proj]:
+        for m in module.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
     
     # Simple embedding for text (avoid loading full Thinker for LR finder)
     text_embed = nn.Embedding(cfg.get("vocab_size", 32000), d_model).to(device)

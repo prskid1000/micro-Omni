@@ -74,7 +74,10 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
     model.load_state_dict(state_dict, strict=False)
     
     # Load image projection head
-    img_proj = nn.Linear(d_model, embed_dim).to(device)
+    img_proj = nn.Sequential(
+        nn.Linear(d_model, embed_dim),
+        nn.LayerNorm(embed_dim)
+    ).to(device)
     if "img_proj" in checkpoint:
         img_proj_state = checkpoint["img_proj"]
         img_proj_state = strip_orig_mod(img_proj_state)
@@ -82,7 +85,10 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
         print("✓ Loaded image projection head")
     
     # Load text projection head
-    text_proj = nn.Linear(d_model, embed_dim).to(device)
+    text_proj = nn.Sequential(
+        nn.Linear(d_model, embed_dim),
+        nn.LayerNorm(embed_dim)
+    ).to(device)
     if "text_proj" in checkpoint:
         text_proj_state = checkpoint["text_proj"]
         text_proj_state = strip_orig_mod(text_proj_state)
@@ -150,7 +156,10 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
             
             text_encoder.eval()
             # Update text_proj input dimension to match Thinker output
-            text_proj = nn.Linear(thinker_d_model, embed_dim).to(device)
+            text_proj = nn.Sequential(
+                nn.Linear(thinker_d_model, embed_dim),
+                nn.LayerNorm(embed_dim)
+            ).to(device)
             if "text_proj" in checkpoint:
                 text_proj_state = checkpoint["text_proj"]
                 text_proj_state = strip_orig_mod(text_proj_state)
