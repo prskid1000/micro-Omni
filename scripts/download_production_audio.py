@@ -24,15 +24,6 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
             state = json.load(f)
-            # Remove old entries if they exist (migration from old version)
-            removed = False
-            for old_key in ["musan", "urbansound"]:
-                if old_key in state:
-                    del state[old_key]
-                    removed = True
-            if removed:
-                # Save cleaned state
-                save_state(state)
             return state
     return {
         # General Speech
@@ -559,7 +550,7 @@ def combine_audio_csvs():
 def main():
     parser = argparse.ArgumentParser(description="Download production-grade audio datasets for μOmni")
     parser.add_argument("--dataset", 
-                       choices=["all", "librispeech", "ljspeech", "general"], 
+                       choices=["all", "librispeech", "ljspeech"], 
                        default="all",
                        help="Which dataset to download (default: all)")
     parser.add_argument("--skip-download", action="store_true",
@@ -599,7 +590,7 @@ def main():
     success = True
     
     # LibriSpeech
-    if args.dataset in ["all", "librispeech", "general"]:
+    if args.dataset in ["all", "librispeech"]:
         if not args.skip_download:
             success = download_librispeech_subset(state) and success
         if not args.skip_extract:
@@ -608,7 +599,7 @@ def main():
             success = convert_librispeech_to_csv(state, args.max_samples) and success
     
     # LJSpeech
-    if args.dataset in ["all", "ljspeech", "general"]:
+    if args.dataset in ["all", "ljspeech"]:
         if not args.skip_download:
             success = download_ljspeech(state, args.max_samples) and success
     

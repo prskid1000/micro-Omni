@@ -119,6 +119,9 @@ def main(cfg):
     else:
         print(f"✓ Using auto-calculated max_mel_length: {max_mel_length}")
     
+    # Update config with calculated value so dataset filtering uses it
+    cfg["max_mel_length"] = max_mel_length
+    
     if use_compile:
         print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
     

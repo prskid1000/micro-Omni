@@ -31,11 +31,11 @@ from calculate_model_size import (
 # Best practices for training duration based on dataset size
 # (samples, min_epochs, max_epochs, recommended_epochs)
 EPOCH_RECOMMENDATIONS = [
-    (1000000, 1, 3, 2),      # Very large (>1M): 1-3 epochs
-    (500000, 2, 4, 3),       # Large (500K-1M): 2-4 epochs
-    (100000, 3, 6, 4),       # Medium (100K-500K): 3-6 epochs
-    (50000, 5, 10, 7),       # Small (50K-100K): 5-10 epochs
-    (0, 10, 20, 15),         # Very small (<50K): 10-20 epochs
+    (10000000, 1, 3, 2),      # Very large (>10M): 1-3 epochs
+    (5000000, 3, 4, 3),       # Large (5M-10M): 3-4 epochs
+    (1000000, 6, 12, 9),       # Medium (1M-5M): 6-12 epochs
+    (500000, 12, 18, 15),       # Small (500K-1M): 12-18 epochs
+    (0, 10, 20, 15),         # Very small (<500K): 10-20 epochs
 ]
 
 def count_text_samples(text_path: str) -> int:

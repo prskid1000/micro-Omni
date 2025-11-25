@@ -105,6 +105,10 @@ def main(cfg):
     else:
         print(f"✓ Using auto-calculated max_mel_length: {max_mel_length}")
     
+    # Update config with calculated values so dataset filtering uses them
+    cfg["max_text_len"] = max_text_len
+    cfg["max_mel_length"] = max_mel_length
+    
     d_model = cfg.get("d_model", 192)
     
     model = AudioEncoderTiny(

@@ -364,7 +364,7 @@ All download scripts output data in the **exact format** required by training sc
 | `train_ocr.py` | `train_csv`<br>`image_root` | CSV: `image,text` | `data/ocr/production_ocr.csv` |
 
 **⚠️ Important: The `--combine` flag is REQUIRED** to create these production files:
-- Without `--combine`: You get individual dataset files (e.g., `wikipedia.txt`, `books.txt`, `librispeech_asr.csv`)
+- Without `--combine`: You get individual dataset files (e.g., `books.txt`, `librispeech_asr.csv`)
 - With `--combine`: You get the final production files (e.g., `production_corpus.txt`, `production_asr.csv`) that training scripts use
 
 **✅ No additional formatting needed!** Data is ready to use directly after combining.
@@ -578,7 +578,6 @@ text,wav
 ```
 data/
 ├── text/
-│   ├── wikipedia.txt
 │   ├── books.txt
 │   └── production_corpus.txt  (if --combine used)
 │
@@ -642,7 +641,7 @@ data/
 
 ### Multiple Categories
 When using `--dataset all`, scripts download from multiple categories:
-- **Text**: General (Wikipedia, Books)
+- **Text**: General (Books)
 - **Audio**: General speech (LibriSpeech, LJSpeech)
 - **Images**: General (COCO)
 
@@ -651,14 +650,14 @@ You can also download specific categories using `--dataset <category>`.
 ### Sample-Based Limits
 - Default: 1,000,000 samples per dataset (configurable with `--max-samples`)
 - Combined totals when using `--dataset all`:
-  - **Text**: ~2M samples (~200M tokens) from 2 datasets
+  - **Text**: ~1M samples (~100M tokens) from 1 dataset
   - **Audio**: ~2M samples from 2 datasets
   - **Images**: ~1M samples from 1 dataset
   - **OCR**: ~1M samples from 1 dataset (MJSynth)
 - For 25.65M parameter model: Combined total provides sufficient data for single-epoch training
 - Based on Chinchilla scaling laws: 20-200 tokens per parameter (minimum: 513M tokens)
 - Automatically stops when reaching sample limit per dataset
-- Example: `--max-samples 500000` for smaller combined totals (~3M text samples)
+- Example: `--max-samples 500000` for smaller combined totals (~1.5M text samples)
 
 ### Fine-Grained Resumption
 - Checkpoints saved during processing (by file, line, class, etc.)

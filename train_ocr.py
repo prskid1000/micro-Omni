@@ -130,6 +130,9 @@ def main(cfg):
     else:
         print(f"✓ Using auto-calculated max_text_length: {max_text_length}")
     
+    # Update config with calculated value so dataset filtering uses it
+    cfg["max_text_length"] = max_text_length
+    
     # Initialize model
     use_compile = cfg.get("use_compile", False)
     model = OCRModel(
