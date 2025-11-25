@@ -39,6 +39,6 @@
   "train_text": "data/text/production_corpus.txt",
   "save_dir": "checkpoints/thinker_tiny",
   "use_sentences": true,
-  "ctx_len_sample_size": 1000000,
+  "ctx_len_sample_size": 10000000,
   "ctx_len_percentile": 95.0
 }
