@@ -278,11 +278,22 @@ def calculate_talker_params(d_model, n_layers, n_heads, d_ff, codebooks, codeboo
     
     return params
 
-def calculate_codec_params(codebooks, codebook_size, dim):
-    """Calculate RVQ Codec parameters"""
+def calculate_codec_params(codebooks, codebook_size, dim, n_mels=128):
+    """
+    Calculate RVQ Codec parameters.
+    
+    Based on actual implementation in omni/codec.py:
+    - Codebook embeddings: codebooks × (codebook_size × dim)
+    - proj_in: Linear(n_mels, dim, bias=True)
+    - proj_out: Linear(dim, n_mels, bias=True)
+    """
     params = 0
     # Each codebook: codebook_size vectors of dimension dim
     params += codebooks * codebook_size * dim
+    # proj_in: n_mels → dim (bias=True)
+    params += n_mels * dim + dim
+    # proj_out: dim → n_mels (bias=True)
+    params += dim * n_mels + n_mels
     return params
 
 def calculate_vocoder_params(n_mels=128, upsample_initial_channel=512, 
@@ -508,10 +519,12 @@ def calculate_model_sizes():
     # 5. RVQ Codec
     print("\n5. RVQ Codec")
     print("-" * 60)
-    params = calculate_codec_params(codebooks=2, codebook_size=128, dim=192)
+    # Default RVQ config: codebooks=2, codebook_size=128, dim=64, n_mels=128
+    params = calculate_codec_params(codebooks=2, codebook_size=128, dim=64, n_mels=128)
     total_params += params
     results["codec"] = params
-    print(f"  Codebooks: 2, codebook_size: 128, dim: 192")
+    print(f"  Codebooks: 2, codebook_size: 128, dim: 64, n_mels: 128")
+    print(f"  Components: embeddings + proj_in(128→64) + proj_out(64→128)")
     print(f"  Parameters: {params:,} ({format_size(params)})")
     
     # 6. OCR Model
@@ -547,15 +560,15 @@ def calculate_model_sizes():
     # 7. Projectors (for SFT)
     print("\n7. Projectors (Vision & Audio)")
     print("-" * 60)
-    # Vision projector: 128 → 256
-    vision_proj_params = 128 * 256 + 256  # Linear with bias
-    # Audio projector: 192 → 256
-    audio_proj_params = 192 * 256 + 256  # Linear with bias
+    # Vision projector: 384 → 384 (updated to match new vision encoder)
+    vision_proj_params = 384 * 384 + 384  # Linear with bias
+    # Audio projector: 384 → 384 (updated to match new audio encoder)
+    audio_proj_params = 384 * 384 + 384  # Linear with bias
     projector_params = vision_proj_params + audio_proj_params
     total_params += projector_params
     results["projectors"] = projector_params
-    print(f"  Vision projector: 128 → 256")
-    print(f"  Audio projector: 192 → 256")
+    print(f"  Vision projector: 384 → 384")
+    print(f"  Audio projector: 384 → 384")
     print(f"  Total projector parameters: {projector_params:,} ({format_size(projector_params)})")
     
     # Summary
