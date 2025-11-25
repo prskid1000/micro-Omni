@@ -4,7 +4,7 @@
   "d_model": 256,
   "d_ff": 1024,
   "n_heads": 4,
-  "ctx_len": 512,
+  "ctx_len": 256,
   "dropout": 0.1,
   "rope_theta": 10000,
   "use_gqa": true,
@@ -34,5 +34,8 @@
   "seed": 42,
   "shuffle_buffer_size": 100,
   "train_text": "data/text/production_corpus.txt",
-  "save_dir": "checkpoints/thinker_tiny"
+  "save_dir": "checkpoints/thinker_tiny",
+  "use_sentences": true,
+  "ctx_len_sample_size": 1000000,
+  "ctx_len_percentile": 95.0
 }

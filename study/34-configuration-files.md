@@ -227,6 +227,151 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 
 ---
 
+## 📊 Dataset Filtering (Percentile-Based Outlier Skipping)
+
+**All datasets now use percentile-based filtering** to skip outliers instead of truncating data. This ensures clean, properly-sized samples while minimizing data loss.
+
+### How Filtering Works
+
+**During Dataset Iteration:**
+
+1. Each dataset loads a sample (text line, audio file, image+caption, etc.)
+2. Measures the sample's length (tokens, mel frames, characters, etc.)
+3. Compares against percentile-based threshold (from config or auto-calculated)
+4. If length exceeds threshold → **skip sample** (via `continue` in `__iter__`)
+5. If length is within threshold → **yield sample** for training
+
+**Benefits:**
+
+- ✅ **No truncation** - preserves data integrity
+- ✅ **Clean samples** - all samples fit within context/length limits
+- ✅ **Minimal loss** - typically skips only 5% of data (at 95th percentile)
+- ✅ **Memory efficient** - padding only up to percentile threshold, not max possible length
+- ✅ **Error tracking** - `get_error_stats()` shows how many samples skipped
+
+### ASR Dataset (Audio Encoder)
+
+**Three filtering checks:**
+
+1. **Text length:** `len(text) > cfg.get('max_text_len', 512)` → skip
+2. **Mel length:** `mel.shape[0] > cfg.get('max_mel_length', auto-calculated)` → skip
+3. **CTC validation:** `output_frames < text_length` → skip (prevents CTC alignment failures)
+   - `output_frames = mel_frames // downsample_factor`
+   - Ensures acoustic frames can accommodate text length
+
+**Error tracking:** `exceeds_max_len`, `ctc_too_short`
+
+**Config parameters:**
+```json
+{
+  "max_mel_length_percentile": 95.0,  // Auto-calculate from dataset
+  "max_text_len": 512  // Manual override
+}
+```
+
+### TTS Dataset (Talker)
+
+**One filtering check:**
+
+1. **Mel length:** `mel.shape[0] > cfg.get('max_mel_length', auto-calculated)` → skip
+
+**Error tracking:** `exceeds_max_len`
+
+**Config parameters:**
+```json
+{
+  "max_mel_length_percentile": 95.0  // Auto-calculate from dataset
+}
+```
+
+### OCR Dataset
+
+**One filtering check:**
+
+1. **Text length:** `len(text) > cfg.get('max_text_length', auto-calculated)` → skip
+
+**Error tracking:** `exceeds_max_len`
+
+**Config parameters:**
+```json
+{
+  "max_text_length_percentile": 95.0  // Auto-calculate from dataset
+}
+```
+
+### Vocoder Dataset
+
+**Two filtering checks:**
+
+1. **Audio length:** `len(audio) > max_audio_length` → skip
+2. **Mel length:** `mel.shape[0] > max_mel_length` → skip
+
+**Error tracking:** `exceeds_max_len`
+
+**Config parameters:**
+```json
+{
+  "max_audio_length": 8192,  // Fixed for memory optimization
+  "max_mel_length": 512  // Calculated from max_audio_length
+}
+```
+
+### Text Dataset (Thinker, SFT)
+
+**One filtering check:**
+
+1. **Token length:** `len(tokens) > ctx_len` → skip
+
+**Special features:**
+
+- **Sentence splitting:** Splits text into sentences using regex `(?<=[.!?])\s+`
+- **Better boundaries:** Provides semantic boundaries instead of arbitrary line breaks
+- **Auto context length:** Calculates optimal `ctx_len` from 95th percentile of token lengths
+
+**Error tracking:** `exceeds_max_len`
+
+**Config parameters:**
+```json
+{
+  "use_sentences": true,  // Enable sentence-based splitting
+  "ctx_len_sample_size": 1000000,  // Samples for analysis
+  "ctx_len_percentile": 95.0  // Percentile threshold
+}
+```
+
+### Monitoring Filtered Samples
+
+**All datasets support error statistics:**
+
+```python
+# After training epoch
+stats = dataset.get_error_stats()
+print(f"Samples processed: {stats['total_samples']}")
+print(f"Samples skipped (exceeds_max_len): {stats['exceeds_max_len']}")
+print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
+```
+
+**Typical results (95th percentile):**
+- ~95% of samples processed successfully
+- ~5% skipped as outliers
+- Minimal impact on training data coverage
+
+### Adjusting Percentile Thresholds
+
+**Higher percentile (e.g., 99.0):**
+- ✅ More data coverage (99% of samples)
+- ❌ More padding (inefficient memory usage)
+- ❌ Slower training (larger batch tensors)
+
+**Lower percentile (e.g., 90.0):**
+- ✅ Less padding (efficient memory)
+- ✅ Faster training (smaller batch tensors)
+- ❌ Less data coverage (90% of samples)
+
+**Recommended:** 95th percentile (default) - good balance between coverage and efficiency
+
+---
+
 ## 🔧 CUDA Graphs Compatibility (Fixed-Length Padding)
 
 **Important:** When using `use_compile: true` with CUDA graphs backend, all batches must have uniform tensor shapes. Variable-length sequences are automatically padded to fixed maximum lengths.
@@ -246,7 +391,7 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 - `max_mel_length` is **automatically calculated** from your dataset during training
 - Uses **95th percentile** by default to minimize padding while covering 95% of data
 - Rounds up to nearest 256 for better memory alignment
-- ~5% of data will be truncated if longer (acceptable for outliers)
+- ~5% of samples will be skipped if longer (outliers filtered during dataset iteration)
 
 **How it works:**
 
@@ -296,7 +441,7 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 
 - `max_text_length` is **automatically calculated** from your dataset during training
 - Uses **95th percentile** by default to minimize padding while covering 95% of data
-- ~5% of data will be truncated if longer (acceptable for outliers)
+- ~5% of samples will be skipped if longer (outliers filtered during dataset iteration)
 
 **How it works:**
 
@@ -320,7 +465,7 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **What Happens:**
 
 - Sequences shorter than max: Padded with zeros
-- Sequences longer than max: Truncated (shouldn't happen with proper config)
+- Sequences longer than max: Skipped during dataset iteration (filtered before reaching collate function)
 - All batches: Uniform shape = CUDA graphs compatible
 
 ---
@@ -350,7 +495,7 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 - `max_mel_length` and `max_text_length` are **auto-calculated** from your dataset
 - Uses 95th percentile by default (configurable via `*_percentile` options)
 - Automatically rounds up to nearest 256 for better memory alignment
-- Adjust percentile if needed: higher (99.0) = more coverage/more padding, lower (90.0) = less padding/more truncation
+- Adjust percentile if needed: higher (99.0) = more coverage/more padding, lower (90.0) = less padding/more skipping
 
 **Automatic tuning:**
 
@@ -595,7 +740,7 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **CUDA Graphs Compatibility:**
 
 - `max_text_length`: Auto-calculated when `use_compile: true` to ensure uniform batch sizes
-- All text sequences are padded/truncated to this fixed length
+- All text sequences are padded to this fixed length (samples exceeding threshold are skipped during dataset iteration)
 - Prevents "tensor size mismatch" errors with CUDA graphs compilation
 
 ---

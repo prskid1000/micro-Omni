@@ -307,6 +307,62 @@ All training scripts use streaming `IterableDataset` implementations:
 
 See [Chapter 36: Optimization Techniques](36-optimization-techniques.md) for details.
 
+### Dataset Classes with Percentile-Based Filtering
+
+All dataset classes in `omni/utils.py` use **percentile-based outlier skipping** instead of truncation:
+
+- **`ASRDataset`**: Audio-text pairs for speech recognition
+  - Filters: text length, mel length, **CTC frame alignment** (output_frames ≥ text_length)
+  - Error tracking: `exceeds_max_len`, `ctc_too_short`
+  - CTC validation prevents "total characters predicted < total characters in input" errors
+
+- **`TTSDataset`**: Text-audio pairs for speech generation
+  - Filters: mel length using percentile threshold
+  - Error tracking: `exceeds_max_len`
+
+- **`OCRDataset`**: Image-text pairs for OCR
+  - Filters: text length using percentile threshold
+  - Error tracking: `exceeds_max_len`
+
+- **`VocoderDataset`**: Mel-audio pairs for vocoder
+  - Filters: audio length AND mel length
+  - Error tracking: `exceeds_max_len`
+
+- **`TextDataset`**: Text corpus with sentence splitting
+  - Filters: token length using percentile threshold
+  - Features: **sentence-based splitting** for better semantic boundaries (regex: `(?<=[.!?])\s+`)
+  - Error tracking: `exceeds_max_len`
+
+**How Filtering Works:**
+
+1. Dataset loads sample during iteration
+2. Measures sample length (tokens, mel frames, characters, etc.)
+3. Compares against percentile-based threshold (95th percentile default)
+4. **If exceeds threshold → skip sample** (via `continue` in `__iter__`)
+5. If within threshold → yield sample for training
+
+**Benefits:**
+
+- ✅ No truncation - preserves data integrity
+- ✅ Clean samples - all fit within context/length limits
+- ✅ Minimal loss - typically skips only 5% of data (at 95th percentile)
+- ✅ Error statistics via `get_error_stats()` method
+
+### Analysis Functions
+
+All datasets have corresponding analysis functions for automatic threshold calculation:
+
+- **`analyze_asr_dataset()`**: Calculate optimal mel length percentiles for ASR
+- **`analyze_tts_dataset()`**: Calculate optimal mel length percentiles for TTS
+- **`analyze_ocr_dataset()`**: Calculate optimal text length percentiles for OCR
+- **`analyze_vocoder_dataset()`**: Calculate optimal audio/mel length percentiles
+- **`analyze_text_dataset()`**: Calculate optimal context length for text dataset
+  - Supports sentence splitting (matches TextDataset behavior)
+  - Samples lines/sentences, tokenizes, measures lengths
+  - Calculates percentile-based `ctx_len` (default: 95th)
+  - Rounds to nearest 64 for efficiency
+  - Saves to metadata for fast subsequent runs
+
 ## 🔄 Common Training Utilities
 
 All training scripts share common utilities from `omni/utils.py`:

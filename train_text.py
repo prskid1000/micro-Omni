@@ -9,7 +9,8 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, reload_from_last_checkpoint, TextDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, save_training_metadata, load_training_metadata
+    ValidationSkipSamplesContext, save_training_metadata, load_training_metadata,
+    analyze_text_dataset
 )
 from tqdm import tqdm
 
@@ -36,6 +37,42 @@ def main(cfg):
         print(f"✓ Tokenizer created: {spm_model}")
     tok = BPETokenizer(spm_model)
     
+    # Analyze dataset to calculate optimal context length (similar to audio encoder)
+    ctx_len_dynamic = None
+    if metadata and "ctx_len" in metadata:
+        ctx_len_dynamic = metadata["ctx_len"]
+        print(f"Context length: {ctx_len_dynamic} (from metadata)")
+    else:
+        print("Analyzing text dataset for optimal context length...")
+        sample_size = cfg.get("ctx_len_sample_size", 10000)  # Sample 10k lines by default
+        ctx_percentile = cfg.get("ctx_len_percentile", 95.0)
+        use_sentences = cfg.get("use_sentences", True)
+        
+        ctx_len_dynamic = analyze_text_dataset(
+            train_text,
+            tok,
+            sample_size=sample_size,
+            ctx_percentile=ctx_percentile,
+            use_sentences=use_sentences
+        )
+        
+        # Save to metadata
+        if metadata is None:
+            metadata = {}
+        metadata["ctx_len"] = ctx_len_dynamic
+        metadata["step"] = 0
+        metadata["epoch"] = 0
+        save_training_metadata(save_dir, model_name, metadata)
+        print(f"✓ Saved context length to metadata: {ctx_len_dynamic}")
+    
+    # Allow override from config, but default to auto-calculated value
+    ctx_len = cfg.get("ctx_len", ctx_len_dynamic)
+    if ctx_len != ctx_len_dynamic:
+        print(f"⚠ Warning: Config ctx_len={ctx_len} differs from calculated ctx_len={ctx_len_dynamic}")
+        print(f"  Using config value: {ctx_len}")
+    else:
+        print(f"✓ Using auto-calculated ctx_len: {ctx_len}")
+    
     print("Using TextDataset (streaming, lower memory, sequential I/O)")
     
     # torch.compile() support (optional, PyTorch 2.0+)
@@ -49,7 +86,7 @@ def main(cfg):
         cfg.get("d_ff", 1024), 
         cfg.get("dropout", 0.1), 
         cfg.get("rope_theta", 10000), 
-        cfg.get("ctx_len", 512),
+        ctx_len,  # Use calculated or config value
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
         use_moe=cfg.get("use_moe", False),
@@ -95,13 +132,18 @@ def main(cfg):
     # This is approximate: step * batch_size gives number of samples processed
     skip_samples = 0  # Will be set after checkpoint loading if resuming
     
+    # Enable sentence-based splitting (from config)
+    use_sentences = cfg.get("use_sentences", True)
+    
     train_ds = TextDataset(
         train_text, 
         tok, 
-        cfg.get("ctx_len", 512),
+        ctx_len,  # Use calculated or config value
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
         seed=seed,
-        skip_samples=skip_samples  # Will be updated after checkpoint load
+        skip_samples=skip_samples,  # Will be updated after checkpoint load
+        filter_outliers=True,  # Skip samples exceeding ctx_len
+        use_sentences=use_sentences  # Split into sentences (recommended)
     )
     train_ds._val_split = val_split
     train_ds._val_mode = False  # Training mode
@@ -109,10 +151,12 @@ def main(cfg):
     val_ds = TextDataset(
         train_text, 
         tok, 
-        cfg.get("ctx_len", 512),
+        ctx_len,  # Use calculated or config value
         shuffle_buffer_size=0,  # No shuffling for validation
         seed=seed,  # Same seed for consistent hash-based split
-        skip_samples=0  # Don't skip validation samples
+        skip_samples=0,  # Don't skip validation samples
+        filter_outliers=True,  # Skip samples exceeding ctx_len
+        use_sentences=use_sentences  # Split into sentences (recommended)
     )
     val_ds._val_split = val_split
     val_ds._val_mode = True  # Validation mode

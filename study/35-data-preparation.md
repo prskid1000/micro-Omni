@@ -52,6 +52,9 @@ python scripts/download_production_text.py --dataset general --combine
 - ✅ **CSV/JSON:** Streams text extraction to temp file (row-by-row/item-by-item), stored in `data/.temp/` and auto-cleaned
 - ✅ **Resumable:** All preprocessing operations can resume if interrupted
 - ✅ **Streaming datasets:** All datasets stream directly from files (no cache files)
+- ✅ **Percentile-based filtering:** Datasets automatically skip outliers (default: 95th percentile)
+- ✅ **Sentence splitting:** TextDataset splits text into semantic sentence boundaries
+- ✅ **Auto context length:** Automatically calculates optimal `ctx_len` from dataset (text only)
 
 ---
 

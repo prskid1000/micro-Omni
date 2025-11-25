@@ -86,11 +86,11 @@ pip install flash-attn
 - `max_mel_length` and `max_text_length` are **automatically calculated** from your dataset
 - Uses **95th percentile** by default to minimize padding while covering 95% of data
 - Automatically rounds up to nearest 256 for better memory alignment
-- ~5% of data will be truncated if longer (acceptable for outliers)
+- ~5% of samples will be skipped if longer (outliers filtered during dataset iteration)
 
 **Implementation:**
-- Audio training: All mel spectrograms padded/truncated to auto-calculated `max_mel_length`
-- OCR training: All text sequences padded/truncated to auto-calculated `max_text_length`
+- Audio training: All mel spectrograms padded to auto-calculated `max_mel_length` (longer samples skipped)
+- OCR training: All text sequences padded to auto-calculated `max_text_length` (longer samples skipped)
 - Collate functions in `omni/utils.py` handle padding automatically:
   - `collate_mel_fn()` - For mel-only batches (talker training)
   - `collate_mel_text_fn()` - For mel+text batches (audio encoder training)
@@ -103,9 +103,9 @@ pip install flash-attn
 - Worth it for most use cases
 
 **Configuring Percentiles:**
-- **Higher percentile (99.0):** More coverage, more padding, less truncation
-- **Lower percentile (90.0):** Less padding, more truncation, less memory
-- **Default (95.0):** Good balance - covers 95% of data with minimal padding
+- **Higher percentile (99.0):** More coverage, more padding, fewer samples skipped
+- **Lower percentile (90.0):** Less padding, more samples skipped, less memory
+- **Default (95.0):** Good balance - covers 95% of data with minimal padding, skips 5% outliers
 
 **Optional Manual Override:**
 - You can manually set `max_mel_length` or `max_text_length` in config to override auto-calculation

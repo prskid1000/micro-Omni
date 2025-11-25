@@ -81,7 +81,7 @@ Predict: [67, 103] (next frame)
 - `max_mel_length` is **automatically calculated** from your dataset during training
 - Uses **95th percentile** by default to minimize padding while covering 95% of data
 - Automatically rounds up to nearest 256 for better memory alignment
-- ~5% of data will be truncated if longer (acceptable for outliers)
+- ~5% of samples will be skipped if longer (outliers filtered during dataset iteration)
 
 **Frame Rate Reference:**
 

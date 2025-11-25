@@ -293,7 +293,7 @@ Allocation example (context=512):
 - Available for generation: 512 - 49 = 463 tokens
 
 Strategies:
-1. Truncate audio if too long
+1. Skip audio samples exceeding length threshold (via dataset filtering)
 2. Sample video frames (1 per second)
 3. Prioritize recent text context
 4. Use KV caching to extend effective context

@@ -998,16 +998,45 @@ class ValidationSkipSamplesContext:
 # Dataset classes
 class TextDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
-    def __init__(self, path, tokenizer, ctx, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+    def __init__(self, path, tokenizer, ctx, shuffle_buffer_size=10000, seed=None, skip_samples=0, filter_outliers=True, use_sentences=True):
         self.path, self.tok, self.ctx = path, tokenizer, ctx
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self.filter_outliers = filter_outliers  # Skip samples exceeding context length
+        self.use_sentences = use_sentences  # Split text into sentences instead of lines
         self._num_lines = None
+        self._error_counts = {"exceeds_max_len": 0}
+    
+    def _split_into_sentences(self, text):
+        """
+        Split text into sentences using simple heuristics.
+        Better than line-based splitting for natural language.
+        
+        Args:
+            text: Input text string
+            
+        Returns:
+            list: List of sentence strings
+        """
+        import re
+        
+        # Simple sentence splitting: split on .!? followed by space/newline
+        # This handles most cases without needing nltk or spacy
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        
+        # Filter out empty sentences and strip whitespace
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        return sentences
     
     def get_length(self):
         """Count lines (expensive, cached after first call)"""
         if self._num_lines is None:
             self._num_lines = sum(1 for _ in open(self.path, 'r', encoding='utf-8', errors='ignore'))
         return self._num_lines
+    
+    def get_error_stats(self):
+        """Get statistics about skipped samples due to exceeding max lengths."""
+        return self._error_counts.copy()
     
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -1042,18 +1071,36 @@ class TextDataset(IterableDataset):
                     skipped += 1
                     continue
                 
-                # Tokenize and create tensors
-                ids = [1] + self.tok.encode(text)[:self.ctx-1]  # BOS=1
-                x = torch.tensor(ids + [0] * (self.ctx - len(ids)), dtype=torch.long)
-                y = torch.cat([x[1:], torch.tensor([0], dtype=torch.long)])  # Shift for next-token prediction
-                
-                # Buffer-based shuffling
-                if self.shuffle_buffer_size > 0:
-                    buffer.append((x, y))
-                    if len(buffer) >= self.shuffle_buffer_size:
-                        yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                # Split into sentences or use whole line
+                if self.use_sentences:
+                    sentences = self._split_into_sentences(text)
                 else:
-                    yield x, y
+                    sentences = [text]
+                
+                # Process each sentence as a separate sample
+                for sentence in sentences:
+                    if not sentence:
+                        continue
+                    
+                    # Tokenize
+                    ids = [1] + self.tok.encode(sentence)  # BOS=1
+                    
+                    # Filter outliers: skip samples exceeding context length
+                    if self.filter_outliers and len(ids) >= self.ctx:
+                        self._error_counts["exceeds_max_len"] += 1
+                        continue
+                    
+                    # Pad to context length
+                    x = torch.tensor(ids + [0] * (self.ctx - len(ids)), dtype=torch.long)
+                    y = torch.cat([x[1:], torch.tensor([0], dtype=torch.long)])  # Shift for next-token prediction
+                    
+                    # Buffer-based shuffling
+                    if self.shuffle_buffer_size > 0:
+                        buffer.append((x, y))
+                        if len(buffer) >= self.shuffle_buffer_size:
+                            yield buffer.pop(rng.randint(0, len(buffer) - 1))
+                    else:
+                        yield x, y
         
         # Yield remaining buffer items
         if buffer:
@@ -1459,6 +1506,105 @@ def analyze_ocr_dataset(csv_path, text_percentile=95.0):
     
     return char_to_idx, idx_to_char, vocab_size, max_text_len
 
+def analyze_text_dataset(
+    text_path,
+    tokenizer,
+    sample_size=None,
+    ctx_percentile=95.0,
+    use_sentences=True
+):
+    """
+    Analyze text dataset to calculate optimal context length using percentile.
+    Similar to audio encoder's mel length calculation.
+    
+    Args:
+        text_path: Path to text file (one document/paragraph per line)
+        tokenizer: BPE tokenizer instance
+        sample_size: Number of lines to check (None = all, recommended for large datasets)
+        ctx_percentile: Percentile to use for ctx_len (default: 95.0, covers 95% of data, minimizes padding)
+        use_sentences: Split lines into sentences for analysis (recommended: True)
+        
+    Returns:
+        int: Optimal context length at specified percentile (rounded up to nearest 64 for efficiency)
+    """
+    import numpy as np
+    import re
+    
+    print(f"\n📊 Analyzing text dataset: {text_path}")
+    print(f"  Mode: {'sentence-based' if use_sentences else 'line-based'}")
+    print(f"  Percentile: {ctx_percentile}%")
+    
+    token_lengths = []
+    
+    def split_sentences(text):
+        """Split text into sentences."""
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        return [s.strip() for s in sentences if s.strip()]
+    
+    with open(text_path, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.readlines()
+        total_lines = len(lines)
+        
+        # Optionally sample lines
+        if sample_size and sample_size < total_lines:
+            import random
+            lines = random.sample(lines, sample_size)
+            print(f"  Sampling {sample_size} of {total_lines} lines...")
+        else:
+            print(f"  Processing all {total_lines} lines...")
+        
+        for idx, line in enumerate(lines):
+            if (idx + 1) % 1000 == 0:
+                print(f"  Analyzed {idx + 1}/{len(lines)} lines...", end='\r')
+            
+            text = line.strip()
+            if not text:
+                continue
+            
+            # Split into sentences or use whole line
+            if use_sentences:
+                text_units = split_sentences(text)
+            else:
+                text_units = [text]
+            
+            # Tokenize each unit and record length
+            for unit in text_units:
+                if not unit:
+                    continue
+                # +1 for BOS token
+                tokens = tokenizer.encode(unit)
+                token_lengths.append(len(tokens) + 1)
+        
+        print(f"  Analyzed {len(lines)} lines → {len(token_lengths)} samples")
+    
+    if not token_lengths:
+        print("⚠️  Warning: No valid samples found")
+        return 256  # Default fallback
+    
+    # Calculate statistics
+    token_lengths_arr = np.array(token_lengths)
+    min_len = token_lengths_arr.min()
+    max_len = token_lengths_arr.max()
+    mean_len = token_lengths_arr.mean()
+    median_len = np.median(token_lengths_arr)
+    percentile_len = np.percentile(token_lengths_arr, ctx_percentile)
+    
+    # Round up to nearest 64 for efficiency (power of 2 alignment)
+    ctx_len = int(np.ceil(percentile_len / 64) * 64)
+    
+    print(f"\n📈 Token Length Statistics:")
+    print(f"  • Total samples analyzed: {len(token_lengths)}")
+    print(f"  • Min length: {min_len} tokens")
+    print(f"  • Max length: {max_len} tokens")
+    print(f"  • Mean length: {mean_len:.1f} tokens")
+    print(f"  • Median length: {median_len:.0f} tokens")
+    print(f"  • {ctx_percentile}th percentile: {percentile_len:.0f} tokens")
+    print(f"  • Recommended ctx_len: {ctx_len} tokens (rounded to nearest 64)")
+    print(f"  • Coverage: ~{ctx_percentile:.1f}% of samples will fit without being skipped")
+    print(f"  • Samples exceeding ctx_len: ~{100 - ctx_percentile:.1f}% will be skipped\n")
+    
+    return ctx_len
+
 def analyze_vocoder_dataset(
     csv_path,
     sr=16000,
@@ -1568,8 +1714,15 @@ class ASRDataset(IterableDataset):
         self.melspec = torchaudio.transforms.MelSpectrogram(sample_rate=sr, n_fft=1024, hop_length=160, win_length=400, n_mels=n_mels)
         self._num_rows = None
         # Error handling configuration
+        self.cfg = cfg  # Store config for CTC validation in __iter__
         self.warn_on_errors = cfg.get("warn_on_dataset_errors", False) if cfg else False
-        self._error_counts = {"missing_file": 0, "load_error": 0, "empty_text": 0, "exceeds_max_len": 0}
+        self._error_counts = {
+            "missing_file": 0, 
+            "load_error": 0, 
+            "empty_text": 0, 
+            "exceeds_max_len": 0,
+            "ctc_too_short": 0  # Track CTC-specific failures
+        }
         self._first_error_logged = False
         
         # Percentile-based filtering (skip samples exceeding thresholds)
@@ -1662,13 +1815,29 @@ class ASRDataset(IterableDataset):
                     
                     # Filter outliers: skip samples exceeding max lengths
                     if self.filter_outliers:
+                        skip_sample = False
+                        
                         # Check text length
                         if self.max_text_len is not None and len(text) > self.max_text_len:
                             self._error_counts["exceeds_max_len"] += 1
-                            continue
+                            skip_sample = True
+                        
                         # Check mel length
                         if self.max_mel_length is not None and mel.shape[0] > self.max_mel_length:
                             self._error_counts["exceeds_max_len"] += 1
+                            skip_sample = True
+                        
+                        # CTC-specific validation: ensure enough acoustic frames for text
+                        # After downsampling, we need at least len(text) output frames
+                        # Rule: output_frames = mel_frames / downsample_factor >= len(text)
+                        downsample_factor = self.cfg.get("downsample_time", 8) if self.cfg else 8
+                        output_frames = mel.shape[0] // downsample_factor
+                        if len(text) > output_frames:
+                            # Not enough acoustic frames to encode this text with CTC
+                            self._error_counts["ctc_too_short"] += 1
+                            skip_sample = True
+                        
+                        if skip_sample:
                             continue
                     
                     # Buffer-based shuffling

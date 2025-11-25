@@ -460,7 +460,7 @@ for batch in dataloader:
 
 - When using `use_compile: true`, all batches must have uniform shapes
 - `max_mel_length` is auto-calculated from dataset (95th percentile, typically ~2048 frames = ~20 seconds)
-- All mel spectrograms are padded/truncated to this fixed length
+- All mel spectrograms are padded to this fixed length (samples exceeding threshold are skipped during dataset iteration)
 - Prevents "tensor size mismatch" errors with CUDA graphs compilation
 - See Chapter 34 (Configuration Files) for details
 

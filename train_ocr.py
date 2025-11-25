@@ -30,7 +30,7 @@ from tqdm import tqdm
 def collate_ocr_fn(batch, max_text_length=None):
     """
     Collate function that pads all text sequences to a fixed maximum length.
-    This ensures uniform batch sizes for CUDA graphs compilation.
+    No truncation is performed - OCRDataset filters outliers during iteration.
     
     Args:
         batch: List of (image, text) tuples
@@ -48,14 +48,10 @@ def collate_ocr_fn(batch, max_text_length=None):
     padded_texts = []
     for t in texts:
         current_len = len(t)
-        if current_len > max_text_len:
-            # Truncate if longer than max (shouldn't happen with proper config)
-            t = t[:max_text_len]
-            current_len = max_text_len
-        
+        # No truncation needed - OCRDataset filters outliers during iteration
         pad_len = max_text_len - current_len
         if pad_len > 0:
-            t = t + [0] * pad_len  # Pad with 0 (blank/PAD token)
+            t = t + [0] * pad_len  # Pad with 0 (PAD token)
         padded_texts.append(t)
     
     return images, torch.tensor(padded_texts, dtype=torch.long)

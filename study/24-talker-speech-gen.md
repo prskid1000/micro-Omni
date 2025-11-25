@@ -544,7 +544,7 @@ for batch in dataloader:
 - Can override manually or adjust `max_mel_length_percentile` if needed
 - Note: Talker uses different frame rate (12.5 Hz with frame_ms=80)
 - For 60 seconds: typically ~750 frames (60 × 12.5)
-- All mel spectrograms are padded/truncated to this fixed length
+- All mel spectrograms are padded to this fixed length (samples exceeding threshold are skipped during dataset iteration)
 - Prevents "tensor size mismatch" errors with CUDA graphs compilation
 - See Chapter 34 (Configuration Files) for details
 
