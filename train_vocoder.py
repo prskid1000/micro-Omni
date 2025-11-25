@@ -867,9 +867,8 @@ def main(cfg):
                     val_loss_d = 0.0
                     val_samples = 0
                     
-                    from itertools import islice
                     with torch.no_grad():
-                        for val_mel, val_audio, val_mel_lengths, val_audio_lengths in islice(val_dl, 100):
+                        for val_mel, val_audio, val_mel_lengths, val_audio_lengths in val_dl:
                             
                             val_mel = val_mel.to(device)
                             val_audio = val_audio.to(device)

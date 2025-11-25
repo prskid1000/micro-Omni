@@ -514,27 +514,6 @@ def main(cfg):
                             # Free validation tensors
                             del val_logits, val_loss
                         except RuntimeError as e:
-                            error_msg = str(e)
-                            if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
-                                logger.error(f"Step {step}: {e}")
-                                logger.error("Reloading from last checkpoint...")
-                                # Reload from last checkpoint
-                                reloaded_step = reload_from_last_checkpoint(
-                                    save_dir, "thinker_step_", device, logger, model, opt, scheduler, scaler
-                                )
-                                if reloaded_step > 0:
-                                    step = reloaded_step
-                                    initial_step = step
-                                    logger.info(f"Resuming from step {step}")
-                                model.train()
-                                break
-                            else:
-                                logger.warning(f"Step {step}: Validation error: {e}")
-                                # Continue with other validation batches
-                                break  # Break on NaN/Inf to avoid repeated errors
-                        
-                        if val_count >= 20:  # Limit validation batches
-                            break
                 
                 avg_val_loss = val_loss_sum / val_count
                 logger.val_step(step, avg_val_loss, epoch)
