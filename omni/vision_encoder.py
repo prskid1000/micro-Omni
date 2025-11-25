@@ -138,29 +138,35 @@ class AttentionPooling(nn.Module):
 
 class SimpleTextEncoder(nn.Module):
     """
-    Simple text encoder with learned attention pooling.
+    Simple text encoder with learned attention pooling and positional encoding.
     
     Uses learned attention mechanism to weight different tokens,
     providing better semantic understanding than simple mean pooling.
     """
-    def __init__(self, vocab_size: int, d_model: int) -> None:
+    def __init__(self, vocab_size: int, d_model: int, max_len: int = 512, dropout: float = 0.1) -> None:
         """
-        Initialize text encoder with attention pooling.
+        Initialize text encoder with attention pooling and positional encoding.
         
         Args:
             vocab_size: size of vocabulary
             d_model: embedding dimension
+            max_len: maximum sequence length for positional encoding
+            dropout: dropout rate
         """
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.token_embed = nn.Embedding(vocab_size, d_model)
+        self.pos_embed = nn.Embedding(max_len, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(d_model)
         self.attention_pool = AttentionPooling(d_model)
         
         # Initialize embeddings properly
-        nn.init.normal_(self.embedding.weight, mean=0, std=0.02)
+        nn.init.normal_(self.token_embed.weight, mean=0, std=0.02)
+        nn.init.normal_(self.pos_embed.weight, mean=0, std=0.02)
     
     def forward(self, token_ids: torch.Tensor, return_cls: bool = True, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Encode text tokens to embeddings.
+        Encode text tokens to embeddings with positional encoding.
         
         Args:
             token_ids: (B, T) or (T,) token indices
@@ -178,7 +184,15 @@ class SimpleTextEncoder(nn.Module):
         else:
             squeeze_output = False
         
-        embeddings = self.embedding(token_ids)  # (B, T, d_model)
+        B, T = token_ids.shape
+        
+        # Token embeddings + positional embeddings
+        token_emb = self.token_embed(token_ids)  # (B, T, d_model)
+        positions = torch.arange(T, device=token_ids.device).unsqueeze(0).expand(B, -1)  # (B, T)
+        pos_emb = self.pos_embed(positions)  # (B, T, d_model)
+        
+        # Combine and normalize
+        embeddings = self.dropout(self.layer_norm(token_emb + pos_emb))  # (B, T, d_model)
         
         if not return_cls:
             # Return all tokens

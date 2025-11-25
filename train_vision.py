@@ -152,17 +152,25 @@ def main(cfg):
     
     # Create text encoder if not using Thinker
     if not use_thinker_for_text:
-        text_encoder = SimpleTextEncoder(vocab_size, d_model).to(device)
-        print(f"✓ Created SimpleTextEncoder with vocab_size={vocab_size}, d_model={d_model}, pooling=attention")
+        text_encoder = SimpleTextEncoder(
+            vocab_size, 
+            d_model, 
+            max_len=ctx_len, 
+            dropout=cfg.get("dropout", 0.1)
+        ).to(device)
+        print(f"✓ Created SimpleTextEncoder with vocab_size={vocab_size}, d_model={d_model}, max_len={ctx_len}, pooling=attention")
     
-    # Initialize projections with smaller weights
+    # Initialize projections with Xavier uniform (better than normal(0.01))
     for module in [img_proj, text_proj]:
         for m in module.modules():
             if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, std=0.01)
+                nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-    print("✓ Initialized projection weights with std=0.01")
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+    print("✓ Initialized projection weights with Xavier uniform")
     
     # Optimizer: include text_encoder if using simple mode
     opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters())
