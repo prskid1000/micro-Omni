@@ -85,7 +85,28 @@ Now Thinker can:
 
 ## 🏗️ Detailed Architecture Breakdown
 
-### The Complete Pipeline
+### Two Operating Modes
+
+The Audio Encoder supports two modes for different use cases:
+
+```
+MODE 1: CTC Mode (use_attention_pooling=False) - DEFAULT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use case: Speech recognition (ASR)
+Output: Frame sequence (B, T/8, d_model)
+Loss: CTC (Connectionist Temporal Classification)
+Benefits: Preserves temporal alignment for ASR
+
+MODE 2: Contrastive Mode (use_attention_pooling=True)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use case: Audio-text contrastive learning (CLAP-style)
+Output: Pooled embedding (B, d_model)
+Loss: Contrastive (audio-text similarity)
+Benefits: Fixed-size representation for retrieval/classification
+Based on: LAION-CLAP (2023 ICASSP paper)
+```
+
+### The Complete Pipeline (CTC Mode)
 
 ```
 INPUT: 3 seconds of speech
@@ -103,7 +124,7 @@ Shape: (1, 128, 300)  [batch, channels, time]
 - Height = 128 (frequency)
 - Width = 300 (time)
 
-Step 3: Convolutional Downsampling (8x)
+Step 3: Convolutional Downsampling (4x or 8x)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 WHY downsample?
@@ -112,15 +133,18 @@ WHY downsample?
 - Most phonemes last ~50-100ms (5-10 frames)
 
 HOW? Stack of convolutional layers:
-Conv1: Stride 2 → 300 → 150 frames (50 Hz)
-Conv2: Stride 2 → 150 → 75 frames (25 Hz)
-Conv3: Stride 2 → 75 → 37.5 frames (12.5 Hz)
+ConvDown Block (4x reduction):
+  Conv1: Stride 2 → 300 → 150 frames (50 Hz)
+  Conv2: Stride 2 → 150 → 75 frames (25 Hz)
 
-Total: 8x reduction (300 → 37.5 frames)
+Optional Extra Conv (for 8x total):
+  Conv3: Stride 2 → 75 → 37.5 frames (12.5 Hz)
 
-Result: (1, 192, 37)
-- 37 frames (12.5 Hz)
-- 192 channels (learned features)
+Total: 4x or 8x reduction (300 → 75 or 37.5 frames)
+
+Result: (1, 64, 75) or (1, 64, 37)
+- 75 or 37 frames (25 Hz or 12.5 Hz)
+- 64 channels (learned features)
 
 Step 4: Flatten & Project
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -150,7 +174,27 @@ Step 6: Final Normalization
 RMSNorm for stability
 Output: (1, 37, 192)
 
-Step 7: Audio Projector
+Step 7a: CTC Mode (default)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Output frame sequence: (1, 37, 192)
+Ready for CTC head → ASR training
+
+Step 7b: Contrastive Mode (optional)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Attention Pooling:
+- Learns importance weights for each frame
+- Weighted sum across time dimension
+- Handles variable-length audio with masking
+
+Process:
+  weights = Linear(192 → 1)(x)  # (1, 37, 1)
+  weights = softmax(weights, dim=1)  # normalize
+  pooled = sum(x * weights)  # weighted average
+  
+Output: (1, 192) pooled embedding
+Ready for contrastive learning (CLAP-style)
+
+Step 8: Audio Projector (External)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Linear projection: 192 → 256 dimensions
 
@@ -160,7 +204,9 @@ WHY? Align with Thinker's dimension!
 - Image embeddings: 256-dim
 - Audio embeddings: 192-dim → 256-dim ✓
 
-Final output: (1, 37, 256)
+Final output: 
+- CTC mode: (1, 37, 256) frame sequence
+- Contrastive mode: (1, 256) pooled embedding
 
 READY FOR THINKER! 🎉
 ```
@@ -176,25 +222,32 @@ READY FOR THINKER! 🎉
                  ↓
 ┌─────────────────────────────────────────┐
 │  CONVOLUTIONAL DOWNSAMPLING             │
-│  (Implemented as ConvDown + Extra Conv) │
+│  (Configurable: 4x or 8x reduction)     │
 │  ┌────────────────────────────────────┐ │
 │  │ ConvDown Block (4x reduction)      │ │
 │  │ - Conv2d (stride 2) + GELU         │ │
+│  │   Input: (1, 128, 300)             │ │
+│  │   Output: (1, 64, 150)             │ │
 │  │ - Conv2d (stride 2) + GELU         │ │
+│  │   Input: (1, 64, 150)              │ │
+│  │   Output: (1, 64, 75)              │ │
 │  └────────────────────────────────────┘ │
 │  ┌────────────────────────────────────┐ │
-│  │ Extra Conv Layer (2x reduction)    │ │
+│  │ Extra Conv (optional, for 8x)      │ │
 │  │ - Conv2d (stride 2) + GELU         │ │
+│  │   Input: (1, 64, 75)               │ │
+│  │   Output: (1, 64, 37)              │ │
 │  │ (Used when downsample_factor=8)    │ │
 │  └────────────────────────────────────┘ │
-│  Output: (1, 192, 37)                   │
-│  8x temporal reduction! ✓               │
+│  Output: (1, 64, 75) or (1, 64, 37)     │
+│  Temporal reduction complete! ✓         │
 └────────────────┬────────────────────────┘
                  ↓
 ┌─────────────────────────────────────────┐
-│  FLATTEN & RESHAPE                      │
-│  (1, 192, 37) → (1, 37, 192)           │
-│  Now it's a sequence of 37 vectors!    │
+│  FLATTEN & PROJECT                      │
+│  (1, 64, T) → (1, T, 64*freq_bins)     │
+│  Then Linear → (1, T, 192)             │
+│  Now it's a sequence of T vectors!     │
 └────────────────┬────────────────────────┘
                  ↓
 ┌─────────────────────────────────────────┐
@@ -218,8 +271,28 @@ READY FOR THINKER! 🎉
 ┌─────────────────────────────────────────┐
 │  FINAL RMSNORM                          │
 │  Stabilize outputs                      │
+│  Output: (1, T, 192)                    │
 └────────────────┬────────────────────────┘
                  ↓
+          ┌──────┴──────┐
+          │   MODE?     │
+          └──────┬──────┘
+         ┌───────┴────────┐
+         ↓                ↓
+┌────────────────┐  ┌────────────────┐
+│  CTC MODE      │  │ CONTRASTIVE    │
+│  (default)     │  │ MODE (CLAP)    │
+└────────┬───────┘  └────────┬───────┘
+         ↓                   ↓
+┌────────────────┐  ┌────────────────┐
+│ Frame Sequence │  │ Attention Pool │
+│ (1, T, 192)    │  │ Linear(192→1)  │
+│                │  │ + Softmax      │
+│                │  │ + Weighted Sum │
+│                │  │ → (1, 192)     │
+└────────┬───────┘  └────────┬───────┘
+         └──────┬─────────────┘
+                ↓
 ┌─────────────────────────────────────────┐
 │  AUDIO PROJECTOR (External)             │
 │  Linear: 192 dim → 256 dim             │
@@ -228,9 +301,9 @@ READY FOR THINKER! 🎉
                  ↓
 ┌─────────────────────────────────────────┐
 │  OUTPUT: Audio Embeddings               │
-│  Shape: (1, 37, 256)                    │
-│  37 semantic tokens for "meow"          │
-│  Ready for Thinker to process! ✓        │
+│  CTC mode: (1, T, 256) frame sequence   │
+│  Contrastive: (1, 256) pooled embedding │
+│  Ready for respective tasks! ✓          │
 └─────────────────────────────────────────┘
 ```
 
@@ -509,13 +582,16 @@ Audio encoder enabled multimodal understanding! ✓
 ## 💡 Key Takeaways
 
 ✅ **Audio Encoder** translates sound into semantic embeddings  
-✅ **8x downsampling** (100Hz → 12.5Hz) for efficiency  
+✅ **Two operating modes**: CTC (ASR) and Contrastive (CLAP)  
+✅ **4x or 8x downsampling** (100Hz → 25Hz or 12.5Hz) for efficiency  
 ✅ **Convolutional layers** compress temporal dimension  
 ✅ **Transformer encoder** captures semantic meaning  
+✅ **Attention pooling** (contrastive mode) for fixed-size embeddings  
 ✅ **Projects to 256-dim** to align with Thinker  
-✅ **Pretrained with CTC loss** on ASR task  
+✅ **Pretrained with CTC loss** on ASR task (current)  
 ✅ **~2.05M parameters** - compact and efficient  
-✅ **Enables multimodal** audio+text+image understanding
+✅ **Enables multimodal** audio+text+image understanding  
+✅ **CLAP-compatible** for audio-text contrastive learning
 
 ---
 
@@ -526,15 +602,19 @@ Audio encoder enabled multimodal understanding! ✓
 3. What is CTC loss and why is it used for training?
 4. How many tokens does 3 seconds of speech become after the audio encoder?
 5. Why do we project from 192 to 256 dimensions at the end?
+6. What are the two operating modes and when would you use each?
+7. How does attention pooling work in contrastive mode?
 
 <details>
 <summary>📝 Click to see answers</summary>
 
-1. Mel spectrograms are too low-level (acoustic features), too many frames (100/sec), and wrong dimension (128). Audio encoder converts them to semantic embeddings (meaningful), efficient rate (12.5/sec), and correct dimension (256)
+1. Mel spectrograms are too low-level (acoustic features), too many frames (100/sec), and wrong dimension (128). Audio encoder converts them to semantic embeddings (meaningful), efficient rate (12.5/sec or 25/sec), and correct dimension (256)
 2. 8x downsampling means reducing frame rate from 100 Hz to 12.5 Hz (100/8). Beneficial because: 8x less computation, captures all phonetic info, aligns better with text token rate
 3. CTC (Connectionist Temporal Classification) allows flexible alignment between audio frames and text characters without requiring explicit time stamps - perfect for ASR training
-4. 3 seconds × 12.5 Hz = 37-38 tokens (after 8x downsampling from 300 frames)
+4. With 8x downsampling: 3 seconds × 12.5 Hz = 37-38 tokens. With 4x: 3 seconds × 25 Hz = 75 tokens
 5. To align with Thinker's input dimension (256) - all modalities (text, image, audio) must be 256-dim for unified processing
+6. CTC mode (default): For ASR, outputs frame sequence. Contrastive mode: For CLAP-style audio-text retrieval/classification, outputs pooled embedding with learned attention weights
+7. Attention pooling learns importance weights for each frame via Linear(d_model→1), applies softmax to normalize, then computes weighted sum across time. Handles variable-length audio with masking
 </details>
 
 ---
@@ -547,28 +627,38 @@ Audio encoder enabled multimodal understanding! ✓
 
 ## 📊 Specifications
 
-| Parameter          | Value                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------- |
-| **Input**          | Mel spectrogram (T, 128)                                                                     |
-| **Downsample**     | 8x (100Hz → 12.5Hz)                                                                          |
-| **Dimension**      | 192                                                                                          |
-| **Layers**         | 4                                                                                            |
-| **Heads**          | 3                                                                                            |
-| **Parameters**     | ~2.05M                                                                                       |
-| **max_mel_length** | Auto-calculated from dataset (95th percentile, ~20s typical) - for CUDA graphs compatibility |
+| Parameter               | Value                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------- |
+| **Input**               | Mel spectrogram (T, 128)                                                                     |
+| **Downsample**          | 4x (25Hz) or 8x (12.5Hz)                                                                     |
+| **Dimension**           | 192                                                                                          |
+| **Layers**              | 4                                                                                            |
+| **Heads**               | 3                                                                                            |
+| **Parameters**          | ~2.05M                                                                                       |
+| **Modes**               | CTC (frame sequence) or Contrastive (pooled)                                                 |
+| **Attention Pooling**   | Learned weights (contrastive mode only)                                                      |
+| **max_mel_length**      | Auto-calculated from dataset (95th percentile, ~20s typical) - for CUDA graphs compatibility |
+| **Flash Attention**     | Supported (PyTorch 2.0+)                                                                     |
+| **torch.compile()**     | Optional (30-50% speedup)                                                                    |
 
 ## 🎓 Training
 
-**Task**: ASR (Automatic Speech Recognition)  
-**Loss**: CTC (Connectionist Temporal Classification)  
-**Data**: Audio + transcriptions
+**Current Task**: ASR (Automatic Speech Recognition)  
+**Current Loss**: CTC (Connectionist Temporal Classification)  
+**Current Data**: Audio + transcriptions
 
-## 💡 Key Takeaways
+**Future Task**: Audio-text contrastive learning (CLAP)  
+**Future Loss**: Contrastive (InfoNCE)  
+**Future Data**: Audio + captions
 
-✅ **Processes mel spectrograms**  
-✅ **8x temporal downsampling** (100Hz → 12.5Hz)  
-✅ **Outputs 192-dim embeddings**  
-✅ **Trained with CTC loss** on ASR task
+## 💡 Quick Summary
+
+✅ **Processes mel spectrograms** into semantic embeddings  
+✅ **4x or 8x temporal downsampling** for efficiency  
+✅ **Two modes**: CTC (ASR) and Contrastive (CLAP)  
+✅ **Outputs 192-dim embeddings** (projected to 256-dim)  
+✅ **Trained with CTC loss** on ASR task (current)  
+✅ **CLAP-compatible** with attention pooling
 
 ---
 

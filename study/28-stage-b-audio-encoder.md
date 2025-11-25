@@ -264,26 +264,32 @@ WER 10-20% = Good for proof-of-concept! ✓
 ```json
 {
   // MODEL ARCHITECTURE
-  "d_model": 192, // Encoder dimension (smaller than Thinker's 256)
-  "n_layers": 4, // Transformer encoder layers
-  "n_heads": 3, // Attention heads (3 for 192-dim)
-  "d_ff": 768, // Feedforward size (4x d_model)
-  "dropout": 0.1, // Regularization
-  "downsample_time": 8, // Temporal compression (8x)
-  // 100 frames → 12 frames
-  // Reduces computation!
+  "d_model": 192,            // Encoder dimension (smaller than Thinker's 256)
+  "n_layers": 4,             // Transformer encoder layers
+  "n_heads": 3,              // Attention heads (3 for 192-dim)
+  "d_ff": 768,               // Feedforward size (4x d_model)
+  "dropout": 0.1,            // Regularization
+  "downsample_time": 8,      // Temporal compression (8x or 4x)
+                             // 100 frames → 12 frames (8x) or 25 frames (4x)
+                             // Reduces computation!
+  
+  // MODE SELECTION
+  "use_attention_pooling": false,  // false = CTC mode (ASR, default)
+                                   // true = Contrastive mode (CLAP)
+                                   // Currently only CTC mode is supported in training script
+                                   // See Chapter 21 for mode details
 
   // DATA
-  "data_path": "data/audio/asr.csv", // Audio files + transcriptions
-  "batch_size": 8, // Smaller than text (audio = memory-intensive)
-  "num_epochs": 20, // More epochs than Stage A
-  // ASR is harder to learn!
+  "data_path": "data/audio/asr.csv",  // Audio files + transcriptions
+  "batch_size": 8,                     // Smaller than text (audio = memory-intensive)
+  "num_epochs": 20,                    // More epochs than Stage A
+                                       // ASR is harder to learn!
 
   // OPTIMIZATION
-  "learning_rate": 1e-4, // 0.0001 (lower than Stage A)
-  // Audio training needs stability
+  "learning_rate": 1e-4,    // 0.0001 (lower than Stage A)
+                            // Audio training needs stability
 
-  "checkpoint_freq": 5000 // Checkpoint frequency (every 1000 steps)
+  "checkpoint_freq": 5000   // Checkpoint frequency (every 1000 steps)
 }
 ```
 
@@ -448,11 +454,14 @@ Ready for Stage E! 🎉
 ## 💡 Key Takeaways
 
 ✅ **Stage B** trains Audio Encoder on speech recognition  
+✅ **Two modes available**: CTC (ASR, default) and Contrastive (CLAP, architecture-ready)  
+✅ **Current training**: Only CTC mode implemented in train script  
 ✅ **CTC loss** enables automatic alignment (no manual labels)  
 ✅ **WER < 20%** indicates good speech understanding  
-✅ **8x downsampling** reduces computation efficiently  
+✅ **Configurable downsampling** (4x or 8x) for efficiency  
 ✅ **~8 hours** training time on 12GB GPU  
 ✅ **Learns phonetic and temporal patterns** in speech  
+✅ **Attention pooling** supported in model for future CLAP-style training  
 ✅ **Embeddings** will be used in multimodal fusion (Stage E)
 
 ---
@@ -462,8 +471,10 @@ Ready for Stage E! 🎉
 1. What is the purpose of Stage B and what does it train?
 2. Why do we use CTC loss instead of standard cross-entropy?
 3. What does WER of 15% mean?
-4. Why is 8x temporal downsampling used?
+4. Why is temporal downsampling used?
 5. How will the Audio Encoder be used in Stage E?
+6. What are the two modes the audio encoder supports?
+7. What would be needed to train in contrastive mode?
 
 <details>
 <summary>📝 Click to see answers</summary>
@@ -471,8 +482,10 @@ Ready for Stage E! 🎉
 1. Stage B trains the Audio Encoder to understand speech through ASR (speech recognition). This teaches it to convert audio into meaningful embeddings that capture phonetic and semantic information
 2. CTC loss handles variable-length alignment automatically. Audio has many frames (e.g., 100) but text has few characters (e.g., 5). CTC finds the best alignment without manual frame-to-character labels
 3. WER (Word Error Rate) of 15% means 15 out of 100 words are incorrectly transcribed (substituted, inserted, or deleted). This is considered "good" for small models
-4. 8x downsampling reduces 100 audio frames to 12 frames, making computation much more efficient while preserving temporal information. Reduces memory and speeds up training/inference
+4. Temporal downsampling (4x or 8x) reduces frames significantly, making computation much more efficient while preserving temporal information. Reduces memory and speeds up training/inference
 5. In Stage E, the trained Audio Encoder will convert audio inputs into 256-dim embeddings that are concatenated with text and image embeddings, enabling the Thinker to process multimodal inputs
+6. CTC mode (default): outputs frame sequence for ASR with CTC loss. Contrastive mode: outputs pooled embedding with learned attention weights for CLAP-style audio-text contrastive learning
+7. Contrastive mode would need: (1) Text encoder for captions, (2) Contrastive loss (InfoNCE), (3) Audio-caption paired dataset, (4) Updated training loop. Currently only the model architecture supports it
 </details>
 
 ---

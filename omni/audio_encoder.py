@@ -10,6 +10,43 @@ HAS_FLASH_ATTENTION = hasattr(torch.nn.functional, 'scaled_dot_product_attention
 if HAS_FLASH_ATTENTION:
     from torch.nn.functional import scaled_dot_product_attention
 
+class AttentionPooling(nn.Module):
+    """
+    Learned attention pooling for temporal aggregation.
+    Used in CLAP (Contrastive Language-Audio Pretraining) for audio embeddings.
+    
+    Computes importance weights for each time frame and aggregates with weighted sum.
+    Handles variable-length sequences by masking padding frames.
+    """
+    def __init__(self, d_model: int) -> None:
+        super().__init__()
+        self.attention = nn.Linear(d_model, 1)
+    
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Args:
+            x: (B, T, d_model) sequence of frame embeddings
+            mask: (B, T) optional mask where 1=valid, 0=padding
+        
+        Returns:
+            (B, d_model) pooled embedding
+        """
+        # Compute attention weights
+        weights = self.attention(x)  # (B, T, 1)
+        weights = weights.squeeze(-1)  # (B, T)
+        
+        # Mask padding frames before softmax
+        if mask is not None:
+            weights = weights.masked_fill(mask == 0, -1e9)
+        
+        # Softmax to get importance weights
+        weights = torch.softmax(weights, dim=1)  # (B, T)
+        weights = weights.unsqueeze(-1)  # (B, T, 1)
+        
+        # Weighted sum
+        pooled = (x * weights).sum(dim=1)  # (B, d_model)
+        return pooled
+
 class ConvDown(nn.Module):
     def __init__(self, in_ch: int = 1, mid: int = 64) -> None:
         super().__init__()
@@ -80,18 +117,22 @@ class EncoderBlock(nn.Module):
 
 class AudioEncoderTiny(nn.Module):
     """ 
-    AuT-Tiny: mel -> conv2d downsample -> Transformer encoder -> frame seq
+    AuT-Tiny: mel -> conv2d downsample -> Transformer encoder -> frame seq or pooled embedding
     
     Frame rate calculation:
     - Input: mel at sample_rate/hop_length Hz (e.g., 16000/160 = 100 Hz)
     - ConvDown: 2x stride twice = 4x downsample in time
     - Output: 100/4 = 25 Hz (or 100/8 = 12.5 Hz if 8x downsample)
     
+    Supports two modes:
+    - CTC mode (use_attention_pooling=False): outputs frame sequence for ASR with CTC loss
+    - Contrastive mode (use_attention_pooling=True): outputs pooled embedding for CLAP-style training
+    
     Optimized with Flash Attention and torch.compile() support for improved performance.
     """
     def __init__(self, d: int = 192, heads: int = 3, ff: int = 768, layers: int = 4, 
                  dropout: float = 0.1, downsample_factor: int = 4, use_flash: bool = True,
-                 compile_model: bool = False) -> None:
+                 compile_model: bool = False, use_attention_pooling: bool = False) -> None:
         """
         Initialize AudioEncoderTiny with performance optimizations.
         
@@ -104,8 +145,12 @@ class AudioEncoderTiny(nn.Module):
             downsample_factor: temporal downsample factor (4 or 8)
             use_flash: use Flash Attention for 2-4x speedup (default: True)
             compile_model: use torch.compile() for 30-50% speedup (default: False)
+            use_attention_pooling: use attention pooling for temporal aggregation (default: False)
+                                   False = frame sequence output for CTC (ASR)
+                                   True = pooled embedding output for contrastive learning (CLAP)
         """
         super().__init__()
+        self.use_attention_pooling = use_attention_pooling
         self.downsample_factor = downsample_factor
         # ConvDown does 2x stride twice = 4x total, or we can add more
         if downsample_factor == 8:
@@ -123,6 +168,12 @@ class AudioEncoderTiny(nn.Module):
         self.proj = nn.Linear(64 * (128 // freq_downsample), d)
         self.blocks = nn.ModuleList([EncoderBlock(d, heads, ff, dropout, use_flash=use_flash) for _ in range(layers)])
         self.norm = RMSNorm(d)
+        
+        # Attention pooling for contrastive learning (CLAP-style)
+        if use_attention_pooling:
+            self.attention_pool = AttentionPooling(d)
+        else:
+            self.attention_pool = None
         
         # Compilation support
         self._compiled = False
@@ -151,7 +202,16 @@ class AudioEncoderTiny(nn.Module):
         except Exception as e:
             warnings.warn(f"Failed to compile AudioEncoderTiny: {e}. Continuing without compilation.")
     
-    def forward(self, mel: torch.Tensor) -> torch.Tensor:  # mel: (B, T, 128)
+    def forward(self, mel: torch.Tensor, mel_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Args:
+            mel: (B, T, 128) mel spectrogram
+            mel_mask: (B, T) optional mask where 1=valid, 0=padding (for attention pooling)
+        
+        Returns:
+            if use_attention_pooling=False: (B, T/downsample_factor, d) frame sequence
+            if use_attention_pooling=True: (B, d) pooled embedding
+        """
         x = mel[:, None, :, :]  # (B,1,T,128)
         x = self.down(x)  # (B,64,T/downsample_factor,128/downsample_factor)
         B,C,T,F = x.shape
@@ -166,5 +226,16 @@ class AudioEncoderTiny(nn.Module):
             nan_count = torch.isnan(x).sum().item()
             inf_count = torch.isinf(x).sum().item()
             raise RuntimeError(f"Numerical instability in AudioEncoderTiny forward pass: NaN={nan_count}, Inf={inf_count}")
+        
+        # Apply attention pooling if enabled (for contrastive learning)
+        if self.use_attention_pooling:
+            # Downsample mask to match frame rate
+            if mel_mask is not None:
+                # Downsample mask: (B, T) -> (B, T/downsample_factor)
+                downsample_factor = mel.size(1) // x.size(1)
+                frame_mask = mel_mask[:, ::downsample_factor][:, :x.size(1)]  # (B, T')
+            else:
+                frame_mask = None
+            x = self.attention_pool(x, mask=frame_mask)  # (B, d)
         
         return x

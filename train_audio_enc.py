@@ -111,6 +111,20 @@ def main(cfg):
     
     d_model = cfg.get("d_model", 192)
     
+    # Support for both CTC (ASR) and Contrastive (CLAP) modes
+    use_attention_pooling = cfg.get("use_attention_pooling", False)
+    if use_attention_pooling:
+        print("⚠ Warning: Contrastive mode (attention pooling) is configured but not yet implemented in this training script.")
+        print("  The audio encoder supports attention pooling, but this training script only supports CTC mode (ASR).")
+        print("  To use attention pooling, you would need:")
+        print("    1. A text encoder for captions")
+        print("    2. Contrastive loss (InfoNCE)")
+        print("    3. Audio-caption paired dataset")
+        print("  Falling back to CTC mode for now...")
+        use_attention_pooling = False
+    else:
+        print("Using CTC mode (frame sequence) for ASR training")
+    
     model = AudioEncoderTiny(
         cfg.get("d_model", 192), 
         cfg.get("n_heads", 3), 
@@ -118,14 +132,15 @@ def main(cfg):
         cfg.get("n_layers", 4), 
         cfg.get("dropout", 0.1),
         downsample_factor=downsample_factor,
-        compile_model=use_compile
+        compile_model=use_compile,
+        use_attention_pooling=use_attention_pooling
     ).to(device)
     
-    # CTC head with dynamic vocabulary
-    head = nn.Linear(d_model, vocab).to(device)
-    ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True)
+    # CTC head with dynamic vocabulary (only for CTC mode)
+    head = nn.Linear(d_model, vocab).to(device) if not use_attention_pooling else None
+    ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True) if not use_attention_pooling else None
     
-    opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.1))
+    opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()) if head else model.parameters(), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.1))
     
     # EMA for improved model quality (optional)
     use_ema = cfg.get("use_ema", False)
@@ -136,16 +151,18 @@ def main(cfg):
             def __init__(self):
                 super().__init__()
                 self.model = model
-                self.head = head
+                if head is not None:
+                    self.head = head
         ema_model = EMAWrapper()
         ema = EMA(ema_model, decay=ema_decay, device=device)
         print(f"✓ EMA enabled with decay={ema_decay}")
     
     unk_idx = char_to_idx.get('<UNK>', 1)  # Default to 1 if not found
-    head.char_to_idx = char_to_idx
-    head.idx_to_char = idx_to_char
-    head.unk_idx = unk_idx
-    head.max_text_len = max_text_len
+    if head is not None:
+        head.char_to_idx = char_to_idx
+        head.idx_to_char = idx_to_char
+        head.unk_idx = unk_idx
+        head.max_text_len = max_text_len
 
     def encode_text_batch(text_batch):
         targets = []
@@ -237,7 +254,8 @@ def main(cfg):
     
     step=0
     model.train()
-    head.train()
+    if head is not None:
+        head.train()
     max_epochs = cfg.get("max_epochs", 9999)
     print_freq = cfg.get("print_freq", 100)
     checkpoint_freq = cfg.get("checkpoint_freq", 500)  # Save checkpoint every N steps
@@ -245,19 +263,22 @@ def main(cfg):
     
     # Resume from checkpoint if available
     step = 0
+    state_dict_loaders = {
+        "enc": (model, model.load_state_dict),
+        "optimizer": (opt, opt.load_state_dict),
+        "scheduler": (scheduler, scheduler.load_state_dict),
+        "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
+        "ema": (ema, ema.load_state_dict) if ema is not None else None
+    }
+    if head is not None:
+        state_dict_loaders["head"] = (head, head.load_state_dict)
+    
     step, metadata = load_checkpoint(
         save_dir, 
         model_name, 
         device, 
         logger,
-        state_dict_loaders={
-            "enc": (model, model.load_state_dict),
-            "head": (head, head.load_state_dict),
-            "optimizer": (opt, opt.load_state_dict),
-            "scheduler": (scheduler, scheduler.load_state_dict),
-            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
-            "ema": (ema, ema.load_state_dict) if ema is not None else None
-        }
+        state_dict_loaders=state_dict_loaders
     )
     
     # Track validation loss for reload logic
@@ -478,10 +499,11 @@ def main(cfg):
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
                 model_data = {
                     "enc": model.state_dict(),
-                    "head": head.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                 }
+                if head is not None:
+                    model_data["head"] = head.state_dict()
                 if scaler is not None:
                     model_data["scaler"] = scaler.state_dict()
                 if ema is not None:
@@ -516,7 +538,8 @@ def main(cfg):
                         ema.apply_shadow()
                     
                     model.eval()
-                    head.eval()
+                    if head is not None:
+                        head.eval()
                     val_loss_sum = 0.0
                     val_count = 0
                     batch_size = cfg.get("batch_size", 4)
@@ -612,10 +635,11 @@ def main(cfg):
                 final_path = os.path.join(save_dir, f"{model_name}.pt")
                 model_data = {
                     "enc": model.state_dict(),
-                    "head": head.state_dict(),
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                 }
+                if head is not None:
+                    model_data["head"] = head.state_dict()
                 if scaler is not None:
                     model_data["scaler"] = scaler.state_dict()
                 torch.save(model_data, final_path)
@@ -639,18 +663,21 @@ def main(cfg):
         
         if reload_needed:
             # Reload from last checkpoint
+            reload_loaders_1 = {
+                "enc": (model, model.load_state_dict),
+                "optimizer": (opt, opt.load_state_dict),
+                "scheduler": (scheduler, scheduler.load_state_dict),
+                "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+            }
+            if head is not None:
+                reload_loaders_1["head"] = (head, head.load_state_dict)
+            
             step, metadata = load_checkpoint(
                 save_dir, 
                 model_name, 
                 device, 
                 logger,
-                state_dict_loaders={
-                    "enc": (model, model.load_state_dict),
-                    "head": (head, head.load_state_dict),
-                    "optimizer": (opt, opt.load_state_dict),
-                    "scheduler": (scheduler, scheduler.load_state_dict),
-                    "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
-                }
+                state_dict_loaders=reload_loaders_1
             )
             last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
             most_recent_val_loss = last_checkpoint_val_loss
@@ -673,7 +700,8 @@ def main(cfg):
         # Final validation at end of epoch
         with ValidationSkipSamplesContext(train_ds):
             model.eval()
-            head.eval()
+            if head is not None:
+                head.eval()
             val_loss_sum = 0.0
             val_count = 0
             batch_size = cfg.get("batch_size", 4)
@@ -740,22 +768,26 @@ def main(cfg):
             most_recent_val_loss = avg_val_loss
             
             model.train()
-            head.train()
+            if head is not None:
+                head.train()
         
         if reload_needed:
             # Reload from last checkpoint
+            reload_loaders_2 = {
+                "enc": (model, model.load_state_dict),
+                "optimizer": (opt, opt.load_state_dict),
+                "scheduler": (scheduler, scheduler.load_state_dict),
+                "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+            }
+            if head is not None:
+                reload_loaders_2["head"] = (head, head.load_state_dict)
+            
             step, metadata = load_checkpoint(
                 save_dir, 
                 model_name, 
                 device, 
                 logger,
-                state_dict_loaders={
-                    "enc": (model, model.load_state_dict),
-                    "head": (head, head.load_state_dict),
-                    "optimizer": (opt, opt.load_state_dict),
-                    "scheduler": (scheduler, scheduler.load_state_dict),
-                    "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
-                }
+                state_dict_loaders=reload_loaders_2
             )
             last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
             most_recent_val_loss = last_checkpoint_val_loss
@@ -779,10 +811,11 @@ def main(cfg):
         final_path = os.path.join(save_dir, f"{model_name}.pt")
         model_data = {
             "enc": model.state_dict(),
-            "head": head.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
         }
+        if head is not None:
+            model_data["head"] = head.state_dict()
         if scaler is not None:
             model_data["scaler"] = scaler.state_dict()
         torch.save(model_data, final_path)
