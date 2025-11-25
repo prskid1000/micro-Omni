@@ -26,6 +26,9 @@ def main(cfg):
     train_manifest = cfg.get("train_manifest", "data/images/production_annotations.json")
     image_root = cfg.get("image_root", "data/images")
     
+    # Initialize logger early
+    logger = SimpleLogger("Vision")
+    
     model_name = "vision"
     metadata = load_training_metadata(save_dir, model_name)
     
@@ -247,9 +250,6 @@ def main(cfg):
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
     train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
     val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
-    
-    # Initialize logger
-    logger = SimpleLogger("Vision")
     
     step=0
     vit.train()
