@@ -501,7 +501,7 @@ def main(cfg):
                     checkpoint_data["scaler"] = scaler.state_dict()
                 if ema is not None:
                     checkpoint_data["ema"] = ema.state_dict()
-                torch.save(checkpoint_data, checkpoint_path)
+                torch.save(checkpoint_data, model_path)
                 
                 # Save training metadata
                 training_metadata = {
