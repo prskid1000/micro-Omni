@@ -539,6 +539,8 @@ def main(cfg):
                             if val_batches is not None and val_count >= val_batches:
                                 break
                         except RuntimeError as e:
+                            logger.log(f"Validation batch error: {e}")
+                            continue
                 
                 avg_val_loss = val_loss_sum / val_count
                 logger.val_step(step, avg_val_loss, epoch)
