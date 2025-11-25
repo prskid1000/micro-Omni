@@ -476,6 +476,7 @@ def main(cfg):
                     talker.eval()
                     val_loss_sum = 0.0
                     val_count = 0
+                    val_batches = cfg.get("val_batches", 100)  # None = full validation
                     with torch.no_grad():
                         for val_batch_data in val_dl:
                             # Unpack validation batch (may include mel_lengths)
@@ -547,6 +548,9 @@ def main(cfg):
                             except RuntimeError as e:
                                 logger.warning(f"Step {step}: Invalid validation loss: {e}")
                                 # Continue with other validation batches
+                            
+                            if val_batches is not None and val_count >= val_batches:
+                                break
                 
                     avg_val_loss = val_loss_sum / max(val_count, 1)
                     logger.val_step(step, avg_val_loss, epoch)
@@ -628,6 +632,7 @@ def main(cfg):
             talker.eval()
             val_loss_sum = 0.0
             val_count = 0
+            val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
             with torch.no_grad():
                 for val_batch_data in val_dl:
                     # Unpack validation batch (may include mel_lengths)
@@ -703,6 +708,9 @@ def main(cfg):
                         logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
                         # Continue with other validation batches
                         del val_base_logit, val_res_logit, val_idxs, val_prev, val_loss
+                    
+                    if val_batches is not None and val_count >= val_batches:
+                        break
         
             avg_val_loss = val_loss_sum / max(val_count, 1)
             logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

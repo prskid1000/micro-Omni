@@ -471,6 +471,9 @@ def main(cfg):
                                 val_count += 1
                             except RuntimeError:
                                 pass
+                            
+                            if val_batches is not None and val_count >= val_batches:
+                                break
                     
                     if val_count > 0:
                         avg_val_loss = val_loss_sum / val_count

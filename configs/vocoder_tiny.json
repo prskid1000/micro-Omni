@@ -32,6 +32,7 @@
   "print_freq": 100,
   "checkpoint_freq": 1000,
   "val_freq": 100,
+  "val_batches": 100,
   "seed": 42,
   "shuffle_buffer_size": 100,
   "upsample_initial_channel": 256,

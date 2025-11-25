@@ -495,6 +495,7 @@ def main(cfg):
                 model.eval()
                 val_loss_sum = 0.0
                 val_count = 0
+                val_batches = cfg.get("val_batches", 100)  # None = full validation
                 with torch.no_grad():
                     for val_x, val_y in val_dl:
                         val_x, val_y = val_x.to(device), val_y.to(device)
@@ -513,6 +514,9 @@ def main(cfg):
                             val_count += 1
                             # Free validation tensors
                             del val_logits, val_loss
+                            
+                            if val_batches is not None and val_count >= val_batches:
+                                break
                         except RuntimeError as e:
                 
                 avg_val_loss = val_loss_sum / val_count

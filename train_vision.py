@@ -498,6 +498,7 @@ def main(cfg):
                     # Thinker is already in eval mode (frozen)
                     val_loss_sum = 0.0
                     val_count = 0
+                    val_batches = cfg.get("val_batches", 100)  # None = full validation
                     with torch.no_grad():
                         for val_img, val_cap in val_dl:
                             val_img = val_img.to(device)
@@ -538,6 +539,9 @@ def main(cfg):
                             except RuntimeError as e:
                                 logger.warning(f"Step {step}: Invalid validation loss: {e}")
                                 # Continue with other validation batches
+                            
+                            if val_batches is not None and val_count >= val_batches:
+                                break
                     
                     avg_val_loss = val_loss_sum / max(val_count, 1)
                     logger.val_step(step, avg_val_loss, epoch)
@@ -622,6 +626,7 @@ def main(cfg):
             # Thinker is already in eval mode (frozen)
             val_loss_sum = 0.0
             val_count = 0
+            val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
             with torch.no_grad():
                 for val_img, val_cap in val_dl:
                     val_img = val_img.to(device)
@@ -662,6 +667,9 @@ def main(cfg):
                     except RuntimeError as e:
                         logger.warning(f"Epoch {epoch}: Invalid validation loss: {e}")
                         # Continue with other validation batches
+                    
+                    if val_batches is not None and val_count >= val_batches:
+                        break
             
             avg_val_loss = val_loss_sum / max(val_count, 1)
             logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
