@@ -1,7 +1,7 @@
 
 import torch
 from torch import nn
-from typing import Tuple
+from typing import Tuple, Optional
 from omni.utils import RMSNorm
 from einops import rearrange
 import warnings
@@ -102,3 +102,90 @@ class ViTTiny(nn.Module):
             raise RuntimeError(f"Numerical instability in ViTTiny grid tokens: NaN={nan_count}, Inf={inf_count}")
         
         return cls, grid
+
+
+class AttentionPooling(nn.Module):
+    """
+    Learned attention-based pooling for text embeddings.
+    Uses a learned attention mechanism to weight different tokens.
+    """
+    def __init__(self, d_model: int) -> None:
+        super().__init__()
+        self.attention = nn.Linear(d_model, 1)
+    
+    def forward(self, embeddings: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Pool embeddings using learned attention weights.
+        
+        Args:
+            embeddings: (B, T, d_model) token embeddings
+            mask: (B, T) attention mask (1=valid, 0=padding)
+        
+        Returns:
+            pooled: (B, d_model) pooled embedding
+        """
+        # embeddings: (B, T, d_model)
+        # mask: (B, T)
+        weights = self.attention(embeddings).squeeze(-1)  # (B, T)
+        
+        if mask is not None:
+            weights = weights.masked_fill(mask == 0, -1e9)
+        
+        weights = torch.softmax(weights, dim=-1).unsqueeze(-1)  # (B, T, 1)
+        pooled = (embeddings * weights).sum(dim=1)  # (B, d_model)
+        return pooled
+
+
+class SimpleTextEncoder(nn.Module):
+    """
+    Simple text encoder with learned attention pooling.
+    
+    Uses learned attention mechanism to weight different tokens,
+    providing better semantic understanding than simple mean pooling.
+    """
+    def __init__(self, vocab_size: int, d_model: int) -> None:
+        """
+        Initialize text encoder with attention pooling.
+        
+        Args:
+            vocab_size: size of vocabulary
+            d_model: embedding dimension
+        """
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.attention_pool = AttentionPooling(d_model)
+        
+        # Initialize embeddings properly
+        nn.init.normal_(self.embedding.weight, mean=0, std=0.02)
+    
+    def forward(self, token_ids: torch.Tensor, return_cls: bool = True, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Encode text tokens to embeddings.
+        
+        Args:
+            token_ids: (B, T) or (T,) token indices
+            return_cls: if True, return pooled embedding; if False, return all tokens
+            mask: (B, T) attention mask (1=valid, 0=padding)
+        
+        Returns:
+            If return_cls=True: (B, d_model) pooled embedding via attention
+            If return_cls=False: (B, T, d_model) all token embeddings
+        """
+        # Handle both batched and unbatched input
+        if token_ids.dim() == 1:
+            token_ids = token_ids.unsqueeze(0)  # (1, T)
+            squeeze_output = True
+        else:
+            squeeze_output = False
+        
+        embeddings = self.embedding(token_ids)  # (B, T, d_model)
+        
+        if not return_cls:
+            # Return all tokens
+            return embeddings.squeeze(0) if squeeze_output else embeddings
+        
+        # Apply learned attention pooling
+        pooled = self.attention_pool(embeddings, mask)  # (B, d_model)
+        
+        return pooled.squeeze(0) if squeeze_output else pooled
+

@@ -13,7 +13,7 @@ import random
 import numpy as np
 from PIL import Image
 from torchvision import transforms
-from omni.vision_encoder import ViTTiny
+from omni.vision_encoder import ViTTiny, SimpleTextEncoder
 from omni.utils import ImgCapDataset, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
@@ -165,12 +165,19 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
                 text_proj_state = strip_orig_mod(text_proj_state)
                 text_proj.load_state_dict(text_proj_state, strict=False)
         else:
-            # Use simple embedding layer
-            text_encoder = nn.Embedding(vocab_size, d_model).to(device)
-            if "text_embed" in checkpoint:
-                text_encoder.load_state_dict(checkpoint["text_embed"])
+            # Use SimpleTextEncoder with attention pooling
+            text_encoder = SimpleTextEncoder(vocab_size, d_model).to(device)
+            # Try loading from both text_encoder and text_embed (backward compatibility)
+            if "text_encoder" in checkpoint:
+                text_encoder.load_state_dict(checkpoint["text_encoder"])
+            elif "text_embed" in checkpoint:
+                # Try to load old text_embed weights (only embedding layer)
+                try:
+                    text_encoder.embedding.load_state_dict(checkpoint["text_embed"])
+                except:
+                    pass
             text_encoder.eval()
-            print("✓ Using embedding layer for text encoding")
+            print(f"✓ Using SimpleTextEncoder with attention pooling for text encoding")
     
     model.eval()
     img_proj.eval()

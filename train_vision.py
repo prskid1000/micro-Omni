@@ -3,7 +3,7 @@ import argparse, json, os, torch
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
-from omni.vision_encoder import ViTTiny
+from omni.vision_encoder import ViTTiny, SimpleTextEncoder
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.utils import (
@@ -43,6 +43,7 @@ def main(cfg):
     embed_dim = cfg.get("embed_dim", d_model)  # Embedding dimension for contrastive learning
     img_proj = nn.Sequential(
         nn.Linear(d_model, embed_dim),
+        nn.Dropout(cfg.get("dropout", 0.1)),
         nn.LayerNorm(embed_dim)
     ).to(device)
     
@@ -53,8 +54,12 @@ def main(cfg):
     ctx_len = cfg.get("ctx_len", 512)
     vocab_size = cfg.get("vocab_size", 32000)
     
+    # Use learned attention pooling for best quality
+    text_pooling = "attention"
+    print(f"Text encoder pooling method: {text_pooling} (learned attention pooling)")
+    
     think = None
-    text_embed = None
+    text_encoder = None
     
     if use_thinker_for_text:
         # Use Thinker model for text encoding (frozen) - better contextual embeddings
@@ -62,6 +67,7 @@ def main(cfg):
         thinker_d_model = cfg.get("thinker_d_model", 256)
         text_proj = nn.Sequential(
             nn.Linear(thinker_d_model, embed_dim),
+            nn.Dropout(cfg.get("dropout", 0.1)),
             nn.LayerNorm(embed_dim)
         ).to(device)
         
@@ -105,13 +111,14 @@ def main(cfg):
         think.eval()
         print("✓ Thinker model frozen (used only for text encoding)")
     else:
-        # Use simple tokenizer + embedding layer (lighter, faster, but less contextual)
-        print("Using tokenizer + embedding layer for text encoding (lighter option)")
+        # Use SimpleTextEncoder with learned attention pooling (lighter, faster, but less contextual than Thinker)
+        print(f"Using SimpleTextEncoder with learned attention pooling for text encoding")
         text_proj = nn.Sequential(
             nn.Linear(d_model, embed_dim),
+            nn.Dropout(cfg.get("dropout", 0.1)),
             nn.LayerNorm(embed_dim)
         ).to(device)
-        # text_embed will be created after tokenizer is loaded
+        # text_encoder will be created after tokenizer is loaded
     
     # Load or train tokenizer
     tok_model_path = os.path.join(thinker_ckpt_dir, "tokenizer.model")
@@ -143,10 +150,10 @@ def main(cfg):
         except:
             pass
     
-    # Create token embedding layer if not using Thinker
+    # Create text encoder if not using Thinker
     if not use_thinker_for_text:
-        text_embed = nn.Embedding(vocab_size, d_model).to(device)
-        print(f"✓ Created text embedding layer with vocab_size={vocab_size}, d_model={d_model}")
+        text_encoder = SimpleTextEncoder(vocab_size, d_model).to(device)
+        print(f"✓ Created SimpleTextEncoder with vocab_size={vocab_size}, d_model={d_model}, pooling=attention")
     
     # Initialize projections with smaller weights
     for module in [img_proj, text_proj]:
@@ -157,11 +164,11 @@ def main(cfg):
                     nn.init.zeros_(m.bias)
     print("✓ Initialized projection weights with std=0.01")
     
-    # Optimizer: include text_embed if using simple mode
+    # Optimizer: include text_encoder if using simple mode
     opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters())
-    if text_embed is not None:
-        opt_params += list(text_embed.parameters())
-        print(f"✓ Optimizer includes text_embed parameters")
+    if text_encoder is not None:
+        opt_params += list(text_encoder.parameters())
+        print(f"✓ Optimizer includes text_encoder parameters")
     opt = torch.optim.AdamW(opt_params, lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
     
     # EMA for improved model quality (optional)
@@ -176,8 +183,8 @@ def main(cfg):
                 self.vit = vit
                 self.img_proj = img_proj
                 self.text_proj = text_proj
-                if text_embed is not None:
-                    self.text_embed = text_embed
+                if text_encoder is not None:
+                    self.text_encoder = text_encoder
         ema_model = EMAWrapper()
         ema = EMA(ema_model, decay=ema_decay, device=device)
         logger.info(f"✓ EMA enabled with decay={ema_decay}")
@@ -208,15 +215,18 @@ def main(cfg):
         print(f"Gradient accumulation: {accumulation_steps} steps")
     
     def encode_caption(caption):
-        """Encode caption using tokenizer and either Thinker model or simple embedding"""
+        """Encode caption using tokenizer and either Thinker model or SimpleTextEncoder"""
         # Tokenize caption
         token_ids = tok.encode(caption)
         # Truncate to context length
-        token_ids = token_ids[:ctx_len-1]  # -1 for BOS token
-        # Add BOS token (typically token ID 1)
-        token_ids = [1] + token_ids  # BOS=1
+        token_ids = token_ids[:ctx_len-1]  # -1 for BOS/CLS token
+        
+        # Add BOS/CLS token at the beginning (token ID 1)
+        # This is important for 'cls' pooling method
+        token_ids = [1] + token_ids  # BOS/CLS=1
         if len(token_ids) == 0:
-            token_ids = [1]  # At least BOS token
+            token_ids = [1]  # At least BOS/CLS token
+        
         # Convert to tensor
         token_tensor = torch.tensor(token_ids, device=device, dtype=torch.long)
         
@@ -226,13 +236,13 @@ def main(cfg):
             with torch.no_grad():
                 # Use Thinker to get contextual embeddings
                 text_emb = think(idx=token_tensor)  # (1, T, thinker_d_model)
-            # Average pooling over sequence to get single embedding
+            # Use mean pooling for Thinker (attention pooling only for SimpleTextEncoder)
             return text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
         else:
-            # Use simple token embeddings (lighter, faster)
-            token_embeds = text_embed(token_tensor)  # (T, d_model)
-            # Average pooling over sequence to get single embedding
-            return token_embeds.mean(dim=0)  # (d_model,)
+            # Use SimpleTextEncoder with learned attention pooling
+            with torch.no_grad() if not text_encoder.training else torch.enable_grad():
+                text_emb = text_encoder(token_tensor, return_cls=True)  # (d_model,)
+            return text_emb
 
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -294,7 +304,8 @@ def main(cfg):
             "vit": (vit, vit.load_state_dict),
             "img_proj": (img_proj, img_proj.load_state_dict),
             "text_proj": (text_proj, text_proj.load_state_dict),
-            "text_embed": (text_embed, text_embed.load_state_dict) if text_embed is not None else None,
+            "text_encoder": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,
+            "text_embed": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,  # Backward compatibility
             "optimizer": (opt, opt.load_state_dict),
             "scheduler": (scheduler, scheduler.load_state_dict),
             "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
@@ -523,8 +534,8 @@ def main(cfg):
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                 }
-                if text_embed is not None:
-                    checkpoint_data["text_embed"] = text_embed.state_dict()
+                if text_encoder is not None:
+                    checkpoint_data["text_encoder"] = text_encoder.state_dict()
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 if ema is not None:
@@ -645,8 +656,8 @@ def main(cfg):
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                 }
-                if text_embed is not None:
-                    checkpoint_data["text_embed"] = text_embed.state_dict()
+                if text_encoder is not None:
+                    checkpoint_data["text_encoder"] = text_encoder.state_dict()
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
@@ -672,7 +683,8 @@ def main(cfg):
                     "vit": (vit, vit.load_state_dict),
                     "img_proj": (img_proj, img_proj.load_state_dict),
                     "text_proj": (text_proj, text_proj.load_state_dict),
-                    "text_embed": (text_embed, text_embed.load_state_dict) if text_embed is not None else None,
+                    "text_encoder": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,
+                    "text_embed": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,  # Backward compatibility
                     "optimizer": (opt, opt.load_state_dict),
                     "scheduler": (scheduler, scheduler.load_state_dict),
                     "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
@@ -774,7 +786,8 @@ def main(cfg):
                     "vit": (vit, vit.load_state_dict),
                     "img_proj": (img_proj, img_proj.load_state_dict),
                     "text_proj": (text_proj, text_proj.load_state_dict),
-                    "text_embed": (text_embed, text_embed.load_state_dict) if text_embed is not None else None,
+                    "text_encoder": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,
+                    "text_embed": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,  # Backward compatibility
                     "optimizer": (opt, opt.load_state_dict),
                     "scheduler": (scheduler, scheduler.load_state_dict),
                     "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
@@ -807,8 +820,8 @@ def main(cfg):
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
         }
-        if text_embed is not None:
-            checkpoint_data["text_embed"] = text_embed.state_dict()
+        if text_encoder is not None:
+            checkpoint_data["text_encoder"] = text_encoder.state_dict()
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)
