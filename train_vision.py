@@ -137,11 +137,13 @@ def main(cfg):
     # Create token embedding layer if not using Thinker
     if not use_thinker_for_text:
         text_embed = nn.Embedding(vocab_size, d_model).to(device)
+        print(f"✓ Created text embedding layer with vocab_size={vocab_size}, d_model={d_model}")
     
     # Optimizer: include text_embed if using simple mode
     opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters())
     if text_embed is not None:
         opt_params += list(text_embed.parameters())
+        print(f"✓ Optimizer includes text_embed parameters")
     opt = torch.optim.AdamW(opt_params, lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
     
     # EMA for improved model quality (optional)
@@ -274,6 +276,7 @@ def main(cfg):
             "vit": (vit, vit.load_state_dict),
             "img_proj": (img_proj, img_proj.load_state_dict),
             "text_proj": (text_proj, text_proj.load_state_dict),
+            "text_embed": (text_embed, text_embed.load_state_dict) if text_embed is not None else None,
             "optimizer": (opt, opt.load_state_dict),
             "scheduler": (scheduler, scheduler.load_state_dict),
             "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
@@ -497,6 +500,8 @@ def main(cfg):
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                 }
+                if text_embed is not None:
+                    checkpoint_data["text_embed"] = text_embed.state_dict()
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 if ema is not None:
@@ -617,6 +622,8 @@ def main(cfg):
                     "optimizer": opt.state_dict(),
                     "scheduler": scheduler.state_dict(),
                 }
+                if text_embed is not None:
+                    checkpoint_data["text_embed"] = text_embed.state_dict()
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
                 torch.save(checkpoint_data, final_path)
@@ -642,6 +649,7 @@ def main(cfg):
                     "vit": (vit, vit.load_state_dict),
                     "img_proj": (img_proj, img_proj.load_state_dict),
                     "text_proj": (text_proj, text_proj.load_state_dict),
+                    "text_embed": (text_embed, text_embed.load_state_dict) if text_embed is not None else None,
                     "optimizer": (opt, opt.load_state_dict),
                     "scheduler": (scheduler, scheduler.load_state_dict),
                     "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
@@ -743,6 +751,7 @@ def main(cfg):
                     "vit": (vit, vit.load_state_dict),
                     "img_proj": (img_proj, img_proj.load_state_dict),
                     "text_proj": (text_proj, text_proj.load_state_dict),
+                    "text_embed": (text_embed, text_embed.load_state_dict) if text_embed is not None else None,
                     "optimizer": (opt, opt.load_state_dict),
                     "scheduler": (scheduler, scheduler.load_state_dict),
                     "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
@@ -775,6 +784,8 @@ def main(cfg):
             "optimizer": opt.state_dict(),
             "scheduler": scheduler.state_dict(),
         }
+        if text_embed is not None:
+            checkpoint_data["text_embed"] = text_embed.state_dict()
         if scaler is not None:
             checkpoint_data["scaler"] = scaler.state_dict()
         torch.save(checkpoint_data, final_path)

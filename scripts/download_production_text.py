@@ -142,7 +142,7 @@ def _download_single_book(book_id, base_url, processed_books_set):
     
     return (book_id, '', 0, False)
 
-def download_books(state, max_samples=100000):
+def download_books(state, max_samples=50000):
     """Download books corpus from Project Gutenberg with parallel downloads"""
     print("\n" + "="*60)
     print("Downloading Books Corpus")
@@ -375,8 +375,8 @@ def main():
                        help="Combine all downloaded datasets into one corpus (outputs to data/text/production_corpus.txt)")
     parser.add_argument("--reset", action="store_true",
                        help="Reset state and re-download everything")
-    parser.add_argument("--max-samples", type=int, default=1000000,
-                       help="Maximum number of samples per dataset (default: 1000000, combined total ~12M for all datasets)")
+    parser.add_argument("--max-samples", type=int, default=500000,
+                       help="Maximum number of samples per dataset (default: 500000, combined total ~12M for all datasets)")
     parser.add_argument("--parallel-datasets", action="store_true",
                        help="Download multiple datasets in parallel (when using 'all' or multiple datasets)")
     
