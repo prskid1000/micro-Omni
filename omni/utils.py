@@ -717,7 +717,8 @@ def get_lr_scheduler(optimizer, warmup_steps, max_steps, min_lr_ratio=0.1):
             return step / max(warmup_steps, 1)
         else:
             # Cosine decay: lr = base_lr * (min_ratio + (1-min_ratio) * 0.5 * (1 + cos(progress * pi)))
-            progress = (step - warmup_steps) / max((max_steps - warmup_steps), 1)
+            current_step = min(step, max_steps)
+            progress = (current_step - warmup_steps) / max((max_steps - warmup_steps), 1)
             return min_lr_ratio + (1 - min_lr_ratio) * 0.5 * (1 + torch.cos(torch.tensor(progress * math.pi)))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
@@ -2496,6 +2497,19 @@ class ImgCapDataset(IterableDataset):
     def __init__(self, manifest, image_root, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0):
         self.manifest_path, self.root = manifest, image_root
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        # Training transforms with augmentation
+        self.train_tf = transforms.Compose([
+            transforms.RandomResizedCrop(img_size, scale=(0.9, 1.0)), 
+            transforms.RandomHorizontalFlip(), 
+            transforms.ToTensor()
+        ])
+        # Validation transforms (deterministic)
+        self.val_tf = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.CenterCrop(img_size),
+            transforms.ToTensor()
+        ])
+        # Default to simple resize for backward compatibility or if mode unknown
         self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
         self._num_items = None
     
@@ -2540,7 +2554,14 @@ class ImgCapDataset(IterableDataset):
             
             try:
                 img = Image.open(os.path.join(self.root, it["image"])).convert("RGB")
-                result = (self.tf(img), it["caption"])
+                # Select transform based on mode
+                if val_mode:
+                    tf = self.val_tf
+                else:
+                    # If not validation mode, assume training
+                    tf = self.train_tf
+                
+                result = (tf(img), it["caption"])
                 
                 # Buffer-based shuffling
                 if self.shuffle_buffer_size > 0:
