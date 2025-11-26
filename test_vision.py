@@ -73,9 +73,10 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
     state_dict = strip_orig_mod(state_dict)
     model.load_state_dict(state_dict, strict=False)
     
-    # Load image projection head
+    # Load image projection head (matches training script structure)
     img_proj = nn.Sequential(
         nn.Linear(d_model, embed_dim),
+        nn.Dropout(cfg.get("dropout", 0.1)),
         nn.LayerNorm(embed_dim)
     ).to(device)
     if "img_proj" in checkpoint:
@@ -84,9 +85,10 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
         img_proj.load_state_dict(img_proj_state, strict=False)
         print("✓ Loaded image projection head")
     
-    # Load text projection head
+    # Load text projection head (matches training script structure)
     text_proj = nn.Sequential(
         nn.Linear(d_model, embed_dim),
+        nn.Dropout(cfg.get("dropout", 0.1)),
         nn.LayerNorm(embed_dim)
     ).to(device)
     if "text_proj" in checkpoint:
@@ -158,6 +160,7 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
             # Update text_proj input dimension to match Thinker output
             text_proj = nn.Sequential(
                 nn.Linear(thinker_d_model, embed_dim),
+                nn.Dropout(cfg.get("dropout", 0.1)),
                 nn.LayerNorm(embed_dim)
             ).to(device)
             if "text_proj" in checkpoint:
@@ -166,7 +169,8 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
                 text_proj.load_state_dict(text_proj_state, strict=False)
         else:
             # Use SimpleTextEncoder with attention pooling
-            text_encoder = SimpleTextEncoder(vocab_size, d_model).to(device)
+            ctx_len = cfg.get("ctx_len", 512)
+            text_encoder = SimpleTextEncoder(vocab_size, d_model, max_len=ctx_len).to(device)
             # Try loading from both text_encoder and text_embed (backward compatibility)
             if "text_encoder" in checkpoint:
                 text_encoder.load_state_dict(checkpoint["text_encoder"])
@@ -189,6 +193,38 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
     print(f"  Embedding dimension: {embed_dim}")
     
     return model, img_proj, text_proj, text_encoder, tok, cfg
+
+
+def encode_caption(caption, tok, text_encoder, cfg, device="cuda", use_thinker=True):
+    """Encode caption using tokenizer and either Thinker model or SimpleTextEncoder"""
+    ctx_len = cfg.get("ctx_len", 512)
+    
+    # Tokenize caption
+    token_ids = tok.encode(caption)
+    # Truncate to context length
+    token_ids = token_ids[:ctx_len-1]  # -1 for BOS/CLS token
+    
+    # Add BOS/CLS token at the beginning (token ID 1)
+    token_ids = [1] + token_ids  # BOS/CLS=1
+    if len(token_ids) == 0:
+        token_ids = [1]  # At least BOS/CLS token
+    
+    # Convert to tensor
+    token_tensor = torch.tensor(token_ids, device=device, dtype=torch.long)
+    
+    if use_thinker:
+        # Use Thinker model for contextual embeddings (better quality)
+        token_tensor = token_tensor.unsqueeze(0)  # (1, T)
+        with torch.no_grad():
+            # Use Thinker to get contextual embeddings
+            text_emb = text_encoder(idx=token_tensor)  # (1, T, thinker_d_model)
+        # Use mean pooling for Thinker (attention pooling only for SimpleTextEncoder)
+        return text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
+    else:
+        # Use SimpleTextEncoder with learned attention pooling
+        with torch.no_grad():
+            text_emb = text_encoder(token_tensor, return_cls=True)  # (d_model,)
+        return text_emb
 
 
 def compute_cosine_similarity(img_embeds, text_embeds):
@@ -258,20 +294,6 @@ def compute_retrieval_metrics(image_embeds, text_embeds, batch_size):
         'avg_i2t_rank': np.mean(i2t_ranks),
         'avg_t2i_rank': np.mean(t2i_ranks),
     }
-
-
-def simple_text_embedding(caption, d_model=128):
-    """
-    Simple text embedding using character-level hashing.
-    This is a placeholder - in production, use a proper text encoder.
-    """
-    # Convert caption to embedding using simple hashing
-    # This is very basic and just for demonstration
-    embedding = torch.zeros(d_model)
-    for i, char in enumerate(caption[:d_model]):
-        embedding[i % d_model] += ord(char) / 128.0
-    return F.normalize(embedding, dim=0)
-
 
 def evaluate_embedding_quality(model, proj_head, cfg, device="cuda", num_samples=100, verbose=True):
     """
@@ -382,14 +404,17 @@ def evaluate_embedding_quality(model, proj_head, cfg, device="cuda", num_samples
     }
 
 
-def evaluate_retrieval(model, proj_head, cfg, device="cuda", num_samples=100, verbose=True):
+def evaluate_retrieval(model, img_proj, text_proj, text_encoder, tok, cfg, device="cuda", num_samples=100, verbose=True):
     """
-    Evaluate image-text retrieval performance.
-    Note: This requires a proper text encoder. Using simple placeholder for demo.
+    Evaluate image-text retrieval performance using the trained text encoder.
     """
     model.eval()
-    if proj_head is not None:
-        proj_head.eval()
+    if img_proj is not None:
+        img_proj.eval()
+    if text_proj is not None:
+        text_proj.eval()
+    if text_encoder is not None:
+        text_encoder.eval()
     
     manifest_path = cfg.get("train_manifest", "data/images/production_annotations.json")
     image_root = cfg.get("image_root", "data/images")
@@ -416,9 +441,12 @@ def evaluate_retrieval(model, proj_head, cfg, device="cuda", num_samples=100, ve
     else:
         iterator = iter(dataset)
     
-    d_model = cfg.get("d_model", 128)
-    if proj_head is not None:
-        d_model = cfg.get("proj_dim", 256)
+    use_thinker = cfg.get("use_thinker_for_text", True)
+    
+    # Check if text encoder is available
+    if text_encoder is None or tok is None:
+        print("⚠️  Warning: Text encoder or tokenizer not available. Cannot evaluate retrieval.")
+        return None
     
     with torch.no_grad():
         for i, (img_tensor, caption) in enumerate(iterator):
@@ -428,18 +456,20 @@ def evaluate_retrieval(model, proj_head, cfg, device="cuda", num_samples=100, ve
             try:
                 img_tensor = img_tensor.unsqueeze(0).to(device)
                 
-                # Forward pass
+                # Encode image
                 cls, _ = model(img_tensor)
+                if img_proj is not None:
+                    cls = img_proj(cls.squeeze(1))  # Remove sequence dim: (1, 1, d) -> (1, d)
                 
-                # Apply projection if available
-                if proj_head is not None:
-                    cls = proj_head(cls)
-                
-                # Simple text embedding (placeholder)
-                text_embed = simple_text_embedding(caption, d_model)
+                # Encode text using the trained text encoder
+                text_emb = encode_caption(caption, tok, text_encoder, cfg, device, use_thinker)
+                if text_proj is not None:
+                    text_emb = text_proj(text_emb.unsqueeze(0))  # (d,) -> (1, d)
+                else:
+                    text_emb = text_emb.unsqueeze(0)  # (d,) -> (1, d)
                 
                 all_img_embeds.append(cls.cpu())
-                all_text_embeds.append(text_embed.unsqueeze(0))
+                all_text_embeds.append(text_emb.cpu())
                 
             except Exception as e:
                 if verbose:
@@ -509,7 +539,6 @@ def print_results(embedding_metrics, retrieval_metrics=None):
     # Retrieval metrics (if available)
     if retrieval_metrics is not None:
         print(f"\nIMAGE-TEXT RETRIEVAL METRICS:")
-        print(f"  (Note: Using simple text encoder - for demo purposes only)")
         print(f"\n  Image-to-Text:")
         print(f"    R@1:  {retrieval_metrics['i2t_r1']*100:.1f}%")
         print(f"    R@5:  {retrieval_metrics['i2t_r5']*100:.1f}%")
@@ -602,7 +631,7 @@ def main():
     
     # Load model
     try:
-        model, proj_head, cfg = load_model_and_projection(args.checkpoint, args.device)
+        model, img_proj, text_proj, text_encoder, tok, cfg = load_model_and_head(args.checkpoint, args.device)
     except Exception as e:
         print(f"✗ Error loading model: {e}")
         import traceback
@@ -612,7 +641,7 @@ def main():
     # Test single image if provided
     if args.image:
         try:
-            test_single_image(model, proj_head, args.image, cfg, args.device)
+            test_single_image(model, img_proj, args.image, cfg, args.device)
         except Exception as e:
             print(f"✗ Error testing image file: {e}")
             import traceback
@@ -622,7 +651,7 @@ def main():
     # Evaluate embedding quality
     try:
         embedding_metrics = evaluate_embedding_quality(
-            model, proj_head, cfg,
+            model, img_proj, cfg,
             device=args.device,
             num_samples=args.num_samples,
             verbose=True
@@ -632,11 +661,13 @@ def main():
         retrieval_metrics = None
         if args.retrieval and args.num_samples >= 20:
             retrieval_metrics = evaluate_retrieval(
-                model, proj_head, cfg,
+                model, img_proj, text_proj, text_encoder, tok, cfg,
                 device=args.device,
                 num_samples=min(args.num_samples, 100),
                 verbose=True
             )
+            if retrieval_metrics is None:
+                print("⚠️  Retrieval evaluation skipped (text encoder not available)")
         
         print_results(embedding_metrics, retrieval_metrics)
         
