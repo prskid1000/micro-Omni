@@ -17,7 +17,7 @@
   "use_swiglu": true,
   "use_flash": true,
   "rope_theta": 10000.0,
-  "batch_size": 32,
+  "batch_size": 64,
   "num_workers": 0,
   "drop_last": true,
   "lr": 0.0005,
