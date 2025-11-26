@@ -160,8 +160,8 @@ class OCRDecoder(nn.Module):
             return
         try:
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, backend='cudagraphs', mode='default')
-            self.head = torch.compile(self.head, backend='cudagraphs', mode='default')
+                self.blocks[i] = torch.compile(block, backend='inductor', mode='default')
+            self.head = torch.compile(self.head, backend='inductor', mode='default')
             self._compiled = True
             print(f"✓ OCRDecoder compiled successfully with torch.compile()")
         except Exception as e:

@@ -145,7 +145,7 @@ def main(cfg):
     cfg["max_mel_length"] = max_mel_length
     
     if use_compile:
-        print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
+        print(f"Using fixed max_mel_length={max_mel_length} for compilation compatibility")
     
     # Split dataset for validation
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
@@ -310,10 +310,6 @@ def main(cfg):
             remaining_epochs = max_epochs - epoch - 1
             pbar.set_description(f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step} batch{batch_idx}")
             mel = mel.to(device)  # (B,T,128)
-            
-            # Mark step begin for CUDAGraphs optimization
-            if device == "cuda":
-                torch.compiler.cudagraph_mark_step_begin()
             
             # Create mask to exclude padding frames from loss
             # mel_lengths: (B,) - actual lengths before padding

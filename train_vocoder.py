@@ -525,10 +525,6 @@ def main(cfg):
             #     except:
             #         pass  # Silently fail if not supported
             
-            # Mark step begin for CUDAGraphs optimization (when using torch.compile)
-            if use_compile and device == "cuda":
-                torch.compiler.cudagraph_mark_step_begin()
-            
             # Trim real audio to match target length (handles variable-length real audio)
             audio_real = audio_real[:, :target_audio_length]
             audio_real_d = audio_real.unsqueeze(1)

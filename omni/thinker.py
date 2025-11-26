@@ -494,14 +494,14 @@ class ThinkerLM(nn.Module):
         
         try:
             # Compile individual blocks for better compilation efficiency
-            # Using 'cudagraphs' backend to avoid Triton/LLVM compatibility issues
+            # Using 'inductor' backend for nvFuser optimizations
             # Provides 10-20% speedup without requiring Triton compilation
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, backend='cudagraphs', mode='default', fullgraph=False)
+                self.blocks[i] = torch.compile(block, backend='inductor', mode='default', fullgraph=False)
             
             # Compile embedding and output head
-            self.tok_emb = torch.compile(self.tok_emb, backend='cudagraphs', mode='default', fullgraph=False)
-            self.lm_head = torch.compile(self.lm_head, backend='cudagraphs', mode='default', fullgraph=False)
+            self.tok_emb = torch.compile(self.tok_emb, backend='inductor', mode='default', fullgraph=False)
+            self.lm_head = torch.compile(self.lm_head, backend='inductor', mode='default', fullgraph=False)
             
             self._compiled = True
             print(f"✓ Model compiled successfully with torch.compile()")

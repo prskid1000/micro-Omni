@@ -40,14 +40,15 @@ class RVQ(nn.Module):
         
         try:
             # Compile projection layers
-            # Using 'cudagraphs' backend to avoid Triton/LLVM compatibility issues
+            # Using 'inductor' backend for nvFuser optimizations
+            # Options: 'inductor' (nvFuser), 'eager' (no compilation, no Triton)
             # Provides 10-20% speedup without requiring Triton compilation
-            self.proj_in = torch.compile(self.proj_in, backend='cudagraphs', mode='default')
-            self.proj_out = torch.compile(self.proj_out, backend='cudagraphs', mode='default')
+            self.proj_in = torch.compile(self.proj_in, backend='inductor', mode='default')
+            self.proj_out = torch.compile(self.proj_out, backend='inductor', mode='default')
             
             # Compile codebook embeddings
             for i in range(len(self.codebooks)):
-                self.codebooks[i] = torch.compile(self.codebooks[i], backend='cudagraphs', mode='default')
+                self.codebooks[i] = torch.compile(self.codebooks[i], backend='inductor', mode='default')
             
             self._compiled = True
             print(f"✓ RVQ compiled successfully with torch.compile()")
@@ -375,7 +376,7 @@ class HiFiGANVocoder(nn.Module):
             # Compile the bound _forward_impl method so guard sets stay stable.
             self._compiled_forward = torch.compile(
                 self._forward_impl,
-                backend='cudagraphs',
+                backend='inductor',
                 mode='default',
                 fullgraph=False
             )

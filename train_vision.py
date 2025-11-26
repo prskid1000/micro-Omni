@@ -412,10 +412,6 @@ def main(cfg):
             img = img.to(device)
             B = img.shape[0]
             
-            # Mark step begin for CUDAGraphs optimization
-            if device == "cuda":
-                torch.compiler.cudagraph_mark_step_begin()
-            
             # Check for NaN inputs before forward pass
             if torch.isnan(img).any():
                 logger.error(f"Step {step}: NaN in input images, skipping batch")

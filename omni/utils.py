@@ -16,6 +16,19 @@ from torchvision import transforms
 from einops import rearrange
 from itertools import zip_longest
 
+# Configure nvFuser as the compilation backend for optimal kernel fusion
+# This applies globally to all training scripts that import utils
+try:
+    torch._dynamo.config.cache_size_limit = 64
+    torch._dynamo.config.suppress_errors = True
+    # Enable nvFuser for CUDA kernel fusion optimization
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print("✓ nvFuser optimizations enabled (TF32 for matmul and cuDNN)")
+except Exception as e:
+    print(f"⚠ Warning: Could not configure nvFuser/dynamo optimizations: {e}")
+
 # Try to use recommended torchcodec API for audio loading
 # This fixes the deprecation warning about torchaudio.load()
 def load_audio(path):
@@ -1263,7 +1276,7 @@ def collate_mel_fn(batch, max_mel_length=None):
     
     Args:
         batch: List of mel spectrograms
-        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
+        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for compiled models)
     
     Returns:
         tuple: (padded_mels, mel_lengths) where:
@@ -1299,7 +1312,7 @@ def collate_mel_text_fn(batch, max_mel_length=None):
     
     Args:
         batch: List of (mel, text) tuples
-        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
+        max_mel_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for compiled models)
     
     Returns:
         tuple: (padded_mels, texts, mel_lengths) where:

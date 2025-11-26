@@ -34,7 +34,7 @@ def collate_ocr_fn(batch, max_text_length=None):
     
     Args:
         batch: List of (image, text) tuples
-        max_text_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for CUDA graphs)
+        max_text_length: Fixed maximum length to pad to. If None, uses batch max (not recommended for compiled models)
     """
     images, texts = zip(*batch)
     images = torch.stack(images)
@@ -234,7 +234,7 @@ def main(cfg):
     
     # max_text_length is already calculated above
     if use_compile:
-        print(f"Using fixed max_text_length={max_text_length} for CUDA graphs compatibility")
+        print(f"Using fixed max_text_length={max_text_length} for compilation compatibility")
     
     # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
     collate_fn_with_max = partial(collate_ocr_fn, max_text_length=max_text_length)

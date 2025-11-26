@@ -524,15 +524,10 @@ def main(cfg):
             remaining_epochs = max_epochs - epoch - 1
             pbar.set_description(f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step} batch{batch_idx}")
             
-            # Mark step begin for CUDAGraphs optimization (must be called FIRST, before creating tensors)
-            # This ensures CUDAGraphs properly tracks the tensor lifecycle
-            if use_compile and device == "cuda":
-                torch.compiler.cudagraph_mark_step_begin()
-            
             # Process batch (create tensors after marking step begin)
             batch_emb, batch_targets, batch_mask = process_batch(data, is_training=True, use_amp_flag=use_amp)
             
-            # Clone batch_emb to avoid CUDAGraphs tensor reuse issues when using torch.compile()
+            # Clone batch_emb to avoid tensor reuse issues when using torch.compile()
             if use_compile:
                 batch_emb = batch_emb.clone()
             
@@ -708,14 +703,10 @@ def main(cfg):
                     
                     with torch.no_grad():
                         for val_data in val_dl:
-                            # Mark step begin for CUDAGraphs optimization (must be called FIRST, before creating tensors)
-                            if use_compile and device == "cuda":
-                                torch.compiler.cudagraph_mark_step_begin()
-                            
                             # Process batch (create tensors after marking step begin)
                             val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
                             
-                            # Clone val_emb to avoid CUDAGraphs tensor reuse issues when using torch.compile()
+                            # Clone val_emb to avoid tensor reuse issues when using torch.compile()
                             if use_compile:
                                 val_emb = val_emb.clone()
                             # Convert attention mask to (B, T, T) format for ThinkerLM
@@ -901,14 +892,10 @@ def main(cfg):
             val_count = 0
             with torch.no_grad():
                 for val_data in val_dl:
-                    # Mark step begin for CUDAGraphs optimization (must be called FIRST, before creating tensors)
-                    if use_compile and device == "cuda":
-                        torch.compiler.cudagraph_mark_step_begin()
-                    
                     # Process batch (create tensors after marking step begin)
                     val_emb, val_targets, val_mask = process_batch(val_data, is_training=False, use_amp_flag=use_amp)
                     
-                    # Clone val_emb to avoid CUDAGraphs tensor reuse issues when using torch.compile()
+                    # Clone val_emb to avoid tensor reuse issues when using torch.compile()
                     if use_compile:
                         val_emb = val_emb.clone()
                     # Convert attention mask to (B, T, T) format for ThinkerLM

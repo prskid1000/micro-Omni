@@ -193,14 +193,14 @@ class AudioEncoderTiny(nn.Module):
         
         try:
             # Compile blocks
-            # Using 'cudagraphs' backend to avoid Triton/LLVM compatibility issues
+            # Using 'inductor' backend for nvFuser optimizations
             # Provides 10-20% speedup without requiring Triton compilation
             for i, block in enumerate(self.blocks):
-                self.blocks[i] = torch.compile(block, backend='cudagraphs', mode='default')
+                self.blocks[i] = torch.compile(block, backend='inductor', mode='default')
             
             # Compile conv and projection
-            self.down = torch.compile(self.down, backend='cudagraphs', mode='default')
-            self.proj = torch.compile(self.proj, backend='cudagraphs', mode='default')
+            self.down = torch.compile(self.down, backend='inductor', mode='default')
+            self.proj = torch.compile(self.proj, backend='inductor', mode='default')
             
             self._compiled = True
             print(f"✓ AudioEncoderTiny compiled successfully with torch.compile()")

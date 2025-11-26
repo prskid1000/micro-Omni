@@ -212,11 +212,11 @@ def main(cfg):
     if accumulation_steps > 1:
         print(f"Gradient accumulation: {accumulation_steps} steps")
 
-    # Fixed maximum mel length for uniform batch sizes (required for CUDA graphs)
-    # This ensures all batches have the same shape, preventing CUDA graphs errors
+    # Fixed maximum mel length for uniform batch sizes (required for compiled models)
+    # This ensures all batches have the same shape, preventing compilation errors
     # max_mel_length is now auto-calculated above
     if use_compile:
-        print(f"Using fixed max_mel_length={max_mel_length} for CUDA graphs compatibility")
+        print(f"Using fixed max_mel_length={max_mel_length} for compilation compatibility")
     
     # Create collate function with fixed max length using functools.partial (pickleable for Windows multiprocessing)
     collate_fn_with_max = partial(collate_mel_text_fn, max_mel_length=max_mel_length)
@@ -387,10 +387,6 @@ def main(cfg):
             tgt, tgt_lens = encode_text_batch(text)
             tgt = tgt.to(device)
             tgt_lens = tgt_lens.to(device)
-            
-            # Mark step begin for CUDAGraphs optimization
-            if device == "cuda":
-                torch.compiler.cudagraph_mark_step_begin()
             
             # Forward pass with mixed precision
             if use_amp:
@@ -575,7 +571,7 @@ def main(cfg):
                                 threshold = val_mel_energy.max(dim=1, keepdim=True)[0] * 0.01
                                 val_mel_lengths = (val_mel_energy > threshold).sum(dim=1)
                             
-                            # Skip batches that don't match training batch size (CUDA graphs require fixed batch sizes)
+                            # Skip batches that don't match training batch size (compiled models require fixed batch sizes)
                             if use_compile and val_mel.size(0) != batch_size:
                                 continue
                             val_mel = val_mel.to(device)
@@ -737,7 +733,7 @@ def main(cfg):
                         threshold = val_mel_energy.max(dim=1, keepdim=True)[0] * 0.01
                         val_mel_lengths = (val_mel_energy > threshold).sum(dim=1)
                     
-                    # Skip batches that don't match training batch size (CUDA graphs require fixed batch sizes)
+                    # Skip batches that don't match training batch size (compiled models require fixed batch sizes)
                     if use_compile and val_mel.size(0) != batch_size:
                         continue
                     val_mel = val_mel.to(device)
