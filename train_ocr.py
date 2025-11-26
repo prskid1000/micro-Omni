@@ -345,8 +345,6 @@ def main(cfg):
     while epoch < max_epochs:
         reload_needed = False
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
-        # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
-        # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
             train_dl = DataLoader(
                 train_ds,
@@ -356,36 +354,32 @@ def main(cfg):
                 drop_last=True,
                 collate_fn=collate_fn_with_max
             )
-        
-        # Create progress bar with correct starting position when resuming mid-epoch
+
         remaining_epochs = max_epochs - epoch - 1
         pbar_desc = f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step}"
         if epoch == start_epoch and start_batch_idx > 0:
             pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch)
         else:
             pbar = tqdm(train_dl, desc=pbar_desc, total=steps_per_epoch)
-        
-        # Start enumeration from the correct position when resuming mid-epoch
+
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        batch_step = 0  # Count every batch processed, for accumulation and logging
         for batch_idx, (images, text_ids) in enumerate(pbar, start=enum_start):
-            # Skip batches if resuming mid-epoch
-            # batch_idx already represents the position in the epoch when enum_start > 0
             if epoch == start_epoch and initial_step > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
                 if current_batch_step < initial_step:
                     continue
-            
-            # Update progress bar description
+
             remaining_epochs = max_epochs - epoch - 1
             pbar.set_description(f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step} batch{batch_idx}")
             
             images = images.to(device)  # (B, 3, H, W)
             text_ids = text_ids.to(device)  # (B, T)
-            
+
             # Teacher forcing: shift by one for next token prediction
             input_ids = text_ids[:, :-1]  # (B, T-1)
             target_ids = text_ids[:, 1:]  # (B, T-1)
-            
+
             if use_amp:
                 with autocast(device_type='cuda'):
                     logits = model(images, input_ids)  # (B, T-1, vocab_size)
@@ -393,22 +387,24 @@ def main(cfg):
             else:
                 logits = model(images, input_ids)
                 loss = loss_fn(logits.reshape(-1, logits.size(-1)), target_ids.reshape(-1))
-            
+
             # Backward pass
             loss_scaled = loss / accumulation_steps
             if use_amp:
                 scaler.scale(loss_scaled).backward()
             else:
                 loss_scaled.backward()
-            
+
             loss_val = loss.detach()
             del loss, logits
-            
-            # Gradient accumulation
-            if (step + 1) % accumulation_steps == 0:
+
+            batch_step += 1  # Count every batch
+
+            # Only step optimizer every N batches
+            if batch_step % accumulation_steps == 0:
                 if use_amp:
                     scaler.unscale_(opt)
-                
+
                 # Validate loss
                 unscaled_loss = loss_val * accumulation_steps
                 try:
@@ -419,18 +415,12 @@ def main(cfg):
                     if use_amp:
                         scaler.update()
                     continue
-                
+
                 # Gradient clipping first (already unscaled if using AMP)
-                # Clip gradients to prevent explosion, then check if still too high
                 try:
                     grad_norm_before = clip_gradients(model, max_grad_norm)
-                    
-                    # Check for gradient explosion AFTER clipping
-                    # Use a higher threshold (10x max_grad_norm) since we've already clipped
-                    # This allows clipping to fix most cases, only skip if truly exploded
                     explosion_threshold = max(100.0, max_grad_norm * 10)
                     grad_norm_after, is_exploded = check_gradient_explosion(model, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    
                     if is_exploded:
                         logger.error(f"Step {step}: Gradient explosion detected after clipping (norm: {grad_norm_before:.2f}->{grad_norm_after:.2f}). Skipping batch.")
                         opt.zero_grad()
@@ -443,48 +433,47 @@ def main(cfg):
                     if use_amp:
                         scaler.update()
                     continue
-                
+
                 # Optimizer step (gradients already clipped)
                 if use_amp:
                     scaler.step(opt)
                     scaler.update()
                 else:
                     opt.step()
-                
+
                 scheduler.step()
                 lr_spike.step(opt, logger)
-                
+
                 # Update EMA after optimizer step
                 if ema is not None:
                     ema.update()
-                
+
                 opt.zero_grad()
-                step += 1  # Increment step counter only when optimizer step occurs
-            
-            # Logging
-            if step % print_freq == 0:
+                step += 1  # This is the "effective" step for logging
+
+            # Use batch_step for all frequency checks
+            if batch_step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
                 unscaled_loss = loss_val * accumulation_steps
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
-            
+
             # Validation
-            if step > 0 and step % val_freq == 0:
+            if batch_step > 0 and batch_step % val_freq == 0:
                 with ValidationSkipSamplesContext(train_ds):
-                    # Apply EMA weights for validation if enabled
                     if ema is not None:
                         ema.apply_shadow()
-                    
+
                     model.eval()
                     val_loss_sum = 0.0
                     val_count = 0
-                    
+
                     with torch.no_grad():
                         for val_images, val_text_ids in val_dl:
                             val_images = val_images.to(device)
                             val_text_ids = val_text_ids.to(device)
                             val_input_ids = val_text_ids[:, :-1]
                             val_target_ids = val_text_ids[:, 1:]
-                            
+
                             if use_amp:
                                 with autocast(device_type='cuda'):
                                     val_logits = model(val_images, val_input_ids)
@@ -492,7 +481,7 @@ def main(cfg):
                             else:
                                 val_logits = model(val_images, val_input_ids)
                                 val_loss = loss_fn(val_logits.reshape(-1, val_logits.size(-1)), val_target_ids.reshape(-1))
-                            
+
                             try:
                                 validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
                                 val_loss_sum += float(val_loss.detach())

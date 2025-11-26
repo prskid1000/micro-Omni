@@ -490,6 +490,7 @@ def main(cfg):
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        batch_step = 0  # Count every batch processed, for accumulation and logging
         for batch_idx, (mel, audio_real, mel_lengths, audio_lengths) in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
@@ -529,7 +530,8 @@ def main(cfg):
             audio_real = audio_real[:, :target_audio_length]
             audio_real_d = audio_real.unsqueeze(1)
 
-            take_optimizer_step = ((batch_idx + 1) % accumulation_steps == 0)
+            batch_step += 1  # Count every batch
+            take_optimizer_step = (batch_step % accumulation_steps == 0)
             
             # Discriminator update logic should use current step, not projected step
             run_discriminator = (
@@ -787,7 +789,7 @@ def main(cfg):
                         ema.update()
                     
                     opt_g.zero_grad()
-                    step += 1  # Increment immediately after optimizer step
+                    step += 1  # This is the "effective" step for logging
             else:
                 # Adversarial losses
                 mpd_fake_out_list, mpd_fake_feats = mpd(audio_fake_d)
@@ -873,7 +875,7 @@ def main(cfg):
                     step += 1  # Increment step counter only when optimizer step occurs
             
             # Logging
-            if step % print_freq == 0:
+            if batch_step % print_freq == 0:
                 loss_g_val = loss_g.item()
                 loss_d_val = loss_d.item()
                 loss_mel_val = loss_mel.item()
@@ -888,7 +890,7 @@ def main(cfg):
                 )
             
             # Validation
-            if step > 0 and step % val_freq == 0:
+            if batch_step > 0 and batch_step % val_freq == 0:
                 with ValidationSkipSamplesContext(train_ds):
                     # Apply EMA weights for validation if enabled
                     if ema is not None:

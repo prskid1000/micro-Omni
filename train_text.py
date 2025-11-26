@@ -291,6 +291,7 @@ def main(cfg):
         # Start enumeration from the correct position when resuming mid-epoch
         # This makes batch_idx reflect the actual position in the epoch (not starting from 0)
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        batch_step = 0  # Count every batch processed, for accumulation and logging
         for batch_idx, (x,y) in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
@@ -349,23 +350,25 @@ def main(cfg):
             
             # Scale loss for gradient accumulation
             loss_scaled = loss / accumulation_steps
-            
+
             # Backward pass with gradient scaling
             if use_amp:
                 scaler.scale(loss_scaled).backward()
             else:
                 loss_scaled.backward()
-            
+
             # Detach loss for logging (free computation graph)
             loss_val = loss.detach()
             del loss
-            
-            # Gradient accumulation: only step optimizer every N steps
-            if (step + 1) % accumulation_steps == 0:
+
+            batch_step += 1  # Count every batch
+
+            # Only step optimizer every N batches
+            if batch_step % accumulation_steps == 0:
                 # Unscale before checking gradients
                 if use_amp:
                     scaler.unscale_(opt)
-                
+
                 # Validate loss value (unscaled)
                 unscaled_loss = loss_val * accumulation_steps
                 try:
@@ -377,18 +380,12 @@ def main(cfg):
                     if use_amp:
                         scaler.update()
                     continue
-                
+
                 # Gradient clipping first (already unscaled if using AMP)
-                # Clip gradients to prevent explosion, then check if still too high
                 try:
                     grad_norm_before = clip_gradients(model, max_grad_norm)
-                    
-                    # Check for gradient explosion AFTER clipping
-                    # Use a higher threshold (10x max_grad_norm) since we've already clipped
-                    # This allows clipping to fix most cases, only skip if truly exploded
                     explosion_threshold = max(100.0, max_grad_norm * 10)
                     grad_norm_after, is_exploded = check_gradient_explosion(model, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    
                     if is_exploded:
                         logger.error(f"Step {step}: Gradient explosion detected after clipping (norm: {grad_norm_before:.2f}->{grad_norm_after:.2f}). Skipping this batch.")
                         opt.zero_grad()  # Clear gradients
@@ -401,7 +398,7 @@ def main(cfg):
                     if use_amp:
                         scaler.update()  # Update scaler even though we skipped (unscale was called)
                     continue
-                
+
                 # Optimizer step (gradients already clipped)
                 if use_amp:
                     scaler.step(opt)
@@ -409,15 +406,15 @@ def main(cfg):
                 else:
                     opt.step()
                 scheduler.step()
-                
+
                 # Update EMA after optimizer step
                 if ema is not None:
                     ema.update()
-                
+
                 # Update LR spike (countdown if active)
                 if lr_spike is not None:
                     lr_spike.step(opt, logger)
-                
+
                 # Check if weights became NaN after optimizer step
                 has_nan, has_inf, nan_count, inf_count = model.check_weights_stability()
                 if has_nan or has_inf:
@@ -427,7 +424,6 @@ def main(cfg):
                     logger.error("  - Using gradient clipping")
                     logger.error("  - Disabling mixed precision training")
                     logger.error("  - Checking for gradient explosion")
-                    # Try to recover by loading from last checkpoint if available
                     checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith("thinker_step_") and f.endswith(".pt")]
                     if checkpoint_files:
                         step_numbers = []
@@ -456,30 +452,21 @@ def main(cfg):
                                 logger.info("Recovered model weights from checkpoint. Continuing training...")
                     opt.zero_grad()
                     continue
-                
+
                 opt.zero_grad()  # Clear gradients after stepping
-                step += 1  # Increment step counter only when optimizer step occurs
-            else:
-                # Not accumulation step - just validate loss
-                unscaled_loss = loss_val * accumulation_steps
-                try:
-                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
-                except RuntimeError as e:
-                    logger.error(f"Step {step}: {e}")
-                    logger.error("Skipping this batch due to invalid loss")
-                    continue
-            
-            if step % print_freq == 0:
+                step += 1  # This is the "effective" step for logging
+
+            # Use batch_step for all frequency checks
+            if batch_step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
                 unscaled_loss = loss_val * accumulation_steps
-                # Calculate perplexity for evaluation
                 perplexity = torch.exp(unscaled_loss).item() if unscaled_loss.item() < 10 else float('inf')
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
-                if step % (print_freq * 10) == 0:  # Log perplexity less frequently
+                if batch_step % (print_freq * 10) == 0:  # Log perplexity less frequently
                     logger.info(f"Perplexity: {perplexity:.2f}")
-            
+
             # Periodic checkpointing
-            if step % checkpoint_freq == 0 and step > 0:
+            if batch_step % checkpoint_freq == 0 and batch_step > 0:
                 # Save model weights only (overwrite existing file)
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
                 checkpoint_data = {
