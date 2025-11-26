@@ -377,8 +377,8 @@ def evaluate_embedding_quality(model, proj_head, cfg, device="cuda", num_samples
         sample_embeds = cls_embeds[indices]
         # Normalize for cosine similarity
         sample_embeds_norm = F.normalize(sample_embeds, dim=-1)
-        # Compute pairwise similarities
-        pairwise_sim = sample_embeds_norm @ sample_embeds_norm.T
+        # Compute pairwise similarities (N x d) @ (d x N) = (N x N)
+        pairwise_sim = sample_embeds_norm @ sample_embeds_norm.t()
         # Get upper triangle (excluding diagonal)
         mask = torch.triu(torch.ones_like(pairwise_sim), diagonal=1).bool()
         similarities = pairwise_sim[mask]
