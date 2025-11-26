@@ -20,7 +20,7 @@
   "val_loss_threshold": 0.05,
   "val_split": 0.1,
   "val_freq": 500,
-  "checkpoint_freq": 5000,
+  "checkpoint_freq": 3000,
   "max_grad_norm": 1.0,
   "use_ema": true,
   "ema_decay": 0.999,

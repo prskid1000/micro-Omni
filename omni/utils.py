@@ -2251,17 +2251,21 @@ class OCRDataset(IterableDataset):
                     continue
                 text = row.get("text", "") or row.get("label", "") or row.get("text_label", "")
                 
-                # Filter outliers: skip samples with text exceeding max length
-                if self.filter_outliers and self.max_text_length is not None:
-                    if len(text) > self.max_text_length:
-                        self._error_counts["exceeds_max_len"] += 1
-                        continue
-                
                 try:
                     full_img_path = os.path.join(self.image_root, img_path) if not os.path.isabs(img_path) else img_path
                     img = Image.open(full_img_path).convert("RGB")
                     text_ids = [self.char_to_idx.get(c, self.char_to_idx['<UNK>']) for c in text] or [self.char_to_idx['<UNK>']]
-                    result = (self.tf(img), [self.char_to_idx['<BOS>']] + text_ids + [self.char_to_idx['<EOS>']])
+                    
+                    # Build final sequence (with BOS and EOS tokens)
+                    final_sequence = [self.char_to_idx['<BOS>']] + text_ids + [self.char_to_idx['<EOS>']]
+                    
+                    # Filter outliers: skip samples with final sequence exceeding max length
+                    if self.filter_outliers and self.max_text_length is not None:
+                        if len(final_sequence) > self.max_text_length:
+                            self._error_counts["exceeds_max_len"] += 1
+                            continue
+                    
+                    result = (self.tf(img), final_sequence)
                     
                     # Buffer-based shuffling
                     if self.shuffle_buffer_size > 0:
