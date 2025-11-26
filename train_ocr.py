@@ -566,7 +566,58 @@ def main(cfg):
                 logger.info(f"Reached max_steps ({max_steps}), stopping training")
                 break
         
-
+        # Final validation at end of epoch
+        with ValidationSkipSamplesContext(train_ds):
+            # Apply EMA weights for validation if enabled
+            if ema is not None:
+                ema.apply_shadow()
+            
+            model.eval()
+            val_loss_sum = 0.0
+            val_count = 0
+            val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
+            
+            with torch.no_grad():
+                for val_images, val_text_ids in val_dl:
+                    val_images = val_images.to(device)
+                    val_text_ids = val_text_ids.to(device)
+                    val_input_ids = val_text_ids[:, :-1]
+                    val_target_ids = val_text_ids[:, 1:]
+                    
+                    if use_amp:
+                        with autocast(device_type='cuda'):
+                            val_logits = model(val_images, val_input_ids)
+                            val_loss = loss_fn(val_logits.reshape(-1, val_logits.size(-1)), val_target_ids.reshape(-1))
+                    else:
+                        val_logits = model(val_images, val_input_ids)
+                        val_loss = loss_fn(val_logits.reshape(-1, val_logits.size(-1)), val_target_ids.reshape(-1))
+                    
+                    try:
+                        validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                        val_loss_sum += float(val_loss.detach())
+                        val_count += 1
+                    except RuntimeError:
+                        pass
+                    
+                    if val_batches is not None and val_count >= val_batches:
+                        break
+            
+            if val_count > 0:
+                avg_val_loss = val_loss_sum / val_count
+                logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
+                
+                # Check for loss spike
+                if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
+                    if avg_val_loss > last_checkpoint_val_loss + val_loss_threshold:
+                         logger.warning(f"Validation loss spiked! {avg_val_loss:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
+                         reload_needed = True
+                most_recent_val_loss = avg_val_loss
+            
+            # Restore original weights after validation
+            if ema is not None:
+                ema.restore()
+            
+            model.train()
         
         if reload_needed:
             # Reload from last checkpoint

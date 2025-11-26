@@ -50,9 +50,73 @@ configs/
   "warmup_steps": 1000, // LR warmup
   "max_grad_norm": 1.0, // Gradient clipping
   "weight_decay": 0.01, // L2 regularization
-  "val_loss_threshold": 0.05 // Reload if val loss spikes > last_best + threshold
+  "val_loss_threshold": 0.05, // Reload if val loss spikes > last_best + threshold
+  "val_freq": 100, // Validate every N steps during training
+  "val_batches": 100, // Batches to use for periodic validation (fast)
+  "val_batches_epoch_end": 200 // Batches to use for end-of-epoch validation (more thorough)
 }
 ```
+
+### Validation Strategy
+
+**Two-Tier Validation System:**
+
+μOmni uses a smart validation strategy to balance speed and accuracy:
+
+1. **Periodic Validation (During Training):**
+   - Frequency: Every `val_freq` steps (default: 100)
+   - Batches: `val_batches` (default: 100)
+   - Purpose: Quick feedback during training
+   - Time: ~10-30 seconds
+
+2. **End-of-Epoch Validation:**
+   - Frequency: At the end of each epoch
+   - Batches: `val_batches_epoch_end` (default: 200, `null` for full validation)
+   - Purpose: More comprehensive evaluation
+   - Time: ~30-60 seconds
+
+**Configuration Examples:**
+
+```json
+// Fast training (quick feedback, less validation overhead)
+{
+  "val_freq": 100,
+  "val_batches": 50,
+  "val_batches_epoch_end": 100
+}
+
+// Balanced (default - recommended)
+{
+  "val_freq": 100,
+  "val_batches": 100,
+  "val_batches_epoch_end": 200
+}
+
+// Thorough validation (slower but more accurate)
+{
+  "val_freq": 200,
+  "val_batches": 200,
+  "val_batches_epoch_end": 500
+}
+
+// Full validation (evaluates entire validation set)
+{
+  "val_freq": 500,
+  "val_batches": 100,
+  "val_batches_epoch_end": null  // null = use entire validation set
+}
+```
+
+**Benefits:**
+- ✅ **Faster training:** Limited validation batches reduce overhead
+- ✅ **Better feedback:** Frequent validation catches issues early
+- ✅ **Comprehensive metrics:** End-of-epoch validation provides thorough evaluation
+- ✅ **Flexible:** Adjust based on dataset size and training needs
+
+**Typical Validation Times (12GB GPU):**
+- Periodic (100 batches): 10-30 seconds
+- End-of-epoch (200 batches): 30-60 seconds
+- Full validation (5000+ batches): 5-15 minutes
 
 ### Data & Checkpointing
 

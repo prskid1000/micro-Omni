@@ -642,6 +642,7 @@ def main(cfg):
             model.eval()
             val_loss_sum = 0.0
             val_count = 0
+            val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
             with torch.no_grad():
                 for val_x, val_y in val_dl:
                     val_x, val_y = val_x.to(device), val_y.to(device)
@@ -679,6 +680,9 @@ def main(cfg):
                             logger.warning(f"Epoch {epoch}: Validation error: {e}")
                             # Break on NaN/Inf to avoid repeated errors
                             break
+                    
+                    if val_batches is not None and val_count >= val_batches:
+                        break
             
             avg_val_loss = val_loss_sum / max(val_count, 1)
         

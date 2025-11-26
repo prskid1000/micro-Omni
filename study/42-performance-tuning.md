@@ -157,6 +157,31 @@ print(f"Peak memory: {peak_memory:.2f} GB")
 - Optional OCR: 4-8 hours
 - Optional HiFi-GAN: 2-4 hours
 
+**Validation Performance:**
+- Periodic validation (100 batches): 10-30 seconds
+- End-of-epoch validation (200 batches): 30-60 seconds
+- Full validation (entire dataset): 5-15 minutes
+
+**Validation Optimization Tips:**
+
+1. **Use limited batches for speed:**
+   ```json
+   {
+     "val_batches": 100,          // Quick periodic checks
+     "val_batches_epoch_end": 200 // More thorough end-of-epoch
+   }
+   ```
+
+2. **Adjust based on dataset size:**
+   - Small datasets (<10K samples): 100/200 batches sufficient
+   - Medium datasets (10K-100K): 200/500 batches recommended
+   - Large datasets (>100K): 500/1000 batches or use full validation
+
+3. **Trade-off considerations:**
+   - More batches = Better accuracy metrics, slower training
+   - Fewer batches = Faster training, noisier metrics
+   - Default (100/200) provides good balance for most use cases
+
 ---
 
 [Continue to Chapter 43: Mathematical Foundations →](43-mathematical-foundations.md)
