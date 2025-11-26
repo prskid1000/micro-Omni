@@ -401,7 +401,7 @@ class LRFinder:
             print(f"   Min loss at LR: {self.lrs[self.losses.index(min(self.losses))]:.2e}")
 
 # Checkpoint utilities
-def find_checkpoint(checkpoint_dir, standard_name, step_prefix, device="cpu"):
+def find_checkpoint(checkpoint_dir, standard_name, step_prefix, device="gpu"):
     """
     Find checkpoint file, trying standard name first, then latest step checkpoint.
     
