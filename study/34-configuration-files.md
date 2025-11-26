@@ -504,7 +504,7 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 
 ```json
 {
-  "use_compile": true,
+  "use_compile": false,
   "max_mel_length_percentile": 95.0 // Optional: Percentile for auto-calculation (default: 95.0)
   // max_mel_length is auto-calculated from dataset - no need to set manually
 }
@@ -555,7 +555,7 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 
 ```json
 {
-  "use_compile": true,
+  "use_compile": false,
   "max_text_length_percentile": 95.0 // Optional: Percentile for auto-calculation (default: 95.0)
   // max_text_length is auto-calculated from dataset - no need to set manually
 }

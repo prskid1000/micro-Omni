@@ -67,7 +67,7 @@ Predict: [67, 103] (next frame)
   "batch_size": 16, "num_epochs": 25,
   "learning_rate": 3e-4,
 
-  "use_compile": true,
+  "use_compile": false,
   "max_mel_length_percentile": 95.0  // Optional: Percentile for auto-calculation (default: 95.0)
   // max_mel_length is auto-calculated from dataset - no need to set manually
   "frame_ms": 80

@@ -149,7 +149,7 @@ Watch for log messages during training:
 
 ```json
 {
-  "use_compile": true,
+  "use_compile": false,
   "max_mel_length_percentile": 95.0, // Optional: For audio training (default: 95.0)
   "max_text_length_percentile": 95.0 // Optional: For OCR training (default: 95.0)
   // max_mel_length and max_text_length are auto-calculated - no need to set manually

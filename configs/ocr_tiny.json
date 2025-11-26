@@ -39,7 +39,7 @@
   "shuffle_buffer_size": 100,
   "use_ema": true,
   "ema_decay": 0.999,
-  "use_compile": true,
+  "use_compile": false,
   "max_text_length_percentile": 95.0,
   "use_lr_spike": true,
   "lr_spike_multiplier": 10.0,
