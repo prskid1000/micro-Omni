@@ -21,7 +21,8 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
-    save_training_metadata, load_training_metadata, analyze_vocoder_dataset, LRSpike
+    save_training_metadata, load_training_metadata, analyze_vocoder_dataset, LRSpike,
+    validate_loss
 )
 from tqdm import tqdm
 
@@ -273,6 +274,13 @@ def main(cfg):
     max_steps = cfg.get("max_steps", 100000)
     scheduler_g = get_lr_scheduler(opt_g, warmup_steps, max_steps)
     scheduler_d = get_lr_scheduler(opt_d, warmup_steps, max_steps)
+    
+    # LR Spike mechanism
+    lr_spike = LRSpike(
+        spike_multiplier=cfg.get("lr_spike_multiplier", 5.0), 
+        spike_duration=cfg.get("lr_spike_duration", 50),
+        consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
+    )
     
     # Mixed precision (FP16) - saves ~50% memory, 2x faster
     use_amp = cfg.get("use_amp", True) and device == "cuda"
@@ -568,6 +576,9 @@ def main(cfg):
                         
                         loss_d = loss_mpd + loss_msd
                     
+                    # Validate loss
+                    validate_loss(loss_d, min_loss=-1e6, max_loss=1e6)
+                    
                     scaler_d.scale(loss_d / accumulation_steps).backward()
                     if take_optimizer_step:
                         scaler_d.unscale_(opt_d)
@@ -619,6 +630,10 @@ def main(cfg):
                     loss_msd = loss_msd / len(msd_real_out)
                     
                     loss_d = loss_mpd + loss_msd
+                    
+                    # Validate loss
+                    validate_loss(loss_d, min_loss=-1e6, max_loss=1e6)
+                    
                     (loss_d / accumulation_steps).backward()
                     
                     if take_optimizer_step:
@@ -740,6 +755,9 @@ def main(cfg):
                         mel_weight * loss_mel
                     )
                 
+                # Validate loss
+                validate_loss(loss_g, min_loss=-1e6, max_loss=1e6)
+                
                 scaler_g.scale(loss_g / accumulation_steps).backward()
                 if take_optimizer_step:
                     scaler_g.unscale_(opt_g)
@@ -766,6 +784,7 @@ def main(cfg):
                     scaler_g.step(opt_g)
                     scaler_g.update()
                     scheduler_g.step()
+                    lr_spike.step(opt_g, logger)
                     
                     # Update EMA after generator optimizer step
                     if ema is not None:
@@ -853,6 +872,7 @@ def main(cfg):
                     
                     opt_g.step()
                     scheduler_g.step()
+                    lr_spike.step(opt_g, logger)
                     opt_g.zero_grad()
                     step += 1  # Increment step counter only when optimizer step occurs
             
@@ -935,6 +955,9 @@ def main(cfg):
                     val_loss_g /= val_samples
                     val_loss_d /= val_samples
                     logger.info(f"Step {step} | val_loss_g={val_loss_g:.4f} | val_loss_d={val_loss_d:.4f}")
+                    
+                    # Check for LR spike trigger
+                    lr_spike.check_and_spike(val_loss_g, opt_g, logger)
                     
                     # Restore original weights after validation
                     if ema is not None:

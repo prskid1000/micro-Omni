@@ -50,7 +50,11 @@ def load_audio(path):
 # Model utilities
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
     """Apply RMS normalization to input tensor."""
-    return (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)) * weight
+    """Apply RMS normalization to input tensor."""
+    # Calculate in float32 for numerical stability to prevent overflow/NaNs
+    x_fp32 = x.float()
+    rrms = torch.rsqrt(x_fp32.pow(2).mean(-1, keepdim=True) + eps)
+    return (x_fp32 * rrms).to(dtype=x.dtype) * weight
 
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
@@ -68,6 +72,9 @@ class RoPE(nn.Module):
     """
     def __init__(self, d_head: int, theta: float = 10000.0) -> None:
         super().__init__()
+        # RoPE requires even dimension for pairing
+        if d_head % 2 != 0:
+            raise ValueError(f"RoPE requires even head dimension, got {d_head}")
         self.d = d_head
         self.theta = theta
 

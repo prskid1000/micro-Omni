@@ -73,6 +73,13 @@ def main(cfg):
     max_steps = cfg.get("max_steps", 5000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
+    # LR Spike mechanism
+    lr_spike = LRSpike(
+        spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
+        spike_duration=cfg.get("lr_spike_duration", 50),
+        consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
+    )
+    
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
     
@@ -442,6 +449,7 @@ def main(cfg):
                 else:
                     opt.step()
                 scheduler.step()
+                lr_spike.step(opt, logger)
                 opt.zero_grad()  # Clear gradients after stepping
                 step += 1  # Increment step counter only when optimizer step occurs
             else:
@@ -581,6 +589,9 @@ def main(cfg):
                     # Restore original weights after validation
                     if ema is not None:
                         ema.restore()
+                    
+                    # Check for LR spike trigger
+                    lr_spike.check_and_spike(avg_val_loss, opt, logger)
                     
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):

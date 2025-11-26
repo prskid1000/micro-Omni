@@ -457,6 +457,11 @@ class ThinkerLM(nn.Module):
             compile_model: use torch.compile() for 30-50% speedup (default: False, requires PyTorch 2.0+)
         """
         super().__init__()
+        
+        # Structural check
+        if d % heads != 0:
+            raise ValueError(f"Model dimension d ({d}) must be divisible by number of heads ({heads}).")
+            
         self.tok_emb = nn.Embedding(vocab, d)
         self.pos_cache = None
         self.blocks = nn.ModuleList([

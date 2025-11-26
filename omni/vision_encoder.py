@@ -32,6 +32,13 @@ class ViTTiny(nn.Module):
             compile_model: use torch.compile() for 30-50% speedup (default: False)
         """
         super().__init__()
+        
+        # Structural checks to prevent shape errors
+        if img_size % patch != 0:
+            raise ValueError(f"Image size ({img_size}) must be divisible by patch size ({patch}).")
+        if d % heads != 0:
+            raise ValueError(f"Model dimension d ({d}) must be divisible by number of heads ({heads}).")
+            
         self.patch = patch
         self.d = d
         self.proj = nn.Conv2d(3, d, kernel_size=patch, stride=patch)

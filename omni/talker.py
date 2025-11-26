@@ -34,6 +34,11 @@ class TalkerTiny(nn.Module):
             compile_model: use torch.compile() for 30-50% speedup (default: False)
         """
         super().__init__()
+        
+        # Structural check
+        if d % n_heads != 0:
+            raise ValueError(f"Model dimension d ({d}) must be divisible by number of heads ({n_heads}).")
+            
         self.emb = nn.Embedding(codebook_size, d)
         self.start = nn.Parameter(torch.zeros(1,1,d))
         self.d = d

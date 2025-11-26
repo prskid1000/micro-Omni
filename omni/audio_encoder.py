@@ -150,6 +150,11 @@ class AudioEncoderTiny(nn.Module):
                                    True = pooled embedding output for contrastive learning (CLAP)
         """
         super().__init__()
+        
+        # Structural check
+        if d % heads != 0:
+            raise ValueError(f"Model dimension d ({d}) must be divisible by number of heads ({heads}).")
+            
         self.use_attention_pooling = use_attention_pooling
         self.downsample_factor = downsample_factor
         # ConvDown does 2x stride twice = 4x total, or we can add more

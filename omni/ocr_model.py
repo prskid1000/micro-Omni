@@ -117,6 +117,11 @@ class OCRDecoder(nn.Module):
             compile_model: Use torch.compile()
         """
         super().__init__()
+        
+        # Structural check
+        if d_model % n_heads != 0:
+            raise ValueError(f"Model dimension d_model ({d_model}) must be divisible by number of heads ({n_heads}).")
+            
         self.d_model = d_model
         self.vocab_size = vocab_size
         self.max_seq_len = max_seq_len
