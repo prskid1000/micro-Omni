@@ -512,6 +512,7 @@ def main(cfg):
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
+        batch_step = 0  # Count every batch processed, for accumulation and logging
         for batch_idx, data in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
@@ -617,8 +618,9 @@ def main(cfg):
             loss_val = loss.detach()
             del loss
             
-            # Gradient accumulation: only step optimizer every N steps
-            if (step + 1) % accumulation_steps == 0:
+            batch_step += 1  # Count every batch
+            # Only step optimizer every N batches
+            if batch_step % accumulation_steps == 0:
                 # Unscale before checking gradients
                 if use_amp:
                     scaler.unscale_(opt)
@@ -672,28 +674,19 @@ def main(cfg):
                     lr_spike.step(opt, logger)
                 
                 opt.zero_grad()  # Clear gradients after stepping
-                step += 1  # Increment step counter only when optimizer step occurs
-            else:
-                # Not accumulation step - just validate loss
-                unscaled_loss = loss_val * accumulation_steps
-                try:
-                    validate_loss(unscaled_loss, min_loss=-1e6, max_loss=1e6)
-                except RuntimeError as e:
-                    logger.error(f"Step {step}: {e}")
-                    logger.error("Skipping this batch due to invalid loss")
-                    continue
-            
-            if step % print_freq == 0:
+                step += 1  # This is the "effective" step for logging
+
+            # Use batch_step for all frequency checks
+            if batch_step % print_freq == 0:
                 current_lr = scheduler.get_last_lr()[0]
                 unscaled_loss = loss_val * accumulation_steps
-                # Calculate perplexity for evaluation
                 perplexity = torch.exp(unscaled_loss).item() if unscaled_loss.item() < 10 else float('inf')
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
-                if step % (print_freq * 10) == 0:  # Log perplexity less frequently
+                if batch_step % (print_freq * 10) == 0:  # Log perplexity less frequently
                     logger.info(f"Perplexity: {perplexity:.2f}")
-            
+
             # Validation
-            if step % val_freq == 0 and step > 0:
+            if batch_step % val_freq == 0 and batch_step > 0:
                 with ValidationSkipSamplesContext(train_ds):
                     think.eval()
                     proj_a.eval()
@@ -828,7 +821,7 @@ def main(cfg):
             
             # Periodic checkpointing
             # Periodic checkpointing
-            if step % checkpoint_freq == 0 and step > 0:
+            if batch_step % checkpoint_freq == 0 and batch_step > 0:
                 # Save model weights only (overwrite existing file)
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
                 os.makedirs(save_dir, exist_ok=True)

@@ -25,7 +25,7 @@ try:
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        print("✓ nvFuser optimizations enabled (TF32 for matmul and cuDNN)")
+        # print("✓ nvFuser optimizations enabled (TF32 for matmul and cuDNN)")
 except Exception as e:
     print(f"⚠ Warning: Could not configure nvFuser/dynamo optimizations: {e}")
 
