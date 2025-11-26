@@ -37,7 +37,7 @@ The μOmni project includes comprehensive test scripts for validating each model
 | `test_thinker.py`   | ThinkerLM          | Language model evaluation    | Loss, Perplexity, Accuracy                                |
 | `test_ocr.py`       | OCRModel           | Text extraction from images  | Loss, Exact Match Rate, Character Accuracy, Edit Distance |
 | `test_audio_enc.py` | AudioEncoderTiny   | Audio feature extraction     | Output Norm, Output Std                                   |
-| `test_vision.py`    | ViTTiny            | Image feature extraction     | CLS Norm/Std, Grid Norm/Std                               |
+| `test_vision.py`    | ViTTiny            | Image-text alignment & embeddings | Embedding Quality (Norm, Diversity, Collapse), Retrieval (R@1/R@5/R@10) |
 | `test_talker.py`    | TalkerTiny + RVQ   | Speech generation            | Reconstruction Error (MSE)                                |
 | `test_vocoder.py`   | HiFiGANVocoder     | Mel-to-audio conversion      | Audio Norm, Audio Std                                     |
 
@@ -268,31 +268,67 @@ python test_audio_enc.py \
 
 ### 4. `test_vision.py` - Vision Encoder Testing
 
-**Purpose:** Verify vision encoder produces reasonable embeddings.
+**Purpose:** Verify vision encoder produces reasonable embeddings and evaluate image-text alignment.
 
 **Pipeline:**
 
 ```
-Image Dataset → ViTTiny → CLS Token + Grid Features
+Image Dataset → ViTTiny → Image Projection → Image Embeddings
+Caption → Text Encoder (Thinker/SimpleTextEncoder) → Text Projection → Text Embeddings
+→ Contrastive Similarity & Retrieval Metrics
 ```
 
 **Metrics:**
 
-- **Average CLS Norm/Std**: CLS token statistics
-- **Average Grid Norm/Std**: Grid feature statistics
+**Embedding Quality:**
+- **CLS Norm Mean/Std**: Embedding magnitude statistics
+- **CLS Feature Std**: Feature diversity across dimensions
+- **Diversity Score**: 1 - avg pairwise similarity (higher is better)
+- **Avg Pairwise Similarity**: Cosine similarity between embeddings
+- **Collapse Detection**: Warning if embeddings are too similar
+
+**Retrieval Metrics (with `--retrieval` flag):**
+- **Image-to-Text R@1/R@5/R@10**: Recall at rank 1/5/10
+- **Text-to-Image R@1/R@5/R@10**: Recall at rank 1/5/10
+- **Average Rank**: Mean retrieval rank for correct matches
 
 **Usage:**
 
 ```bash
+# Basic embedding quality test
 python test_vision.py \
     --checkpoint checkpoints/vision_tiny \
     --num_samples 100
+
+# With retrieval metrics (requires text encoder)
+python test_vision.py \
+    --checkpoint checkpoints/vision_tiny \
+    --num_samples 100 \
+    --retrieval
+
+# Quick test
+python test_vision.py \
+    --checkpoint checkpoints/vision_tiny \
+    --quick
+
+# Single image test
+python test_vision.py \
+    --checkpoint checkpoints/vision_tiny \
+    --image path/to/image.jpg
 ```
 
-**Why separate CLS and Grid?**
+**Key Features:**
 
-- CLS token: Global image representation
-- Grid features: Spatial feature map (for OCR, object detection, etc.)
+- **Proper Text Encoding**: Uses trained Thinker model or SimpleTextEncoder (matches training)
+- **CLIP-style Evaluation**: Measures image-text alignment via contrastive learning
+- **Embedding Quality Analysis**: Detects collapse, measures diversity
+- **Retrieval Performance**: R@K metrics for image-text matching
+
+**What to Expect:**
+
+- **Good Model**: Diversity > 0.15, CLS Norm 5-15, No collapse
+- **Excellent Model**: Diversity > 0.3, R@1 > 50%, R@5 > 80%
+- **Needs Training**: Diversity < 0.05 (collapsed), high pairwise similarity > 0.95
 
 ---
 
@@ -428,6 +464,22 @@ model.load_state_dict(state_dict, strict=False)
 - Check model config matches checkpoint architecture
 - Ensure `use_gqa` parameter is set correctly
 - Verify checkpoint was saved with same architecture
+
+### Vision Encoder Multi-Component Loading
+
+The vision encoder test script loads multiple components:
+
+1. **ViT Model** (`vit`): Vision transformer for image encoding
+2. **Image Projection** (`img_proj`): Linear → Dropout → LayerNorm
+3. **Text Projection** (`text_proj`): Linear → Dropout → LayerNorm
+4. **Text Encoder** (optional): Thinker model or SimpleTextEncoder
+5. **Tokenizer**: For text encoding (from Thinker checkpoint)
+
+**Configuration-Based Text Encoder:**
+
+- If `use_thinker_for_text=true`: Loads frozen Thinker model (better quality)
+- If `use_thinker_for_text=false`: Loads SimpleTextEncoder with attention pooling
+- Retrieval metrics only available if text encoder is present
 
 ---
 
@@ -599,6 +651,8 @@ After individual tests pass:
 3. Why do test scripts always sample from datasets instead of generating dummy data?
 4. What metrics would indicate a well-trained OCR model?
 5. How does `find_checkpoint` prioritize checkpoint files?
+6. What does embedding collapse mean in vision encoder testing?
+7. How does the vision encoder test script use the text encoder?
 
 <details>
 <summary>📝 Click to see answers</summary>
@@ -632,6 +686,19 @@ After individual tests pass:
    - First: `model.pt` (final checkpoint)
    - Second: Latest `model_step_*.pt` (step-based)
    - Ensures tests work with either checkpoint type
+
+6. **Embedding collapse:**
+   - All embeddings become very similar (avg pairwise similarity > 0.95)
+   - Model hasn't learned discriminative features
+   - Indicates need for more training or different hyperparameters
+   - Detected via diversity score < 0.05
+
+7. **Text encoder usage:**
+   - Loads trained Thinker model (frozen) or SimpleTextEncoder
+   - Encodes captions using same method as training
+   - Projects text embeddings to contrastive space
+   - Enables proper image-text retrieval metrics
+   - Uses tokenizer from Thinker checkpoint directory
 
 </details>
 
