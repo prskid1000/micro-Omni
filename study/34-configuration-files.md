@@ -497,13 +497,6 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 - Automatically rounds up to nearest 256 for better memory alignment
 - Adjust percentile if needed: higher (99.0) = more coverage/more padding, lower (90.0) = less padding/more skipping
 
-**Automatic tuning:**
-
-- Use `scripts/update_configs_from_data.py` to automatically set epochs/steps based on your dataset size and model architecture
-- Automatically adjusts batch size and gradient accumulation based on model size
-- Uses research-based formulas for optimal training configuration
-- Ensures optimal training duration and memory usage without manual calculation
-
 ---
 
 ## 📋 Example Configuration Files

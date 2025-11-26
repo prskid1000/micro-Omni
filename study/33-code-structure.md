@@ -31,7 +31,6 @@
 │   ├── download_production_audio.py # Download audio data
 │   ├── download_production_image.py # Download image data
 │   ├── download_production_ocr.py   # Download OCR data
-│   ├── update_configs_from_data.py # Auto-update configs from data
 │   └── make_synthetic_datasets.py   # Generate test data
 │
 ├── train_text.py             # Stage A: Thinker pretraining

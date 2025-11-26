@@ -454,45 +454,6 @@ Example: If LR is too high:
 
 ---
 
-## ⚙️ Before Training: Update Configs Based on Dataset Size
-
-**Important:** After downloading your datasets, update training parameters based on actual data size:
-
-```bash
-# Analyze datasets and automatically update all config files
-python scripts/update_configs_from_data.py
-
-# Dry run (see what would change without modifying files)
-python scripts/update_configs_from_data.py --dry-run
-```
-
-**What it does:**
-
-- ✅ Counts tokens in production/synthetic datasets (using BPE tokenizer) for reference
-- ✅ Counts samples for vision/audio/talker/OCR training (these use sample-based step calculation)
-- ✅ Calculates model size from config files (using mathematical formulas)
-- ✅ Automatically adjusts `batch_size` and `gradient_accumulation_steps` based on model size
-- ✅ Calculates appropriate `max_steps`, `max_epochs`, `warmup_steps` using research-based formulas:
-  - **Text/Multimodal SFT:** Based on token counts (steps = tokens / (batch_size × ctx_len))
-  - **Vision/Audio/Talker/OCR:** Based on sample counts (steps = samples / batch_size)
-- ✅ Adjusts `val_freq` and `checkpoint_freq` based on dataset size
-- ✅ Updates data paths to production files if they exist
-- ✅ Uses best practices: 1-3 epochs for large datasets, 5-10 for small
-- ✅ Ensures optimal memory usage by adjusting batch size for larger models
-- ✅ **Streaming token counting** - processes files line-by-line efficiently
-
-**Performance Note:** Token counting streams files directly line-by-line. For very large files, this may take time but uses minimal memory.
-
-**When to run:**
-
-- After downloading production datasets
-- After generating synthetic test data
-- When switching between different dataset sizes
-
-See [Chapter 34: Configuration Files](34-configuration-files.md) for details.
-
----
-
 ## 📈 Model Scaling
 
 ### Current Configuration (Tiny)
