@@ -272,7 +272,7 @@ Model has learned language! ✓
   "d_ff": 1024, // FFN hidden size (4x d_model)
   // Standard ratio
 
-  "dropout": 0.1, // Prevent overfitting
+  "dropout": 0.3, // Prevent overfitting
   // 10% neurons randomly dropped
 
   "rope_theta": 10000, // RoPE frequency base

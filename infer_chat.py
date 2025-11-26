@@ -230,7 +230,7 @@ class VisionLoader(BaseModelLoader):
             # Load config
             vision_cfg = self.load_config("configs/vision_tiny.json", {
                 "img_size": 224, "patch": 16, "d_model": 128,
-                "n_layers": 4, "n_heads": 2, "d_ff": 512, "dropout": 0.1
+                "n_layers": 4, "n_heads": 2, "d_ff": 512, "dropout": 0.3
             })
             
             # Initialize model
@@ -292,7 +292,7 @@ class AudioLoader(BaseModelLoader):
             # Load config
             audio_cfg = self.load_config("configs/audio_enc_tiny.json", {
                 "d_model": 192, "n_layers": 4, "n_heads": 3,
-                "d_ff": 768, "dropout": 0.1, "downsample_time": 8
+                "d_ff": 768, "dropout": 0.3, "downsample_time": 8
             })
             
             # Initialize model
@@ -358,7 +358,7 @@ class TalkerLoader(BaseModelLoader):
             # Load config
             talker_cfg = self.load_config("configs/talker_tiny.json", {
                 "d_model": 192, "n_layers": 4, "n_heads": 3,
-                "d_ff": 768, "codebooks": 2, "codebook_size": 128, "dropout": 0.1
+                "d_ff": 768, "codebooks": 2, "codebook_size": 128, "dropout": 0.3
             })
             
             codebooks = talker_cfg.get("codebooks", 2)
@@ -480,7 +480,7 @@ class OCRLoader(BaseModelLoader):
                 "img_size": 224, "patch": 16, "vision_d_model": 128,
                 "vision_layers": 4, "vision_heads": 2, "vision_d_ff": 512,
                 "decoder_d_model": 256, "decoder_layers": 4, "decoder_heads": 4,
-                "decoder_d_ff": 1024, "dropout": 0.1
+                "decoder_d_ff": 1024, "dropout": 0.3
             })
             
             # Initialize model with correct vocab_size

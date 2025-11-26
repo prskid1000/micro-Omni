@@ -309,7 +309,7 @@ Ignore: PAD tokens (index 0)
   "decoder_layers": 4,
   "decoder_heads": 16,
   "decoder_d_ff": 4096,
-  "dropout": 0.1,
+  "dropout": 0.3,
   "use_gqa": false,
   "use_swiglu": true,
   "use_flash": true,

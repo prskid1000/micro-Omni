@@ -38,6 +38,7 @@ with torch.cuda.amp.autocast():
 ```
 
 **Implementation Details:**
+
 - Loss is scaled by `1 / accumulation_steps` before backward pass
 - Gradients accumulate over `accumulation_steps` batches
 - Optimizer step occurs only every `accumulation_steps` batches
@@ -69,6 +70,7 @@ pip install flash-attn
 **Status:** ✅ Enabled by default in all training scripts
 
 **How It Works:**
+
 1. Monitors validation loss at each validation step
 2. Counts consecutive increases in validation loss
 3. When threshold reached (default: 2 consecutive increases), spikes LR temporarily
@@ -76,6 +78,7 @@ pip install flash-attn
 5. Automatically restores LR to normal scheduler value after spike duration
 
 **Example Scenario:**
+
 ```
 Step 1000: val_loss = 0.500 ✓
 Step 1200: val_loss = 0.520 ⚠️ (increase 1/2)
@@ -87,24 +90,26 @@ Step 1600: val_loss = 0.450 ✓ (escaped plateau!)
 ```
 
 **Configuration:**
+
 ```json
 {
-  "use_lr_spike": true,                    // Enable/disable (default: true)
-  "lr_spike_multiplier": 5.0,              // LR boost factor (default: 5.0)
-  "lr_spike_duration": 50,                 // Steps to maintain spike (default: 50)
-  "lr_spike_consecutive_increases": 2      // Trigger threshold (default: 2)
+  "use_lr_spike": true, // Enable/disable (default: true)
+  "lr_spike_multiplier": 10.0, // LR boost factor (default: 5.0)
+  "lr_spike_duration": 100, // Steps to maintain spike (default: 50)
+  "lr_spike_consecutive_increases": 2 // Trigger threshold (default: 2)
 }
 ```
 
 **Presets:**
 
-| Preset | Multiplier | Duration | Trigger | Use Case |
-|--------|-----------|----------|---------|----------|
-| Conservative | 3.0 | 30 | 3 | Stable training, gentle recovery |
-| Balanced (default) | 5.0 | 50 | 2 | General purpose |
-| Aggressive | 10.0 | 100 | 2 | Stubborn plateaus |
+| Preset             | Multiplier | Duration | Trigger | Use Case                         |
+| ------------------ | ---------- | -------- | ------- | -------------------------------- |
+| Conservative       | 3.0        | 30       | 3       | Stable training, gentle recovery |
+| Balanced (default) | 5.0        | 50       | 2       | General purpose                  |
+| Aggressive         | 10.0       | 100      | 2       | Stubborn plateaus                |
 
 **When to Use:**
+
 - ✅ Long training runs (>1000 steps)
 - ✅ Training plateaus or loss stagnates
 - ✅ Validation loss becomes unstable
@@ -114,6 +119,7 @@ Step 1600: val_loss = 0.450 ✓ (escaped plateau!)
 
 **Monitoring:**
 Watch for log messages during training:
+
 ```
 ⚠️ Validation loss increased: 0.4800 -> 0.5000 (1/2)
 ⚠️ LR SPIKE TRIGGERED! Spiking LR by 5.0x for 50 steps
@@ -121,12 +127,14 @@ Watch for log messages during training:
 ```
 
 **Implementation Details:**
+
 - Fully checkpoint-compatible (state saved/loaded)
 - Works with all LR schedulers (warmup, cosine decay)
 - Compatible with gradient accumulation, AMP, EMA
 - Available in: `train_text.py`, `train_vision.py`, `train_audio_enc.py`
 
 **Disabling:**
+
 ```json
 {
   "use_lr_spike": false
@@ -142,24 +150,27 @@ Watch for log messages during training:
 ```json
 {
   "use_compile": true,
-  "max_mel_length_percentile": 95.0,    // Optional: For audio training (default: 95.0)
-  "max_text_length_percentile": 95.0    // Optional: For OCR training (default: 95.0)
+  "max_mel_length_percentile": 95.0, // Optional: For audio training (default: 95.0)
+  "max_text_length_percentile": 95.0 // Optional: For OCR training (default: 95.0)
   // max_mel_length and max_text_length are auto-calculated - no need to set manually
 }
 ```
 
 **Why Fixed Length?**
+
 - CUDA graphs require uniform tensor shapes across batches
 - Variable-length sequences cause "tensor size mismatch" errors
 - Fixed padding ensures all batches have identical shapes
 
 **Auto-Calculation:**
+
 - `max_mel_length` and `max_text_length` are **automatically calculated** from your dataset
 - Uses **95th percentile** by default to minimize padding while covering 95% of data
 - Automatically rounds up to nearest 256 for better memory alignment
 - ~5% of samples will be skipped if longer (outliers filtered during dataset iteration)
 
 **Implementation:**
+
 - Audio training: All mel spectrograms padded to auto-calculated `max_mel_length` (longer samples skipped)
 - OCR training: All text sequences padded to auto-calculated `max_text_length` (longer samples skipped)
 - Collate functions in `omni/utils.py` handle padding automatically:
@@ -169,16 +180,19 @@ Watch for log messages during training:
 - All collate functions support `max_mel_length` parameter for fixed-length padding
 
 **Memory Trade-off:**
+
 - Slightly more memory due to padding
 - But enables CUDA graphs optimization (10-20% faster)
 - Worth it for most use cases
 
 **Configuring Percentiles:**
+
 - **Higher percentile (99.0):** More coverage, more padding, fewer samples skipped
 - **Lower percentile (90.0):** Less padding, more samples skipped, less memory
 - **Default (95.0):** Good balance - covers 95% of data with minimal padding, skips 5% outliers
 
 **Optional Manual Override:**
+
 - You can manually set `max_mel_length` or `max_text_length` in config to override auto-calculation
 - Useful if you know your dataset characteristics and want specific values
 
@@ -191,16 +205,19 @@ Watch for log messages during training:
 **Essential for generation!** Reuses computed key-value pairs.
 
 **Without KV cache:**
+
 - Generate 100 tokens: ~30 seconds
 - Recomputes attention for all previous tokens every step
 
 **With KV cache:**
+
 - Generate 100 tokens: ~3 seconds
 - 10x speedup!
 
 ### 2. Batch Inference
 
 Process multiple inputs simultaneously:
+
 ```python
 responses = model.chat_batch([
     "Question 1?",
@@ -232,6 +249,7 @@ model = torch.quantization.quantize_dynamic(
 **Status:** ✅ Implemented in all μOmni training scripts (2024 optimization)
 
 **Technical Approach:**
+
 - All datasets use `IterableDataset` for true streaming
 - Sequential I/O with large buffers (8MB) for efficiency
 - Direct file iteration - no offset tracking or caching
@@ -240,17 +258,18 @@ model = torch.quantization.quantize_dynamic(
 
 **Optimized Datasets (All Training Scripts):**
 
-| Dataset | Files | Optimization | Memory Savings |
-|---------|-------|--------------|----------------|
-| **TextDataset** | `train_text.py` | Direct line streaming | No pre-loading |
-| **ASRDataset** | `train_audio_enc.py` | CSV row streaming | No pre-loading |
-| **TTSDataset** | `train_talker.py` | CSV row streaming | No pre-loading |
-| **OCRDataset** | `train_ocr.py` | CSV row streaming | No pre-loading |
-| **ImgCapDataset** | `train_vision.py` | JSON item streaming | No pre-loading |
-| **VocoderDataset** | `train_vocoder.py` | CSV row streaming | No pre-loading |
-| **MixDataset** | `sft_omni.py` | All three types streaming | Combined savings |
+| Dataset            | Files                | Optimization              | Memory Savings   |
+| ------------------ | -------------------- | ------------------------- | ---------------- |
+| **TextDataset**    | `train_text.py`      | Direct line streaming     | No pre-loading   |
+| **ASRDataset**     | `train_audio_enc.py` | CSV row streaming         | No pre-loading   |
+| **TTSDataset**     | `train_talker.py`    | CSV row streaming         | No pre-loading   |
+| **OCRDataset**     | `train_ocr.py`       | CSV row streaming         | No pre-loading   |
+| **ImgCapDataset**  | `train_vision.py`    | JSON item streaming       | No pre-loading   |
+| **VocoderDataset** | `train_vocoder.py`   | CSV row streaming         | No pre-loading   |
+| **MixDataset**     | `sft_omni.py`        | All three types streaming | Combined savings |
 
 **Audio Loading:**
+
 - ✅ **Automatic fallback:** `load_audio()` function automatically falls back to `torchaudio.load()` if torchcodec unavailable
 - ✅ **No dependencies required:** Works with or without torchcodec package
 - ✅ **Error handling:** Gracefully handles missing audio files (skips with continue)
@@ -258,6 +277,7 @@ model = torch.quantization.quantize_dynamic(
 **Implementation Details:**
 
 **Text Files:**
+
 ```python
 # Streaming: Reads line-by-line directly
 def __iter__(self):
@@ -271,6 +291,7 @@ def __iter__(self):
 ```
 
 **CSV Files:**
+
 ```python
 # Streaming: Uses csv.DictReader directly
 def __iter__(self):
@@ -283,6 +304,7 @@ def __iter__(self):
 ```
 
 **JSON Files:**
+
 ```python
 # Streaming: Loads JSON once, then iterates
 def __iter__(self):
@@ -295,12 +317,14 @@ def __iter__(self):
 ```
 
 **Memory Savings Examples:**
+
 - **10M line text file**: ~500MB → ~0MB (only current line in memory)
 - **1M row CSV**: ~200MB → ~0MB (only current row in memory)
 - **100K image JSON**: ~50MB → ~50MB (JSON loaded once, then streamed)
 - **Combined (MixDataset)**: All three optimizations applied simultaneously
 
 **Key Benefits:**
+
 - ✅ RAM usage now typically **lower than VRAM** (was opposite before)
 - ✅ Can train on systems with limited RAM (8GB+)
 - ✅ No cache files needed - simpler and cleaner
@@ -320,6 +344,7 @@ def __iter__(self):
 **Benefit:** Train on full dataset with optimized settings
 
 **Implementation:**
+
 - **Plain text files:** Passed directly to SentencePiece (no streaming, no temp files)
 - **CSV/JSON files:** Stream extraction to temp file in `data/.temp/` (streams row-by-row/item-by-item to extract text)
 - Processes entire dataset (not just samples) efficiently
@@ -330,6 +355,7 @@ def __iter__(self):
 - **Use all data:** Set `input_sentence_size=0` to use entire corpus (slower but uses more data)
 
 **Memory Behavior:**
+
 - **Plain text:** SentencePiece loads entire file into memory during training (no streaming)
 - **CSV/JSON extraction:** Streams data extraction (avoids loading structured data into memory), but SentencePiece still loads the extracted temp file into memory
 - **Temp files:** Only used for CSV/JSON text extraction, stored in `data/.temp/` and auto-cleaned
@@ -342,6 +368,7 @@ def __iter__(self):
 **Benefit:** No need to restart from beginning if process is stopped
 
 **Resumable Operations:**
+
 - ✅ **Tokenizer training:** SentencePiece handles large files directly (no streaming needed for plain text)
 - ✅ **CSV/JSON extraction:** Temp files created in `data/.temp/` (only when needed)
 - ✅ **Vocabulary building:** Saves progress every 10K items (vision, OCR)
@@ -349,12 +376,14 @@ def __iter__(self):
 - ✅ **Training loops:** Already resumable via checkpoints
 
 **Checkpoint Locations:**
+
 - Vocabulary building: `{save_dir}/vocab_build_checkpoint.json`
 - Token counting: `{file_path}.token_count_checkpoint.json`
 - OCR vocabulary: `{csv_path}.vocab_checkpoint.json`
 - All checkpoints auto-cleaned after successful completion
 
 **Related Optimizations:**
+
 - Removed `gc.collect()` calls (Python's GC handles this automatically)
 - Removed `torch.cuda.empty_cache()` calls (PyTorch manages CUDA memory efficiently)
 - These manual calls were unnecessary and could actually hurt performance
@@ -366,12 +395,13 @@ def __iter__(self):
 
 ```json
 {
-  "num_workers": 2,  // Default: 2 workers
+  "num_workers": 2 // Default: 2 workers
   // Reduce to 0 or 1 if RAM is limited
 }
 ```
 
 **Recommendation:**
+
 - **High RAM (32GB+)**: `num_workers: 2-4`
 - **Medium RAM (16GB)**: `num_workers: 1-2`
 - **Low RAM (8GB)**: `num_workers: 0-1`
@@ -383,12 +413,13 @@ def __iter__(self):
 
 ```json
 {
-  "batch_size": 4,  // Start conservatively
-  "gradient_accumulation_steps": 4  // Simulate batch_size=16
+  "batch_size": 4, // Start conservatively
+  "gradient_accumulation_steps": 4 // Simulate batch_size=16
 }
 ```
 
 **Strategy:**
+
 1. Start with `batch_size: 4` (conservative, works on most GPUs)
 2. Increase gradually (8, 16, 32) until you hit OOM
 3. Use gradient accumulation to simulate larger batches without OOM
@@ -462,7 +493,7 @@ class EMA:
         self.shadow = {name: p.clone().detach()
                        for name, p in model.named_parameters()
                        if p.requires_grad}
-    
+
     def update(self, model):
         """Update shadow weights after optimizer step"""
         for name, param in model.named_parameters():
@@ -471,7 +502,7 @@ class EMA:
                     self.decay * self.shadow[name] +
                     (1 - self.decay) * param.data
                 )
-    
+
     def apply_shadow(self, model):
         """Temporarily use EMA weights (for validation)"""
         self.backup = {name: p.clone()
@@ -480,7 +511,7 @@ class EMA:
         for name, param in model.named_parameters():
             if param.requires_grad:
                 param.data = self.shadow[name]
-    
+
     def restore(self, model):
         """Restore original weights (after validation)"""
         for name, param in model.named_parameters():
@@ -775,7 +806,7 @@ if val_loss >= best_val_loss:
     consecutive_reloads += 1
     print(f"Validation loss increased. Reloading... "
           f"(consecutive reloads: {consecutive_reloads}/{MAX_CONSECUTIVE_RELOADS})")
-    
+
     if consecutive_reloads >= MAX_CONSECUTIVE_RELOADS:
         # Stop training with helpful message
         raise RuntimeError(
@@ -790,7 +821,7 @@ if val_loss >= best_val_loss:
             "3. Add more training data\n"
             "4. Check for data quality issues"
         )
-    
+
     # Reload checkpoint
     load_checkpoint(model, optimizer, best_checkpoint_path)
 else:

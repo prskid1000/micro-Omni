@@ -264,32 +264,32 @@ WER 10-20% = Good for proof-of-concept! ✓
 ```json
 {
   // MODEL ARCHITECTURE
-  "d_model": 192,            // Encoder dimension (smaller than Thinker's 256)
-  "n_layers": 4,             // Transformer encoder layers
-  "n_heads": 3,              // Attention heads (3 for 192-dim)
-  "d_ff": 768,               // Feedforward size (4x d_model)
-  "dropout": 0.1,            // Regularization
-  "downsample_time": 8,      // Temporal compression (8x or 4x)
-                             // 100 frames → 12 frames (8x) or 25 frames (4x)
-                             // Reduces computation!
-  
+  "d_model": 192, // Encoder dimension (smaller than Thinker's 256)
+  "n_layers": 4, // Transformer encoder layers
+  "n_heads": 3, // Attention heads (3 for 192-dim)
+  "d_ff": 768, // Feedforward size (4x d_model)
+  "dropout": 0.3, // Regularization
+  "downsample_time": 8, // Temporal compression (8x or 4x)
+  // 100 frames → 12 frames (8x) or 25 frames (4x)
+  // Reduces computation!
+
   // MODE SELECTION
-  "use_attention_pooling": false,  // false = CTC mode (ASR, default)
-                                   // true = Contrastive mode (CLAP)
-                                   // Currently only CTC mode is supported in training script
-                                   // See Chapter 21 for mode details
+  "use_attention_pooling": false, // false = CTC mode (ASR, default)
+  // true = Contrastive mode (CLAP)
+  // Currently only CTC mode is supported in training script
+  // See Chapter 21 for mode details
 
   // DATA
-  "data_path": "data/audio/asr.csv",  // Audio files + transcriptions
-  "batch_size": 8,                     // Smaller than text (audio = memory-intensive)
-  "num_epochs": 20,                    // More epochs than Stage A
-                                       // ASR is harder to learn!
+  "data_path": "data/audio/asr.csv", // Audio files + transcriptions
+  "batch_size": 8, // Smaller than text (audio = memory-intensive)
+  "num_epochs": 20, // More epochs than Stage A
+  // ASR is harder to learn!
 
   // OPTIMIZATION
-  "learning_rate": 1e-4,    // 0.0001 (lower than Stage A)
-                            // Audio training needs stability
+  "learning_rate": 1e-4, // 0.0001 (lower than Stage A)
+  // Audio training needs stability
 
-  "checkpoint_freq": 5000   // Checkpoint frequency (every 1000 steps)
+  "checkpoint_freq": 5000 // Checkpoint frequency (every 1000 steps)
 }
 ```
 

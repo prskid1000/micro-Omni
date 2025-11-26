@@ -5,7 +5,7 @@
   "d_ff": 1536,
   "codebooks": 2,
   "codebook_size": 128,
-  "dropout": 0.1,
+  "dropout": 0.3,
   "rope_theta": 10000.0,
   "frame_rate": 12.5,
   "use_gqa": true,
@@ -42,7 +42,7 @@
   "save_dir": "checkpoints/talker_tiny",
   "max_mel_length_percentile": 95.0,
   "use_lr_spike": true,
-  "lr_spike_multiplier": 5.0,
-  "lr_spike_duration": 50,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
   "lr_spike_consecutive_increases": 2
 }

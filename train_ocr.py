@@ -713,7 +713,7 @@ if __name__ == "__main__":
             "decoder_layers": 4,
             "decoder_heads": 4,
             "decoder_d_ff": 1024,
-            "dropout": 0.1,
+            "dropout": 0.3,
             "batch_size": 4,
             "num_workers": 2,
             "drop_last": True,

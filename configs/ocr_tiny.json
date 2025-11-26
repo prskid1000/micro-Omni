@@ -12,7 +12,7 @@
   "decoder_layers": 2,
   "decoder_heads": 8,
   "decoder_d_ff": 2048,
-  "dropout": 0.1,
+  "dropout": 0.3,
   "use_gqa": false,
   "use_swiglu": true,
   "use_flash": true,
@@ -42,7 +42,7 @@
   "use_compile": true,
   "max_text_length_percentile": 95.0,
   "use_lr_spike": true,
-  "lr_spike_multiplier": 5.0,
-  "lr_spike_duration": 50,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
   "lr_spike_consecutive_increases": 2
 }

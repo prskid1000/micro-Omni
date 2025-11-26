@@ -35,7 +35,7 @@ configs/
   "n_layers": 4, // Transformer layers
   "n_heads": 4, // Attention heads
   "d_ff": 1024, // FFN hidden size (usually 4×d_model)
-  "dropout": 0.1, // Dropout rate (0-1)
+  "dropout": 0.3, // Dropout rate (0-1)
   "ctx_len": 512 // Context length (tokens)
 }
 ```
@@ -54,11 +54,11 @@ configs/
   "val_freq": 100, // Validate every N steps during training
   "val_batches": 100, // Batches to use for periodic validation (fast)
   "val_batches_epoch_end": 200, // Batches to use for end-of-epoch validation (more thorough)
-  
+
   // LR Spike mechanism (NEW - enabled by default)
   "use_lr_spike": true, // Auto-recover from plateaus
-  "lr_spike_multiplier": 5.0, // LR boost factor (1-10)
-  "lr_spike_duration": 50, // Steps to maintain spike (10-200)
+  "lr_spike_multiplier": 10.0, // LR boost factor (1-10)
+  "lr_spike_duration": 100, // Steps to maintain spike (10-200)
   "lr_spike_consecutive_increases": 2 // Trigger threshold (1-5)
 }
 ```
@@ -79,8 +79,8 @@ configs/
 // Balanced (default - recommended)
 {
   "use_lr_spike": true,
-  "lr_spike_multiplier": 5.0,
-  "lr_spike_duration": 50,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
   "lr_spike_consecutive_increases": 2
 }
 
@@ -99,6 +99,7 @@ configs/
 ```
 
 **How it works:**
+
 - Monitors validation loss at each validation step
 - Counts consecutive increases in validation loss
 - When threshold reached, temporarily boosts LR
@@ -112,6 +113,7 @@ configs/
 μOmni uses a smart validation strategy to balance speed and accuracy:
 
 1. **Periodic Validation (During Training):**
+
    - Frequency: Every `val_freq` steps (default: 100)
    - Batches: `val_batches` (default: 100)
    - Purpose: Quick feedback during training
@@ -156,12 +158,14 @@ configs/
 ```
 
 **Benefits:**
+
 - ✅ **Faster training:** Limited validation batches reduce overhead
 - ✅ **Better feedback:** Frequent validation catches issues early
 - ✅ **Comprehensive metrics:** End-of-epoch validation provides thorough evaluation
 - ✅ **Flexible:** Adjust based on dataset size and training needs
 
 **Typical Validation Times (12GB GPU):**
+
 - Periodic (100 batches): 10-30 seconds
 - End-of-epoch (200 batches): 30-60 seconds
 - Full validation (5000+ batches): 5-15 minutes
@@ -374,10 +378,11 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **Error tracking:** `exceeds_max_len`, `ctc_too_short`
 
 **Config parameters:**
+
 ```json
 {
-  "max_mel_length_percentile": 95.0,  // Auto-calculate from dataset
-  "max_text_len": 512  // Manual override
+  "max_mel_length_percentile": 95.0, // Auto-calculate from dataset
+  "max_text_len": 512 // Manual override
 }
 ```
 
@@ -390,9 +395,10 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **Error tracking:** `exceeds_max_len`
 
 **Config parameters:**
+
 ```json
 {
-  "max_mel_length_percentile": 95.0  // Auto-calculate from dataset
+  "max_mel_length_percentile": 95.0 // Auto-calculate from dataset
 }
 ```
 
@@ -405,9 +411,10 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **Error tracking:** `exceeds_max_len`
 
 **Config parameters:**
+
 ```json
 {
-  "max_text_length_percentile": 95.0  // Auto-calculate from dataset
+  "max_text_length_percentile": 95.0 // Auto-calculate from dataset
 }
 ```
 
@@ -421,10 +428,11 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **Error tracking:** `exceeds_max_len`
 
 **Config parameters:**
+
 ```json
 {
-  "max_audio_length": 8192,  // Fixed for memory optimization
-  "max_mel_length": 512  // Calculated from max_audio_length
+  "max_audio_length": 8192, // Fixed for memory optimization
+  "max_mel_length": 512 // Calculated from max_audio_length
 }
 ```
 
@@ -443,11 +451,12 @@ python scripts/update_configs_from_data.py --skip-text-tokenization --assume-tex
 **Error tracking:** `exceeds_max_len`
 
 **Config parameters:**
+
 ```json
 {
-  "use_sentences": true,  // Enable sentence-based splitting
-  "ctx_len_sample_size": 1000000,  // Samples for analysis
-  "ctx_len_percentile": 95.0  // Percentile threshold
+  "use_sentences": true, // Enable sentence-based splitting
+  "ctx_len_sample_size": 1000000, // Samples for analysis
+  "ctx_len_percentile": 95.0 // Percentile threshold
 }
 ```
 
@@ -464,6 +473,7 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 ```
 
 **Typical results (95th percentile):**
+
 - ~95% of samples processed successfully
 - ~5% skipped as outliers
 - Minimal impact on training data coverage
@@ -471,11 +481,13 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 ### Adjusting Percentile Thresholds
 
 **Higher percentile (e.g., 99.0):**
+
 - ✅ More data coverage (99% of samples)
 - ❌ More padding (inefficient memory usage)
 - ❌ Slower training (larger batch tensors)
 
 **Lower percentile (e.g., 90.0):**
+
 - ✅ Less padding (efficient memory)
 - ✅ Faster training (smaller batch tensors)
 - ❌ Less data coverage (90% of samples)
@@ -676,7 +688,7 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
   "decoder_layers": 4,
   "decoder_heads": 16,
   "decoder_d_ff": 4096,
-  "dropout": 0.1,
+  "dropout": 0.3,
   "use_gqa": false,
   "use_swiglu": true,
   "use_flash": true,
@@ -734,7 +746,7 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
   "n_layers": 4,
   "n_heads": 2,
   "d_ff": 512,
-  "dropout": 0.1,
+  "dropout": 0.3,
   "embed_dim": 128,
   "use_thinker_for_text": true,
   "thinker_ckpt": "checkpoints/thinker_tiny",
@@ -746,7 +758,7 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
     "d_model": 256,
     "n_heads": 4,
     "d_ff": 1024,
-    "dropout": 0.1,
+    "dropout": 0.3,
     "rope_theta": 10000,
     "use_gqa": false,
     "use_swiglu": true,
@@ -819,7 +831,7 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
   "decoder_layers": 4,
   "decoder_heads": 16,
   "decoder_d_ff": 4096,
-  "dropout": 0.1,
+  "dropout": 0.3,
   "batch_size": 4,
   "gradient_accumulation_steps": 2,
   "lr": 3e-4,
