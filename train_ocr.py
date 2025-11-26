@@ -330,6 +330,7 @@ def main(cfg):
     print_freq = cfg.get("print_freq", 50)
     checkpoint_freq = cfg.get("checkpoint_freq", 1000)
     val_freq = cfg.get("val_freq", 500)
+    val_batches = cfg.get("val_batches", None)
     
     model.train()
     epoch = start_epoch  # Initialize epoch in case max_steps is reached before loop starts
