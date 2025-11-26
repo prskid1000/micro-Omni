@@ -22,7 +22,7 @@ from omni.utils import (
     check_gradient_explosion, OCRDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, analyze_ocr_dataset,
-    save_training_metadata, load_training_metadata
+    save_training_metadata, load_training_metadata, LRSpike
 )
 from tqdm import tqdm
 

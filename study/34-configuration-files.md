@@ -53,9 +53,57 @@ configs/
   "val_loss_threshold": 0.05, // Reload if val loss spikes > last_best + threshold
   "val_freq": 100, // Validate every N steps during training
   "val_batches": 100, // Batches to use for periodic validation (fast)
-  "val_batches_epoch_end": 200 // Batches to use for end-of-epoch validation (more thorough)
+  "val_batches_epoch_end": 200, // Batches to use for end-of-epoch validation (more thorough)
+  
+  // LR Spike mechanism (NEW - enabled by default)
+  "use_lr_spike": true, // Auto-recover from plateaus
+  "lr_spike_multiplier": 5.0, // LR boost factor (1-10)
+  "lr_spike_duration": 50, // Steps to maintain spike (10-200)
+  "lr_spike_consecutive_increases": 2 // Trigger threshold (1-5)
 }
 ```
+
+### LR Spike Configuration
+
+**Automatic plateau recovery** - enabled by default in all training scripts:
+
+```json
+// Conservative (gentle recovery)
+{
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 3.0,
+  "lr_spike_duration": 30,
+  "lr_spike_consecutive_increases": 3
+}
+
+// Balanced (default - recommended)
+{
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 5.0,
+  "lr_spike_duration": 50,
+  "lr_spike_consecutive_increases": 2
+}
+
+// Aggressive (stubborn plateaus)
+{
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
+  "lr_spike_consecutive_increases": 2
+}
+
+// Disabled
+{
+  "use_lr_spike": false
+}
+```
+
+**How it works:**
+- Monitors validation loss at each validation step
+- Counts consecutive increases in validation loss
+- When threshold reached, temporarily boosts LR
+- Automatically restores LR after spike duration
+- See [Chapter 36: Optimization Techniques](36-optimization-techniques.md#5-learning-rate-spike-for-plateau-recovery) for details
 
 ### Validation Strategy
 

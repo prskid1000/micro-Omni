@@ -21,7 +21,7 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
-    save_training_metadata, load_training_metadata, analyze_vocoder_dataset
+    save_training_metadata, load_training_metadata, analyze_vocoder_dataset, LRSpike
 )
 from tqdm import tqdm
 

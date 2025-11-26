@@ -454,6 +454,7 @@ The training scripts handle three scenarios gracefully:
 
 ✅ **Run LR Finder before each stage** to discover optimal learning rate  
 ✅ **EMA enabled by default** - better stability and generalization  
+✅ **LR Spike enabled by default** - automatically recovers from training plateaus  
 ✅ **Early stopping prevents endless loops** - fails fast with helpful errors  
 ✅ **Run stages in parallel** (if multiple GPUs)  
 ✅ **Start with small data** to verify pipeline  
@@ -463,6 +464,12 @@ The training scripts handle three scenarios gracefully:
 ✅ **Automatic resuming** - just rerun training command if interrupted  
 ✅ **Consistent utilities** - all scripts share common checkpoint/resume logic  
 ✅ **Trust early stopping** - if it triggers, reduce LR or add regularization
+
+**About LR Spike:**
+- Automatically detects when validation loss increases consecutively
+- Temporarily boosts learning rate to help escape plateaus
+- Fully configurable via config (or disable with `"use_lr_spike": false`)
+- See [Chapter 36: Optimization Techniques](36-optimization-techniques.md#5-learning-rate-spike-for-plateau-recovery) for details
 
 ---
 

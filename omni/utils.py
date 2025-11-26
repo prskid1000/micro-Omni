@@ -587,6 +587,117 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+class LRSpike:
+    """
+    Learning Rate Spike mechanism for when validation loss increases successively.
+    Temporarily increases learning rate to help escape local minima or plateaus.
+    """
+    def __init__(self, spike_multiplier=5.0, spike_duration=50, consecutive_increases=2):
+        """
+        Args:
+            spike_multiplier: How much to multiply LR by during spike (default: 5.0)
+            spike_duration: How many steps to maintain the spiked LR (default: 50)
+            consecutive_increases: Number of consecutive val loss increases to trigger spike (default: 2)
+        """
+        self.spike_multiplier = spike_multiplier
+        self.spike_duration = spike_duration
+        self.consecutive_increases = consecutive_increases
+        
+        self.val_loss_history = []
+        self.consecutive_increase_count = 0
+        self.spike_active = False
+        self.spike_steps_remaining = 0
+        self.original_lrs = []
+    
+    def check_and_spike(self, current_val_loss, optimizer, logger=None):
+        """
+        Check if LR should be spiked based on validation loss trend.
+        
+        Args:
+            current_val_loss: Current validation loss value
+            optimizer: PyTorch optimizer
+            logger: Optional logger for messages
+        
+        Returns:
+            bool: True if spike was triggered, False otherwise
+        """
+        # Track validation loss history
+        self.val_loss_history.append(current_val_loss)
+        
+        # Check if loss is increasing compared to previous validation
+        if len(self.val_loss_history) >= 2:
+            if current_val_loss > self.val_loss_history[-2]:
+                self.consecutive_increase_count += 1
+                if logger:
+                    logger.info(f"Validation loss increased: {self.val_loss_history[-2]:.4f} -> {current_val_loss:.4f} ({self.consecutive_increase_count}/{self.consecutive_increases})")
+            else:
+                self.consecutive_increase_count = 0
+        
+        # Trigger spike if consecutive increases threshold reached
+        if self.consecutive_increase_count >= self.consecutive_increases and not self.spike_active:
+            self.spike_active = True
+            self.spike_steps_remaining = self.spike_duration
+            
+            # Store original learning rates and spike them
+            self.original_lrs = [param_group['lr'] for param_group in optimizer.param_groups]
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = param_group['lr'] * self.spike_multiplier
+            
+            if logger:
+                logger.warning(f"LR SPIKE TRIGGERED! Validation loss increased {self.consecutive_increase_count} times consecutively.")
+                logger.warning(f"Spiking LR by {self.spike_multiplier}x for {self.spike_duration} steps: {self.original_lrs[0]:.2e} -> {optimizer.param_groups[0]['lr']:.2e}")
+            
+            # Reset consecutive increase counter
+            self.consecutive_increase_count = 0
+            return True
+        
+        return False
+    
+    def step(self, optimizer, logger=None):
+        """
+        Update spike state after each training step.
+        Call this after optimizer.step() in your training loop.
+        
+        Args:
+            optimizer: PyTorch optimizer
+            logger: Optional logger for messages
+        """
+        if self.spike_active:
+            self.spike_steps_remaining -= 1
+            
+            if self.spike_steps_remaining <= 0:
+                # Restore original learning rates
+                for i, param_group in enumerate(optimizer.param_groups):
+                    param_group['lr'] = self.original_lrs[i]
+                
+                if logger:
+                    logger.info(f"LR spike ended. Restored LR to {optimizer.param_groups[0]['lr']:.2e}")
+                
+                self.spike_active = False
+                self.spike_steps_remaining = 0
+    
+    def is_spiking(self):
+        """Returns True if currently in spike mode."""
+        return self.spike_active
+    
+    def get_state_dict(self):
+        """Get state for checkpointing."""
+        return {
+            'val_loss_history': self.val_loss_history,
+            'consecutive_increase_count': self.consecutive_increase_count,
+            'spike_active': self.spike_active,
+            'spike_steps_remaining': self.spike_steps_remaining,
+            'original_lrs': self.original_lrs
+        }
+    
+    def load_state_dict(self, state_dict):
+        """Load state from checkpoint."""
+        self.val_loss_history = state_dict.get('val_loss_history', [])
+        self.consecutive_increase_count = state_dict.get('consecutive_increase_count', 0)
+        self.spike_active = state_dict.get('spike_active', False)
+        self.spike_steps_remaining = state_dict.get('spike_steps_remaining', 0)
+        self.original_lrs = state_dict.get('original_lrs', [])
+
 def get_lr_scheduler(optimizer, warmup_steps, max_steps, min_lr_ratio=0.1):
     """
     Create learning rate scheduler with linear warmup + cosine decay.

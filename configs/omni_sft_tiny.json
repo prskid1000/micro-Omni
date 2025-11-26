@@ -48,5 +48,9 @@
     "image_root": "data/images",
     "asr_csv": "data/audio/production_asr.csv"
   },
-  "save_dir": "checkpoints/omni_sft_tiny"
+  "save_dir": "checkpoints/omni_sft_tiny",
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 5.0,
+  "lr_spike_duration": 50,
+  "lr_spike_consecutive_increases": 2
 }

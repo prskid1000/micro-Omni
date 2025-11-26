@@ -62,7 +62,78 @@ model.gradient_checkpointing_enable()
 pip install flash-attn
 ```
 
-### 5. CUDA Graphs Compilation
+### 5. Learning Rate Spike for Plateau Recovery
+
+**What:** Automatically boost LR when validation loss increases consecutively  
+**Benefit:** Escape local minima without manual intervention  
+**Status:** ✅ Enabled by default in all training scripts
+
+**How It Works:**
+1. Monitors validation loss at each validation step
+2. Counts consecutive increases in validation loss
+3. When threshold reached (default: 2 consecutive increases), spikes LR temporarily
+4. LR = current_lr × multiplier (default: 5×) for duration (default: 50 steps)
+5. Automatically restores LR to normal scheduler value after spike duration
+
+**Example Scenario:**
+```
+Step 1000: val_loss = 0.500 ✓
+Step 1200: val_loss = 0.520 ⚠️ (increase 1/2)
+Step 1400: val_loss = 0.540 ⚠️ (increase 2/2) → SPIKE TRIGGERED!
+           LR: 3e-4 → 1.5e-3 (5× boost)
+Step 1401-1450: Training with spiked LR
+Step 1451: LR restored to 3e-4
+Step 1600: val_loss = 0.450 ✓ (escaped plateau!)
+```
+
+**Configuration:**
+```json
+{
+  "use_lr_spike": true,                    // Enable/disable (default: true)
+  "lr_spike_multiplier": 5.0,              // LR boost factor (default: 5.0)
+  "lr_spike_duration": 50,                 // Steps to maintain spike (default: 50)
+  "lr_spike_consecutive_increases": 2      // Trigger threshold (default: 2)
+}
+```
+
+**Presets:**
+
+| Preset | Multiplier | Duration | Trigger | Use Case |
+|--------|-----------|----------|---------|----------|
+| Conservative | 3.0 | 30 | 3 | Stable training, gentle recovery |
+| Balanced (default) | 5.0 | 50 | 2 | General purpose |
+| Aggressive | 10.0 | 100 | 2 | Stubborn plateaus |
+
+**When to Use:**
+- ✅ Long training runs (>1000 steps)
+- ✅ Training plateaus or loss stagnates
+- ✅ Validation loss becomes unstable
+- ❌ Very unstable training (frequent NaN/inf)
+- ❌ Already using very high LR (>1e-2)
+- ❌ Noisy validation set
+
+**Monitoring:**
+Watch for log messages during training:
+```
+⚠️ Validation loss increased: 0.4800 -> 0.5000 (1/2)
+⚠️ LR SPIKE TRIGGERED! Spiking LR by 5.0x for 50 steps
+ℹ️ LR spike ended. Restored LR to 3.00e-04
+```
+
+**Implementation Details:**
+- Fully checkpoint-compatible (state saved/loaded)
+- Works with all LR schedulers (warmup, cosine decay)
+- Compatible with gradient accumulation, AMP, EMA
+- Available in: `train_text.py`, `train_vision.py`, `train_audio_enc.py`
+
+**Disabling:**
+```json
+{
+  "use_lr_spike": false
+}
+```
+
+### 6. CUDA Graphs Compilation
 
 **What:** Compile models with `torch.compile()` using CUDA graphs backend  
 **Benefit:** 10-20% speedup, reduced overhead  

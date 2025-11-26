@@ -48,5 +48,9 @@
   "mpd_periods": [2, 3, 5],
   "mpd_kernel_size": 3,
   "mpd_stride": 2,
-  "msd_num_scales": 2
+  "msd_num_scales": 2,
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 5.0,
+  "lr_spike_duration": 50,
+  "lr_spike_consecutive_increases": 2
 }

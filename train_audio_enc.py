@@ -5,7 +5,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata, LRSpike
 from tqdm import tqdm
 
 def main(cfg):
@@ -184,6 +184,17 @@ def main(cfg):
     max_steps = cfg.get("max_steps", 5000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
+    # LR spike mechanism for validation loss increases
+    use_lr_spike = cfg.get("use_lr_spike", True)
+    lr_spike = None
+    if use_lr_spike:
+        lr_spike = LRSpike(
+            spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
+            spike_duration=cfg.get("lr_spike_duration", 50),
+            consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
+        )
+        print(f"LR spike enabled: multiplier={lr_spike.spike_multiplier}x, duration={lr_spike.spike_duration} steps, trigger after {lr_spike.consecutive_increases} consecutive val loss increases")
+    
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
     
@@ -268,7 +279,8 @@ def main(cfg):
         "optimizer": (opt, opt.load_state_dict),
         "scheduler": (scheduler, scheduler.load_state_dict),
         "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
-        "ema": (ema, ema.load_state_dict) if ema is not None else None
+        "ema": (ema, ema.load_state_dict) if ema is not None else None,
+        "lr_spike": (lr_spike, lr_spike.load_state_dict) if lr_spike is not None else None
     }
     if head is not None:
         state_dict_loaders["head"] = (head, head.load_state_dict)
@@ -476,6 +488,10 @@ def main(cfg):
                 if ema is not None:
                     ema.update()
                 
+                # Update LR spike (countdown if active)
+                if lr_spike is not None:
+                    lr_spike.step(opt, logger)
+                
                 opt.zero_grad()  # Clear gradients after stepping
                 step += 1  # Increment step counter only when optimizer step occurs
             else:
@@ -508,6 +524,8 @@ def main(cfg):
                     model_data["scaler"] = scaler.state_dict()
                 if ema is not None:
                     model_data["ema"] = ema.state_dict()
+                if lr_spike is not None:
+                    model_data["lr_spike"] = lr_spike.get_state_dict()
                 torch.save(model_data, model_path)
                 
                 # Save training metadata (step, calculated values, etc.)
@@ -601,9 +619,9 @@ def main(cfg):
                     if ema is not None:
                         ema.restore()
                     
-                    # Restore original weights after validation
-                    if ema is not None:
-                        ema.restore()
+                    # Check for LR spike trigger
+                    if lr_spike is not None:
+                        lr_spike.check_and_spike(avg_val_loss, opt, logger)
                     
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):

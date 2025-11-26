@@ -15,7 +15,8 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
     check_gradient_explosion, reload_from_last_checkpoint, MixDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, load_audio, save_training_metadata, load_training_metadata
+    ValidationSkipSamplesContext, load_audio, save_training_metadata, load_training_metadata,
+    LRSpike
 )
 
 def mix_collate_fn(batch):
@@ -141,6 +142,17 @@ def main(cfg):
     warmup_steps = cfg.get("warmup_steps", 200)
     max_steps = cfg.get("max_steps", 2000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
+    
+    # LR spike mechanism for validation loss increases
+    use_lr_spike = cfg.get("use_lr_spike", True)
+    lr_spike = None
+    if use_lr_spike:
+        lr_spike = LRSpike(
+            spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
+            spike_duration=cfg.get("lr_spike_duration", 50),
+            consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
+        )
+        print(f"LR spike enabled: multiplier={lr_spike.spike_multiplier}x, duration={lr_spike.spike_duration} steps, trigger after {lr_spike.consecutive_increases} consecutive val loss increases")
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
@@ -422,7 +434,8 @@ def main(cfg):
             "proj_v": (proj_v, proj_v.load_state_dict),
             "optimizer": (opt, opt.load_state_dict),
             "scheduler": (scheduler, scheduler.load_state_dict),
-            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
+            "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
+            "lr_spike": (lr_spike, lr_spike.load_state_dict) if lr_spike is not None else None
         }
     )
     
@@ -658,6 +671,11 @@ def main(cfg):
                     clip_gradients(proj_v, max_grad_norm)
                     opt.step()
                 scheduler.step()
+                
+                # Update LR spike (countdown if active)
+                if lr_spike is not None:
+                    lr_spike.step(opt, logger)
+                
                 opt.zero_grad()  # Clear gradients after stepping
                 step += 1  # Increment step counter only when optimizer step occurs
             else:
@@ -765,6 +783,10 @@ def main(cfg):
                     avg_val_loss = val_loss_sum / max(val_count, 1)
                     logger.val_step(step, avg_val_loss, epoch)
                     
+                    # Check for LR spike trigger
+                    if lr_spike is not None:
+                        lr_spike.check_and_spike(avg_val_loss, opt, logger)
+                    
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
                         if avg_val_loss > last_checkpoint_val_loss + val_loss_threshold:
@@ -828,6 +850,8 @@ def main(cfg):
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
+                if lr_spike is not None:
+                    checkpoint_data["lr_spike"] = lr_spike.get_state_dict()
                 torch.save(checkpoint_data, model_path)
                 
                 # Save training metadata

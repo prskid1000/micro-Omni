@@ -40,5 +40,9 @@
   "frame_ms": 80,
   "tts_csv": "data/audio/production_tts.csv",
   "save_dir": "checkpoints/talker_tiny",
-  "max_mel_length_percentile": 95.0
+  "max_mel_length_percentile": 95.0,
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 5.0,
+  "lr_spike_duration": 50,
+  "lr_spike_consecutive_increases": 2
 }
