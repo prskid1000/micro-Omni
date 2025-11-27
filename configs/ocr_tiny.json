@@ -29,8 +29,8 @@
   "lr": 0.001,
   "wd": 0.01,
   "warmup_steps": 200,
-  "max_steps": 350000,
-  "max_epochs": 12,
+  "max_steps": 1012500,
+  "max_epochs": 36,
   
   "gradient_accumulation_steps": 1,
   "max_grad_norm": 1.0,
