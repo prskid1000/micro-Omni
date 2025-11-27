@@ -26,7 +26,7 @@
   "num_workers": 0,
   "drop_last": true,
   
-  "lr": 0.0015,
+  "lr": 0.001,
   "wd": 0.01,
   "warmup_steps": 200,
   "max_steps": 350000,
