@@ -1,4 +1,3 @@
-
 import argparse, json, os, torch
 from torch import nn
 from torch.amp import autocast, GradScaler
@@ -432,11 +431,14 @@ def main(cfg):
                     
                     # Contrastive loss (InfoNCE)
                     # Similarity matrix: (B, B)
-                    logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+                    logits_i2t = torch.matmul(img_emb, text_emb.t()) / temperature  # Image-to-Text (B, B)
+                    logits_t2i = torch.matmul(text_emb, img_emb.t()) / temperature  # Text-to-Image (B, B)
                     labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
-                    loss = nn.CrossEntropyLoss()(logits, labels)
+                    loss_i2t = nn.CrossEntropyLoss()(logits_i2t, labels)
+                    loss_t2i = nn.CrossEntropyLoss()(logits_t2i, labels)
+                    loss = (loss_i2t + loss_t2i) / 2  # Symmetric loss
                     # Free intermediate tensors
-                    del cls, img_emb, text_embs, text_emb, logits
+                    del cls, img_emb, text_embs, text_emb, logits_i2t, logits_t2i
             else:
                 cls, _ = vit(img)  # (B,1,d)
                 img_emb = img_proj(cls.squeeze(1))  # (B, embed_dim)
@@ -448,11 +450,14 @@ def main(cfg):
                 text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
                 
                 # Contrastive loss (InfoNCE)
-                logits = torch.matmul(img_emb, text_emb.t()) / temperature  # (B, B)
+                logits_i2t = torch.matmul(img_emb, text_emb.t()) / temperature  # Image-to-Text (B, B)
+                logits_t2i = torch.matmul(text_emb, img_emb.t()) / temperature  # Text-to-Image (B, B)
                 labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
-                loss = nn.CrossEntropyLoss()(logits, labels)
+                loss_i2t = nn.CrossEntropyLoss()(logits_i2t, labels)
+                loss_t2i = nn.CrossEntropyLoss()(logits_t2i, labels)
+                loss = (loss_i2t + loss_t2i) / 2  # Symmetric loss
                 # Free intermediate tensors
-                del cls, img_emb, text_embs, text_emb, logits
+                del cls, img_emb, text_embs, text_emb, logits_i2t, logits_t2i
             
             # Forward pass with gradient accumulation
             loss_scaled = loss / accumulation_steps  # Scale loss for accumulation
