@@ -22,15 +22,15 @@
   "use_flash": true,
   "rope_theta": 10000.0,
   
-  "batch_size": 48,
-  "num_workers": 2,
+  "batch_size": 32,
+  "num_workers": 0,
   "drop_last": true,
   
   "lr": 0.0015,
   "wd": 0.01,
   "warmup_steps": 200,
-  "max_steps": 169000,
-  "max_epochs": 6,
+  "max_steps": 350000,
+  "max_epochs": 12,
   
   "gradient_accumulation_steps": 2,
   "max_grad_norm": 1.0,
