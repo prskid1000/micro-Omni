@@ -13,10 +13,10 @@
   "lr": 0.001,
   "wd": 0.01,
   "warmup_steps": 200,
-  "max_steps": 300000,
+  "max_steps": 600000,
   "max_epochs": 36,
   
-  "batch_size": 64,
+  "batch_size": 32,
   "gradient_accumulation_steps": 1,
   "num_workers": 0,
   "drop_last": true,
