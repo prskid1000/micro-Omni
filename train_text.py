@@ -114,6 +114,8 @@ def main(cfg):
     # LR spike mechanism for validation loss increases
     use_lr_spike = cfg.get("use_lr_spike", True)
     lr_spike = None
+    # Initialize logger early because several utilities (e.g., LRSpike) log during setup
+    logger = SimpleLogger("Thinker")
     if use_lr_spike:
         lr_spike = LRSpike(
             spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
@@ -193,8 +195,7 @@ def main(cfg):
     train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
     val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
     
-    # Initialize logger
-    logger = SimpleLogger("Thinker")
+    # Logger already initialized above (needed during setup)
     
     model.train()
     max_epochs = cfg.get("max_epochs", 9999)
