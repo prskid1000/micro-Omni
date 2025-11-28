@@ -2513,7 +2513,7 @@ class TTSDataset(IterableDataset):
 
 class ImgCapDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
-    def __init__(self, manifest, image_root, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0, augment=True):
+    def __init__(self, manifest, image_root, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0, augment=False):
         self.manifest_path, self.root = manifest, image_root
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.augment = augment
