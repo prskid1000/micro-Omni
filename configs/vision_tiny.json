@@ -2,13 +2,13 @@
   "img_size": 224,
   "patch": 16,
   
-  "d_model": 192,
-  "n_layers": 4,
-  "n_heads": 3,
-  "d_ff": 768,
-  "dropout": 0.1,
+  "d_model": 256,
+  "n_layers": 6,
+  "n_heads": 4,
+  "d_ff": 1024,
+  "dropout": 0.2,
   
-  "embed_dim": 192,
+  "embed_dim": 256,
   
   "lr": 0.001,
   "wd": 0.01,
@@ -55,15 +55,17 @@
   "use_thinker_for_text": false,
   
   "thinker_ckpt": "checkpoints/thinker_tiny",
+  "thinker_d_model": 384,
   "thinker": {
     "vocab_size": 32000,
-    "n_layers": 4,
-    "d_model": 256,
-    "n_heads": 4,
-    "d_ff": 1024,
+    "n_layers": 8,
+    "d_model": 384,
+    "n_heads": 6,
+    "d_ff": 1536,
     "dropout": 0.1,
     "rope_theta": 10000,
-    "use_gqa": false,
+    "use_gqa": true,
+    "kv_groups": 3,
     "use_swiglu": true,
     "use_moe": false
   },
