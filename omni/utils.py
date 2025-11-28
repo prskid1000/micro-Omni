@@ -2518,28 +2518,37 @@ class ImgCapDataset(IterableDataset):
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.augment = augment
 
-        # Training transforms with augmentation
+        # ImageNet normalization (standard for vision models)
+        normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+
+        # Training transforms with strong augmentation for contrastive learning
         if self.augment:
             self.train_tf = transforms.Compose([
-                transforms.RandomResizedCrop(img_size, scale=(0.9, 1.0)), 
-                transforms.RandomHorizontalFlip(), 
-                transforms.ToTensor()
+                transforms.RandomResizedCrop(img_size, scale=(0.8, 1.0)),  # Wider crop range
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+                transforms.RandomGrayscale(p=0.2),
+                transforms.ToTensor(),
+                normalize
             ])
         else:
+            # Training without augmentation (still needs normalization)
             self.train_tf = transforms.Compose([
                 transforms.Resize((img_size, img_size)),
-                transforms.ToTensor()
+                transforms.ToTensor(),
+                normalize
             ])
 
-        # Validation transforms (deterministic)
+        # Validation transforms (deterministic, no cropping)
         self.val_tf = transforms.Compose([
-            transforms.Resize(img_size),
-            transforms.CenterCrop(img_size),
-            transforms.ToTensor()
+            transforms.Resize((img_size, img_size)),  # Direct resize, preserve full image
+            transforms.ToTensor(),
+            normalize
         ])
 
-        # Default to simple resize for backward compatibility or if mode unknown
-        self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
         self._num_items = None
 
     def get_length(self):
@@ -2583,12 +2592,12 @@ class ImgCapDataset(IterableDataset):
             
             try:
                 img = Image.open(os.path.join(self.root, it["image"])).convert("RGB")
+                
                 # Select transform based on mode
                 if val_mode:
                     tf = self.val_tf
                 else:
-                    # If not validation mode, assume training
-                    tf = self.train_tf
+                    tf = self.train_tf  # Uses augmentation if self.augment=True
                 
                 result = (tf(img), it["caption"])
                 
@@ -2608,7 +2617,6 @@ class ImgCapDataset(IterableDataset):
             yield from buffer
         
         # Reset skip_samples to 0 after first iteration (only use for resuming)
-        # This allows subsequent epochs to start from the beginning
         if self.skip_samples > 0:
             print(f"Dataset exhausted: resetting skip_samples from {self.skip_samples} to 0 for next epoch")
             self.skip_samples = 0
