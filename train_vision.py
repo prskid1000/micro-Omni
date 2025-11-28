@@ -272,7 +272,8 @@ def main(cfg):
         cfg.get("img_size", 224),
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
         seed=seed,
-        skip_samples=0
+        skip_samples=0,
+        augment=cfg.get("use_augmentation", False)
     )
     train_ds._val_split = val_split
     train_ds._val_mode = False  # Training mode
@@ -283,7 +284,8 @@ def main(cfg):
         cfg.get("img_size", 224),
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 100),  # Shuffle validation for different batches each time
         seed=seed,  # Same seed for consistent hash-based split
-        skip_samples=0
+        skip_samples=0,
+        augment=cfg.get("use_augmentation", False)
     )
     val_ds._val_split = val_split
     val_ds._val_mode = True  # Validation mode
