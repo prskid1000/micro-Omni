@@ -46,9 +46,8 @@ def load_audio(path):
         try:
             return torchaudio.load_with_torchcodec(path)
         except (ImportError, AttributeError, TypeError, RuntimeError):
-            # Fall through to next method if torchcodec is not available
             pass
-    
+
     # Try torchcodec.decoders.AudioDecoder (recommended API)
     try:
         from torchcodec.decoders import AudioDecoder
@@ -56,8 +55,25 @@ def load_audio(path):
         decoded = decoder()
         return decoded.audio, decoded.sample_rate
     except (ImportError, AttributeError, TypeError):
-        # Fall back to standard torchaudio.load()
+        pass
+
+    # Try torchaudio.load
+    try:
         return torchaudio.load(path)
+    except Exception:
+        pass
+
+    # Fallback to soundfile for formats like .flac
+    try:
+        import soundfile as sf
+        audio, sr = sf.read(path)
+        audio_tensor = torch.from_numpy(audio).float()
+        # If stereo, convert to mono
+        if audio_tensor.ndim > 1:
+            audio_tensor = audio_tensor.mean(dim=1)
+        return audio_tensor, sr
+    except Exception as e:
+        raise RuntimeError(f"Failed to load audio file: {path}. Error: {e}")
 
 # Model utilities
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
@@ -2483,13 +2499,15 @@ class TTSDataset(IterableDataset):
                     if sr != self.sr:
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
                     mel = self.melspec(wav)[0].T
-                    
+                    # Skip samples with mel length 0
+                    if mel.shape[0] == 0:
+                        self._error_counts["zero_mel_len"] = self._error_counts.get("zero_mel_len", 0) + 1
+                        continue
                     # Filter outliers: skip samples exceeding max mel length
                     if self.filter_outliers and self.max_mel_length is not None:
                         if mel.shape[0] > self.max_mel_length:
                             self._error_counts["exceeds_max_len"] += 1
                             continue
-                    
                     # Buffer-based shuffling
                     if self.shuffle_buffer_size > 0:
                         buffer.append(mel)
