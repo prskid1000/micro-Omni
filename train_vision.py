@@ -235,31 +235,39 @@ def main(cfg):
     
     def encode_caption(caption):
         """Encode caption using tokenizer and either Thinker model or SimpleTextEncoder"""
-        # Tokenize caption
-        token_ids = tok.encode(caption)
+        # Handle two possible caption representations:
+        # - A raw Python string (tokenize here)
+        # - A 1D torch.Tensor or list of token ids (already tokenized by the dataset worker)
+        if torch.is_tensor(caption):
+            ids = caption.tolist()
+        elif isinstance(caption, (list, tuple)):
+            ids = list(caption)
+        else:
+            # Tokenize caption string
+            ids = tok.encode(str(caption))
+
+        # If dataset provided padded sequence (PAD=0), trim trailing PADs to restore original length
+        while len(ids) > 1 and ids[-1] == 0:
+            ids.pop()
+
+        # Ensure BOS/CLS token at start. If already present (1), avoid duplicating.
+        if len(ids) == 0 or ids[0] != 1:
+            ids = [1] + ids
+
         # Truncate to context length
-        token_ids = token_ids[:ctx_len-1]  # -1 for BOS/CLS token
-        
-        # Add BOS/CLS token at the beginning (token ID 1)
-        # This is important for 'cls' pooling method
-        token_ids = [1] + token_ids  # BOS/CLS=1
-        if len(token_ids) == 0:
-            token_ids = [1]  # At least BOS/CLS token
-        
-        # Convert to tensor
-        token_tensor = torch.tensor(token_ids, device=device, dtype=torch.long)
-        
+        ids = ids[:ctx_len]
+
+        token_tensor = torch.tensor(ids, device=device, dtype=torch.long)
+
         if use_thinker_for_text:
-            # Use Thinker model for contextual embeddings (better quality)
             token_tensor = token_tensor.unsqueeze(0)  # (1, T)
             with torch.no_grad():
-                # Use Thinker to get contextual embeddings
                 text_emb = think(idx=token_tensor)  # (1, T, thinker_d_model)
-            # Use mean pooling for Thinker (attention pooling only for SimpleTextEncoder)
+            # Mean pooling across tokens
             return text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
         else:
             # Use SimpleTextEncoder with learned attention pooling
-            with torch.no_grad() if not text_encoder.training else torch.enable_grad():
+            with (torch.no_grad() if not text_encoder.training else torch.enable_grad()):
                 text_emb = text_encoder(token_tensor, return_cls=True)  # (d_model,)
             return text_emb
 
@@ -267,9 +275,11 @@ def main(cfg):
     val_split = cfg.get("val_split", 0.1)  # 10% for validation
     
     train_ds = ImgCapDataset(
-        train_manifest, 
-        image_root, 
-        cfg.get("img_size", 224),
+        train_manifest,
+        image_root,
+        tok,
+        ctx_len,
+        img_size=cfg.get("img_size", 224),
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 10000),
         seed=seed,
         skip_samples=0,
@@ -279,9 +289,11 @@ def main(cfg):
     train_ds._val_mode = False  # Training mode
     
     val_ds = ImgCapDataset(
-        train_manifest, 
-        image_root, 
-        cfg.get("img_size", 224),
+        train_manifest,
+        image_root,
+        tok,
+        ctx_len,
+        img_size=cfg.get("img_size", 224),
         shuffle_buffer_size=cfg.get("shuffle_buffer_size", 100),  # Shuffle validation for different batches each time
         seed=seed,  # Same seed for consistent hash-based split
         skip_samples=0,

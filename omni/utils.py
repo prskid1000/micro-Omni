@@ -2512,9 +2512,19 @@ class TTSDataset(IterableDataset):
             self.skip_samples = 0
 
 class ImgCapDataset(IterableDataset):
-    """Streaming dataset: sequential I/O, low memory, efficient resuming."""
-    def __init__(self, manifest, image_root, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0, augment=False):
+    """Streaming dataset: sequential I/O, low memory, efficient resuming.
+    
+    Updated to perform BPE tokenization and padding within worker processes 
+    to prevent CPU spikes on the main training thread.
+    """
+    
+    def __init__(self, manifest, image_root, tokenizer, ctx_len, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0, augment=False):
         self.manifest_path, self.root = manifest, image_root
+        
+        # --- NEW: Store tokenizer and context length ---
+        self.tok = tokenizer 
+        self.ctx = ctx_len
+        
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
         self.augment = augment
 
@@ -2527,7 +2537,7 @@ class ImgCapDataset(IterableDataset):
         # Training transforms with strong augmentation for contrastive learning
         if self.augment:
             self.train_tf = transforms.Compose([
-                transforms.RandomResizedCrop(img_size, scale=(0.8, 1.0)),  # Wider crop range
+                transforms.RandomResizedCrop(img_size, scale=(0.8, 1.0)), 
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
                 transforms.RandomGrayscale(p=0.2),
@@ -2544,7 +2554,7 @@ class ImgCapDataset(IterableDataset):
 
         # Validation transforms (deterministic, no cropping)
         self.val_tf = transforms.Compose([
-            transforms.Resize((img_size, img_size)),  # Direct resize, preserve full image
+            transforms.Resize((img_size, img_size)), 
             transforms.ToTensor(),
             normalize
         ])
@@ -2563,6 +2573,7 @@ class ImgCapDataset(IterableDataset):
         worker_info = torch.utils.data.get_worker_info()
         num_workers = worker_info.num_workers if worker_info else 1
         worker_id = worker_info.id if worker_info else 0
+        # Use random seed for shuffle buffer randomization
         rng = random.Random(self.seed + worker_id if self.seed else None)
         buffer = []
         
@@ -2591,15 +2602,25 @@ class ImgCapDataset(IterableDataset):
                 continue
             
             try:
+                # --- 1. Load and Transform Image (CPU Worker Task) ---
                 img = Image.open(os.path.join(self.root, it["image"])).convert("RGB")
                 
                 # Select transform based on mode
-                if val_mode:
-                    tf = self.val_tf
-                else:
-                    tf = self.train_tf  # Uses augmentation if self.augment=True
+                tf = self.val_tf if val_mode else self.train_tf 
+                image_tensor = tf(img)
                 
-                result = (tf(img), it["caption"])
+                # --- 2. Tokenize and Pad Text (CPU Worker Task - FIX for CPU Spike) ---
+                caption = it["caption"].strip()
+                
+                # Tokenize (CPU-intensive BPE part)
+                ids = [1] + self.tok.encode(caption)  # BOS=1 (assuming 1 is BOS/CLS)
+                
+                # Truncate and Pad
+                ids = ids[:self.ctx]
+                text_tensor = torch.tensor(ids + [0] * (self.ctx - len(ids)), dtype=torch.long) # 0 is PAD
+                
+                # --- 3. Yield Tensors ---
+                result = (image_tensor, text_tensor)
                 
                 # Buffer-based shuffling
                 if self.shuffle_buffer_size > 0:
@@ -2609,6 +2630,7 @@ class ImgCapDataset(IterableDataset):
                 else:
                     yield result
             except Exception:
+                # Skip corrupt or inaccessible image/caption files
                 continue
         
         # Yield remaining buffer items
