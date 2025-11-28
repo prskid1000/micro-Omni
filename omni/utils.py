@@ -41,39 +41,29 @@ def load_audio(path):
     Returns:
         tuple: (audio_tensor, sample_rate)
     """
-    # Try torchaudio.load_with_torchcodec first (if available in future versions)
-    if hasattr(torchaudio, 'load_with_torchcodec'):
-        try:
-            return torchaudio.load_with_torchcodec(path)
-        except (ImportError, AttributeError, TypeError, RuntimeError):
-            pass
-
-    # Try torchcodec.decoders.AudioDecoder (recommended API)
-    try:
-        from torchcodec.decoders import AudioDecoder
-        decoder = AudioDecoder(path)
-        decoded = decoder()
-        return decoded.audio, decoded.sample_rate
-    except (ImportError, AttributeError, TypeError):
-        pass
-
     # Try torchaudio.load
     try:
-        return torchaudio.load(path)
-    except Exception:
+        audio, sr = torchaudio.load(path)
+        # If stereo, convert to mono
+        if audio.ndim > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+        return audio, sr
+    except Exception as e1:
         pass
 
     # Fallback to soundfile for formats like .flac
     try:
         import soundfile as sf
-        audio, sr = sf.read(path)
-        audio_tensor = torch.from_numpy(audio).float()
-        # If stereo, convert to mono
-        if audio_tensor.ndim > 1:
-            audio_tensor = audio_tensor.mean(dim=1)
-        return audio_tensor, sr
-    except Exception as e:
-        raise RuntimeError(f"Failed to load audio file: {path}. Error: {e}")
+        import torch
+        audio_np, sr = sf.read(path)
+        # Convert to tensor and mono
+        if audio_np.ndim == 1:
+            audio = torch.from_numpy(audio_np).float().unsqueeze(0)
+        else:
+            audio = torch.from_numpy(audio_np.T).float().mean(dim=0, keepdim=True)
+        return audio, sr
+    except Exception as e2:
+        raise RuntimeError(f"Failed to load audio file: {path}. Error: {e1} | {e2}")
 
 # Model utilities
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:

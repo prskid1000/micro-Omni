@@ -9,7 +9,7 @@ import json
 import os
 import argparse
 import random
-import torchaudio
+import torchaudio  # Only used for transforms, not for loading audio
 from omni.audio_encoder import AudioEncoderTiny
 from omni.utils import ASRDataset, load_audio, find_checkpoint, strip_orig_mod
 from tqdm import tqdm

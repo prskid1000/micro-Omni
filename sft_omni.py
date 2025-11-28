@@ -5,7 +5,7 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from PIL import Image
-import torchaudio
+import torchaudio  # Only used for transforms, not for loading audio
 from tqdm import tqdm
 
 from omni.thinker import ThinkerLM

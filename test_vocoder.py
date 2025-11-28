@@ -10,7 +10,7 @@ import os
 import argparse
 import random
 import numpy as np
-import torchaudio
+import torchaudio  # Only used for transforms, not for loading audio
 from omni.codec import HiFiGANVocoder
 from omni.utils import VocoderDataset, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
