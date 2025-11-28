@@ -74,11 +74,15 @@ def main(cfg):
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
     # LR Spike mechanism
-    lr_spike = LRSpike(
-        spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
-        spike_duration=cfg.get("lr_spike_duration", 50),
-        consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
-    )
+    use_lr_spike = cfg.get("use_lr_spike", False)
+    lr_spike = None
+    if use_lr_spike:
+        lr_spike = LRSpike(
+            spike_multiplier=cfg.get("lr_spike_multiplier", 2.0),
+            spike_duration=cfg.get("lr_spike_duration", 50),
+            consecutive_increases=cfg.get("lr_spike_consecutive_increases", 3)
+        )
+        print(f"✓ LR Spike enabled: {cfg.get('lr_spike_multiplier')}x for {cfg.get('lr_spike_duration')} steps")
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
@@ -448,7 +452,8 @@ def main(cfg):
                 else:
                     opt.step()
                 scheduler.step()
-                lr_spike.step(opt, logger)
+                if lr_spike is not None:
+                    lr_spike.step(opt, logger)
                 opt.zero_grad()  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
 
