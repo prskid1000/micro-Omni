@@ -37,7 +37,7 @@
   "checkpoint_freq": 5000,
   
   "seed": 42,
-  "shuffle_buffer_size": 1000,
+  "shuffle_buffer_size": 100,
   
   "use_ema": true,
   "ema_decay": 0.9995,

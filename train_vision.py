@@ -438,8 +438,20 @@ def main(cfg):
                     img_emb = img_proj(cls.squeeze(1))  # (B, embed_dim)
                     img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
                     
-                    # Encode captions
-                    text_embs = torch.stack([encode_caption(c) for c in cap]).to(device)  # (B, d_model)
+                    # Encode captions (batch if possible for speed)
+                    if torch.is_tensor(cap) and cap.dim() == 2:
+                        token_batch = cap.to(device)  # (B, T)
+                        if use_thinker_for_text and think is not None:
+                            with torch.no_grad():
+                                # Get contextual hidden embeddings (B, T, thinker_d_model)
+                                token_embs = think(idx=token_batch, return_embeddings=True)
+                            text_embs = token_embs.mean(dim=1)  # (B, thinker_d_model)
+                        else:
+                            # SimpleTextEncoder supports batched input and returns pooled (B, d_model)
+                            text_embs = text_encoder(token_batch, return_cls=True)
+                    else:
+                        # Fallback: handle strings or 1D tensors per-sample
+                        text_embs = torch.stack([encode_caption(c) for c in cap]).to(device)  # (B, d_model)
                     text_emb = text_proj(text_embs)  # (B, embed_dim)
                     text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
                     
@@ -458,9 +470,18 @@ def main(cfg):
                 img_emb = img_proj(cls.squeeze(1))  # (B, embed_dim)
                 img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
                 
-                # Encode captions
-                text_embs = torch.stack([encode_caption(c) for c in cap]).to(device)  # (B, d_model)
-                text_emb = text_proj(text_embs)  # (B, embed_dim)
+                # Encode captions (batch if possible for speed)
+                if torch.is_tensor(cap) and cap.dim() == 2:
+                    token_batch = cap.to(device)  # (B, T)
+                    if use_thinker_for_text and think is not None:
+                        with torch.no_grad():
+                            token_embs = think(idx=token_batch, return_embeddings=True)
+                        text_embs = token_embs.mean(dim=1)
+                    else:
+                        text_embs = text_encoder(token_batch, return_cls=True)
+                else:
+                    text_embs = torch.stack([encode_caption(c) for c in cap]).to(device)
+                text_emb = text_proj(text_embs)
                 text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
                 
                 # Contrastive loss (InfoNCE)
@@ -616,7 +637,16 @@ def main(cfg):
                                     val_img_emb = img_proj(val_cls.squeeze(1))
                                     val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
                                     
-                                    val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                                    # Batch-process validation captions when possible
+                                    if torch.is_tensor(val_cap) and val_cap.dim() == 2:
+                                        val_token_batch = val_cap.to(device)
+                                        if use_thinker_for_text and think is not None:
+                                            val_token_embs = think(idx=val_token_batch, return_embeddings=True)
+                                            val_text_embs = val_token_embs.mean(dim=1)
+                                        else:
+                                            val_text_embs = text_encoder(val_token_batch, return_cls=True)
+                                    else:
+                                        val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
                                     val_text_emb = text_proj(val_text_embs)
                                     val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
                                     
@@ -779,7 +809,16 @@ def main(cfg):
                         val_img_emb = img_proj(val_cls.squeeze(1))
                         val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
                         
-                        val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
+                        # Batch-process validation captions when possible
+                        if torch.is_tensor(val_cap) and val_cap.dim() == 2:
+                            val_token_batch = val_cap.to(device)
+                            if use_thinker_for_text and think is not None:
+                                val_token_embs = think(idx=val_token_batch, return_embeddings=True)
+                                val_text_embs = val_token_embs.mean(dim=1)
+                            else:
+                                val_text_embs = text_encoder(val_token_batch, return_cls=True)
+                        else:
+                            val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
                         val_text_emb = text_proj(val_text_embs)
                         val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
                         

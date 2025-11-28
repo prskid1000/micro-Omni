@@ -545,7 +545,8 @@ class ThinkerLM(nn.Module):
         return has_nan, has_inf, nan_count, inf_count
 
     def forward(self, idx: Optional[torch.Tensor] = None, embeddings: Optional[torch.Tensor] = None, 
-                attn_mask: Optional[torch.Tensor] = None, pos: Optional[torch.Tensor] = None) -> torch.Tensor:
+                attn_mask: Optional[torch.Tensor] = None, pos: Optional[torch.Tensor] = None,
+                return_embeddings: bool = False) -> torch.Tensor:
         """
         Forward pass supporting both token IDs and raw embeddings for multimodal input.
         
@@ -642,6 +643,17 @@ class ThinkerLM(nn.Module):
             inf_count = torch.isinf(x).sum().item()
             raise RuntimeError(f"Numerical instability detected after final norm: NaN={nan_count}, Inf={inf_count}")
         
+        # Optionally return the final hidden embeddings (pre-lm_head) for use as contextual
+        # text representations (useful for multimodal encoders). This avoids re-running an
+        # additional projection when the caller wants embeddings instead of logits.
+        if return_embeddings:
+            # x is (B, T, D) after final normalization
+            if torch.isnan(x).any() or torch.isinf(x).any():
+                nan_count = torch.isnan(x).sum().item()
+                inf_count = torch.isinf(x).sum().item()
+                raise RuntimeError(f"Numerical instability detected in ThinkerLM embeddings: NaN={nan_count}, Inf={inf_count}")
+            return x
+
         logits = self.lm_head(x)
         
         # Check for numerical stability (NaN/Inf detection)
