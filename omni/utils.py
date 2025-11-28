@@ -1,4 +1,3 @@
-
 import math
 import os
 import random
@@ -2053,7 +2052,7 @@ def analyze_vocoder_dataset(
         audio_percentile: Percentile to use for max_audio_length (default: 95.0, covers 95% of data, minimizes padding)
         
     Returns:
-        int: Maximum audio length at specified percentile (rounded up to nearest 256 for memory alignment)
+        int: Maximum audio length at specified percentile (rounded up to nearest 256)
     """
     import numpy as np
     
@@ -2514,25 +2513,35 @@ class TTSDataset(IterableDataset):
 
 class ImgCapDataset(IterableDataset):
     """Streaming dataset: sequential I/O, low memory, efficient resuming."""
-    def __init__(self, manifest, image_root, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0):
+    def __init__(self, manifest, image_root, img_size=224, shuffle_buffer_size=10000, seed=None, skip_samples=0, augment=True):
         self.manifest_path, self.root = manifest, image_root
         self.shuffle_buffer_size, self.seed, self.skip_samples = shuffle_buffer_size, seed, skip_samples
+        self.augment = augment
+
         # Training transforms with augmentation
-        self.train_tf = transforms.Compose([
-            transforms.RandomResizedCrop(img_size, scale=(0.9, 1.0)), 
-            transforms.RandomHorizontalFlip(), 
-            transforms.ToTensor()
-        ])
+        if self.augment:
+            self.train_tf = transforms.Compose([
+                transforms.RandomResizedCrop(img_size, scale=(0.9, 1.0)), 
+                transforms.RandomHorizontalFlip(), 
+                transforms.ToTensor()
+            ])
+        else:
+            self.train_tf = transforms.Compose([
+                transforms.Resize((img_size, img_size)),
+                transforms.ToTensor()
+            ])
+
         # Validation transforms (deterministic)
         self.val_tf = transforms.Compose([
             transforms.Resize(img_size),
             transforms.CenterCrop(img_size),
             transforms.ToTensor()
         ])
+
         # Default to simple resize for backward compatibility or if mode unknown
         self.tf = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
         self._num_items = None
-    
+
     def get_length(self):
         """Count JSON manifest items (expensive, cached after first call)"""
         if self._num_items is None:
@@ -2540,7 +2549,7 @@ class ImgCapDataset(IterableDataset):
                 items = json.load(f)
                 self._num_items = len(items)
         return self._num_items
-    
+
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
         num_workers = worker_info.num_workers if worker_info else 1
