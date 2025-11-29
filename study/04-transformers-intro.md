@@ -640,12 +640,12 @@ class Transformer(nn.Module):
 ```
 Thinker (Decoder-Only Transformer):
 
-Vocabulary:    5000 tokens
-Layers:        4 transformer blocks
-d_model:       256 (embedding dimension)
-Heads:         4 (multi-head attention)
-d_ff:          1024 (feedforward dimension)
-Context:       512-2048 tokens
+Vocabulary:    32000 tokens
+Layers:        8 transformer blocks
+d_model:       384 (embedding dimension)
+Heads:         6 (multi-head attention)
+d_ff:          1536 (feedforward dimension)
+Context:       256 tokens
 RoPE theta:    10000
 
 Total params:  ~20.32M

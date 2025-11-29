@@ -152,22 +152,53 @@ Token/Embeddings Input (B, T, 256)
 ```python
 # From omni/thinker.py
 class ThinkerLM(nn.Module):
-    def __init__(self, vocab, n_layers=16, d=512, heads=8, ff=2048,
-                 dropout=0.1, rope_theta=10000, ctx=1024,
-                 use_gqa=False, use_swiglu=True, use_moe=False,
-                 num_experts=8, num_experts_per_tok=2, use_flash=True):
+    def __init__(self, vocab: int, n_layers: int = 16, d: int = 512, heads: int = 8, ff: int = 2048, 
+                 dropout: float = 0.1, rope_theta: float = 10000, ctx: int = 1024, 
+                 use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False, 
+                 num_experts: int = 8, num_experts_per_tok: int = 2, use_flash: bool = True,
+                 compile_model: bool = False) -> None:
+        """
+        ThinkerLM with optional Qwen3 Omni features and performance optimizations.
+        
+        Args:
+            vocab: vocabulary size
+            n_layers: number of transformer layers
+            d: model dimension
+            heads: number of attention heads
+            ff: feedforward dimension
+            dropout: dropout rate
+            rope_theta: RoPE theta parameter
+            ctx: context length
+            use_gqa: use Grouped Query Attention (default: False)
+            use_swiglu: use SwiGLU activation (default: True)
+            use_moe: use Mixture of Experts (default: False)
+            num_experts: number of experts for MoE (default: 8)
+            num_experts_per_tok: number of experts to activate per token (default: 2)
+            use_flash: use Flash Attention for 2-4x speedup (default: True, requires PyTorch 2.0+)
+            compile_model: use torch.compile() for 30-50% speedup (default: False, requires PyTorch 2.0+)
+        """
         super().__init__()
+        
+        # Structural check
+        if d % heads != 0:
+            raise ValueError(f"Model dimension d ({d}) must be divisible by number of heads ({heads}).")
+            
         self.tok_emb = nn.Embedding(vocab, d)
+        self.pos_cache = None
         self.blocks = nn.ModuleList([
-            Block(d, heads, ff, rope_theta, dropout,
-                  use_gqa=use_gqa, use_swiglu=use_swiglu,
-                  use_moe=use_moe, num_experts=num_experts,
-                  use_flash=use_flash)
+            Block(d, heads, ff, rope_theta, dropout, use_gqa=use_gqa, use_swiglu=use_swiglu,
+                  use_moe=use_moe, num_experts=num_experts, num_experts_per_tok=num_experts_per_tok,
+                  use_flash=use_flash) 
             for _ in range(n_layers)
         ])
         self.norm = RMSNorm(d)
         self.lm_head = nn.Linear(d, vocab, bias=False)
         self.ctx = ctx
+        
+        # KV cache for autoregressive generation
+        self.kv_cache = None
+        self.use_kv_cache = False
+```
 
     def forward(self, idx=None, embeddings=None, attn_mask=None):
         # ... (input handling) ...

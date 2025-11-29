@@ -309,7 +309,7 @@ Benefits:
 ✅ Multilingual capability
 ```
 
-📌 **μOmni uses BPE (Byte-Pair Encoding)** with 5000 tokens
+📌 **μOmni uses BPE (Byte-Pair Encoding)** with 32000 tokens
 
 ---
 

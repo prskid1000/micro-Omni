@@ -10,7 +10,7 @@
   
   "embed_dim": 512,
   
-  "lr": 0.001,
+  "lr": 0.0007,
   "wd": 0.01,
   "warmup_steps": 500,
   "max_steps": 2500000,

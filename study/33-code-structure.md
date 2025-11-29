@@ -10,28 +10,33 @@
 μOmni/
 ├── omni/                      # Core modules
 │   ├── __init__.py
-│   ├── thinker.py            # Decoder-only LLM (20.32M params)
-│   ├── audio_encoder.py      # AuT-Tiny (2.05M params)
-│   ├── vision_encoder.py     # ViT-Tiny (914K params)
-│   ├── talker.py             # Speech generator (2.24M params)
-│   ├── codec.py              # RVQ + Griffin-Lim vocoder + HiFi-GAN neural vocoder
+│   ├── thinker.py            # Decoder-only LLM
+│   ├── audio_encoder.py      # AuT-Tiny audio encoder
+│   ├── vision_encoder.py     # ViT-Tiny vision encoder
+│   ├── talker.py             # Speech generator
+│   ├── ocr_model.py          # OCR model
+│   ├── codec.py              # RVQ + vocoder
 │   ├── tokenizer.py          # BPE tokenizer wrapper
-│   └── utils.py              # All utilities (RMSNorm, RoPE, training helpers, datasets, checkpoint loading)
+│   ├── utils.py              # All utilities (RMSNorm, RoPE, training helpers, datasets, checkpoint loading)
+│   └── __pycache__/
 │
 ├── configs/                   # JSON configurations
 │   ├── thinker_tiny.json     # Thinker config
 │   ├── audio_enc_tiny.json   # Audio encoder config
 │   ├── vision_tiny.json      # Vision encoder config
 │   ├── talker_tiny.json      # Talker config
+│   ├── vocoder_tiny.json     # Vocoder config
+│   ├── ocr_tiny.json         # OCR config
 │   └── omni_sft_tiny.json    # Multimodal SFT config
 │
 ├── scripts/                   # Utility scripts
-│   ├── check_setup.py        # Verify installation
+│   ├── calculate_model_size.py  # Model size calculator
 │   ├── download_production_text.py  # Download text data
 │   ├── download_production_audio.py # Download audio data
 │   ├── download_production_image.py # Download image data
 │   ├── download_production_ocr.py   # Download OCR data
-│   └── make_synthetic_datasets.py   # Generate test data
+│   ├── make_synthetic_datasets.py   # Generate test data
+│   └── __pycache__/
 │
 ├── train_text.py             # Stage A: Thinker pretraining
 ├── train_audio_enc.py        # Stage B: Audio encoder
@@ -41,8 +46,16 @@
 ├── train_ocr.py              # Optional: OCR model
 ├── sft_omni.py              # Stage E: Multimodal SFT
 │
+├── test_audio_enc.py         # Test audio encoder
+├── test_ocr.py               # Test OCR model
+├── test_talker.py            # Test talker
+├── test_thinker.py           # Test thinker
+├── test_vision.py            # Test vision encoder
+├── test_vocoder.py           # Test vocoder
+│
 ├── infer_chat.py            # Inference interface
-
+├── export.py                # Model export script
+│
 ├── data/                    # Training data (create)
 │   ├── text/                # Text corpus files
 │   ├── images/              # Image manifest files
@@ -54,20 +67,36 @@
 │   ├── audio_enc_tiny/
 │   ├── vision_tiny/
 │   ├── talker_tiny/
+│   ├── vocoder_tiny/
+│   ├── ocr_tiny/
 │   └── omni_sft_tiny/
 │
-├── examples/                # Sample inputs
-│   ├── sample_image.png
-│   ├── sample_audio.wav
-│   └── sample_text.txt
+├── export/                  # Exported models
+│   ├── chat_template.json
+│   ├── config.json
+│   ├── generation_config.json
+│   ├── infer_standalone.py
+│   ├── model_info.json
+│   ├── model.safetensors
+│   ├── ocr.pt
+│   ├── preprocessor_config.json
+│   ├── README.md
+│   ├── test_safetensor.py
+│   ├── tokenizer_config.json
+│   ├── tokenizer.model
+│   └── vocoder.pt
+│
+├── examples/                # Sample inputs and examples
+│   └── dataset_filtering_example.py
 │
 ├── study/                   # Documentation (this!)
 │   ├── 00-INDEX.md
-│   ├── 01-what-is-ai.md
+│   ├── 00-prerequisites.md
 │   └── ...
 │
 ├── requirements.txt         # Python dependencies
-└── README.md               # Main README
+├── README.md               # Main README
+└── __pycache__/
 ```
 
 ---

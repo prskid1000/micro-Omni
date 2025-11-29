@@ -671,6 +671,233 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 
 ---
 
+### `configs/thinker_tiny.json` (Stage A - Thinker Language Model)
+
+```json
+{
+  "vocab_size": 32000,
+  "n_layers": 8,
+  "d_model": 384,
+  "d_ff": 1536,
+  "n_heads": 6,
+  "ctx_len": 256,
+  "dropout": 0.1,
+  "rope_theta": 10000,
+  "use_gqa": true,
+  "kv_groups": 3,
+  "use_swiglu": true,
+  "use_moe": false,
+  "num_experts": 8,
+  "num_experts_per_tok": 2,
+  
+  "use_ema": true,
+  "ema_decay": 0.9995,
+  
+  "lr": 0.0006,
+  "wd": 0.01,
+  "warmup_steps": 2000,
+  "max_steps": 3872200,
+  
+  "batch_size": 32,
+  "gradient_accumulation_steps": 1,
+  
+  "use_amp": true,
+  "use_flash": true,
+  "use_compile": false,
+  
+  "num_workers": 0,
+  "drop_last": true,
+  
+  "print_freq": 100,
+  "max_epochs": 2,
+  
+  "val_loss_threshold": 0.1,
+  "val_split": 0.1,
+  "val_freq": 500,
+  "val_batches": 80,
+  "val_batches_epoch_end": 150,
+  
+  "checkpoint_freq": 5000,
+  "max_grad_norm": 1.0,
+  
+  "seed": 42,
+  "shuffle_buffer_size": 10000,
+  
+  "train_text": "data/text/production_corpus.txt",
+  "save_dir": "checkpoints/thinker_tiny",
+  
+  "use_sentences": true,
+  "ctx_len_sample_size": 10000000,
+  "ctx_len_percentile": 95.0,
+  
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 8.0,
+  "lr_spike_duration": 150,
+  "lr_spike_consecutive_increases": 2
+}
+```
+
+**Key Parameters:**
+
+- `vocab_size`: 32000 (BPE tokenizer vocabulary size)
+- `n_layers`: 8 (transformer layers)
+- `d_model`: 384 (model dimension)
+- `ctx_len`: 256 (context length for training)
+- `use_gqa`: true (Grouped Query Attention for efficiency)
+- `use_swiglu`: true (SwiGLU activation function)
+- `use_sentences`: true (sentence-based text splitting for better semantic boundaries)
+- `ctx_len_percentile`: 95.0 (auto-calculate context length from 95th percentile of dataset)
+
+**Training Features:**
+
+- **EMA**: Exponential Moving Average for stable checkpoints
+- **LR Spike**: Automatic plateau recovery mechanism
+- **Sentence Splitting**: Uses regex `(?<=[.!?])\s+` for semantic boundaries
+- **Auto Context Length**: Calculates optimal `ctx_len` from dataset analysis
+
+---
+
+### `configs/audio_enc_tiny.json` (Stage B - Audio Encoder)
+
+```json
+{
+  "mel_bins": 128,
+  "sample_rate": 16000,
+  "frame_hop": 160,
+  "frame_win": 400,
+  "downsample_time": 4,
+  "target_hz": 25,
+  "d_model": 384,
+  "n_layers": 8,
+  "n_heads": 6,
+  "d_ff": 1536,
+  "dropout": 0.3,
+  "use_attention_pooling": false,
+  "lr": 0.0005,
+  "wd": 0.1,
+  "warmup_steps": 100,
+  "max_steps": 100000,
+  "batch_size": 16,
+  "gradient_accumulation_steps": 1,
+  "use_amp": true,
+  "use_flash": true,
+  "use_compile": false,
+  "num_workers": 0,
+  "drop_last": true,
+  "print_freq": 100,
+  "max_epochs": 36,
+  "val_loss_threshold": 0.05,
+  "val_split": 0.1,
+  "val_freq": 100,
+  "val_batches": 80,
+  "val_batches_epoch_end": 150,
+  "checkpoint_freq": 3000,
+  "max_grad_norm": 1.0,
+  "seed": 42,
+  "shuffle_buffer_size": 100,
+  "use_ema": true,
+  "ema_decay": 0.995,
+  "train_csv": "data/audio/production_asr.csv",
+  "save_dir": "checkpoints/audio_enc_tiny",
+  "max_text_len_percentile": 95.0,
+  "max_mel_length_percentile": 95.0,
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
+  "lr_spike_consecutive_increases": 2
+}
+```
+
+**Key Parameters:**
+
+- `mel_bins`: 128 (mel spectrogram frequency bins)
+- `sample_rate`: 16000 (audio sample rate)
+- `target_hz`: 25 (target frame rate after downsampling)
+- `d_model`: 384 (model dimension)
+- `use_attention_pooling`: false (uses mean pooling instead)
+- `max_text_len_percentile`: 95.0 (auto-calculate max text length)
+- `max_mel_length_percentile`: 95.0 (auto-calculate max mel length)
+
+**Training Features:**
+
+- **CTC Loss**: Connectionist Temporal Classification for sequence-to-sequence alignment
+- **EMA**: Exponential Moving Average for stable checkpoints
+- **LR Spike**: Automatic plateau recovery mechanism
+- **Auto Length Calculation**: Percentile-based filtering for clean samples
+
+---
+
+### `configs/talker_tiny.json` (Stage D - Talker Speech Generator)
+
+```json
+{
+  "d_model": 384,
+  "n_layers": 8,
+  "n_heads": 6,
+  "d_ff": 1536,
+  "codebooks": 2,
+  "codebook_size": 128,
+  "dropout": 0.1,
+  "rope_theta": 10000.0,
+  "frame_rate": 12.5,
+  "use_gqa": true,
+  "kv_groups": 1,
+  "use_swiglu": true,
+  "lr": 0.0005,
+  "wd": 0.01,
+  "warmup_steps": 100,
+  "max_steps": 100000,
+  "batch_size": 16,
+  "gradient_accumulation_steps": 1,
+  "use_amp": true,
+  "use_flash": true,
+  "use_compile": false,
+  "num_workers": 0,
+  "drop_last": true,
+  "print_freq": 100,
+  "max_epochs": 36,
+  "val_loss_threshold": 0.05,
+  "val_split": 0.1,
+  "val_freq": 100,
+  "val_batches": 80,
+  "val_batches_epoch_end": 150,
+  "checkpoint_freq": 3000,
+  "max_grad_norm": 1.0,
+  "seed": 42,
+  "shuffle_buffer_size": 1000,
+  "use_ema": true,
+  "ema_decay": 0.995,
+  "sample_rate": 16000,
+  "n_mels": 128,
+  "frame_ms": 80,
+  "tts_csv": "data/audio/production_tts.csv",
+  "save_dir": "checkpoints/talker_tiny",
+  "max_mel_length_percentile": 95.0,
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
+  "lr_spike_consecutive_increases": 2
+}
+```
+
+**Key Parameters:**
+
+- `codebooks`: 2 (number of RVQ codebooks)
+- `codebook_size`: 128 (size of each codebook)
+- `frame_rate`: 12.5 (frames per second for speech generation)
+- `use_gqa`: true (Grouped Query Attention)
+- `kv_groups`: 1 (number of KV groups for GQA)
+- `max_mel_length_percentile`: 95.0 (auto-calculate max mel length)
+
+**Training Features:**
+
+- **RVQ Codec**: Residual Vector Quantization for speech compression
+- **Cross-Entropy Loss**: For predicting next RVQ codes
+- **EMA**: Exponential Moving Average for stable checkpoints
+- **LR Spike**: Automatic plateau recovery mechanism
+
+---
+
 ### `configs/ocr_tiny.json` (Optional - OCR Model)
 
 ```json
@@ -737,24 +964,68 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 
 ```json
 {
-  "save_dir": "checkpoints/vision_tiny",
-  "train_manifest": "data/images/production_annotations.json",
-  "image_root": "data/images",
   "img_size": 224,
   "patch": 16,
-  "d_model": 768,
-  "n_layers": 12,
-  "n_heads": 12,
-  "d_ff": 3072,
+  
+  "d_model": 512,
+  "n_layers": 8,
+  "n_heads": 8,
+  "d_ff": 2048,
   "dropout": 0.1,
+  
   "embed_dim": 512,
+  
+  "lr": 0.0007,
+  "wd": 0.01,
+  "warmup_steps": 500,
+  "max_steps": 2500000,
+  "max_epochs": 36,
+  
+  "batch_size": 8,
+  "gradient_accumulation_steps": 1,
+  "num_workers": 0,
+  "drop_last": true,
+  
+  "use_amp": true,
+  "use_flash": true,
+  "use_compile": false,
+  
+  "max_grad_norm": 1.0,
+  
+  "val_loss_threshold": 0.1,
+  "val_split": 0.1,
+  "val_freq": 500,
+  "val_batches": 80,
+  "val_batches_epoch_end": 150,
+  
+  "print_freq": 50,
+  "checkpoint_freq": 5000,
+  
+  "seed": 42,
+  "shuffle_buffer_size": 100,
+  
+  "use_ema": true,
+  "ema_decay": 0.9995,
+  
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 8.0,
+  "lr_spike_duration": 150,
+  "lr_spike_consecutive_increases": 2,
+  
+  "train_manifest": "data/images/production_annotations.json",
+  "image_root": "data/images",
+  
+  "vocab_size": 32000,
+  "ctx_len": 77,
   "use_thinker_for_text": false,
-  "thinker_ckpt": "checkpoints/thinker_tiny",
-  "text_max_len": 77,
-  "text_n_layers": 6,
+  
+  "text_n_layers": 4,
   "text_n_heads": 8,
   "text_d_ff": 2048,
-  "vocab_size": 32000,
+  "text_max_len": 77,
+  
+  "thinker_ckpt": "checkpoints/thinker_tiny",
+  "thinker_d_model": 384,
   "thinker": {
     "vocab_size": 32000,
     "n_layers": 8,
@@ -768,14 +1039,11 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
     "use_swiglu": true,
     "use_moe": false
   },
+  
   "temperature": 0.07,
-  "batch_size": 32,
-  "gradient_accumulation_steps": 8,
-  "lr": 0.0005,
-  "wd": 0.2,
-  "warmup_steps": 2000,
-  "max_steps": 2500000,
-  "max_epochs": 36,
+  
+  "save_dir": "checkpoints/vision_tiny",
+  
   "use_augmentation": true
 }
 ```
@@ -871,6 +1139,85 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 - `max_text_length`: Auto-calculated when `use_compile: true` to ensure uniform batch sizes
 - All text sequences are padded to this fixed length (samples exceeding threshold are skipped during dataset iteration)
 - Prevents "tensor size mismatch" errors with CUDA graphs compilation
+
+---
+
+### `configs/omni_sft_tiny.json` (Stage E - Multimodal SFT)
+
+```json
+{
+  "thinker_ckpt": "checkpoints/thinker_tiny",
+  "audio_ckpt": "checkpoints/audio_enc_tiny",
+  "vision_ckpt": "checkpoints/vision_tiny",
+  "talker_ckpt": "checkpoints/talker_tiny",
+  "ctx_len": 512,
+  "lr": 5e-05,
+  "wd": 0.01,
+  "warmup_steps": 1000,
+  "max_steps": 1936100,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 1,
+  "use_amp": true,
+  "use_flash": true,
+  "use_compile": false,
+  "num_workers": 0,
+  "drop_last": true,
+  "print_freq": 100,
+  "max_epochs": 2,
+  "val_loss_threshold": 0.05,
+  "val_split": 0.1,
+  "val_freq": 100,
+  "checkpoint_freq": 30,
+  "val_batch_size": 2,
+  "max_grad_norm": 1.0,
+  "use_ema": true,
+  "ema_decay": 0.999,
+  "seed": 42,
+  "shuffle_buffer_size": 100,
+  "thinker": {
+    "vocab_size": 32000,
+    "n_layers": 8,
+    "d_model": 384,
+    "n_heads": 6,
+    "d_ff": 1536,
+    "dropout": 0.1,
+    "rope_theta": 10000,
+    "use_gqa": true,
+    "kv_groups": 3,
+    "use_swiglu": true,
+    "use_moe": false,
+    "num_experts": 8,
+    "num_experts_per_tok": 2
+  },
+  "prompt": "You are an omni assistant.",
+  "sft_mix": {
+    "text_path": "data/text/production_corpus.txt",
+    "image_manifest": "data/images/production_annotations.json",
+    "image_root": "data/images",
+    "asr_csv": "data/audio/production_asr.csv"
+  },
+  "save_dir": "checkpoints/omni_sft_tiny",
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
+  "lr_spike_consecutive_increases": 2
+}
+```
+
+**Key Parameters:**
+
+- `thinker_ckpt`, `audio_ckpt`, `vision_ckpt`, `talker_ckpt`: Paths to trained component checkpoints
+- `ctx_len`: 512 (context length for multimodal sequences)
+- `sft_mix`: Configuration for mixing different data types during training
+- `prompt`: System prompt for the assistant
+- `val_batch_size`: 2 (validation batch size, separate from training)
+
+**Training Features:**
+
+- **Multimodal Fusion**: Combines text, images, and audio inputs
+- **Mixed Data Sampling**: Balances different modalities during training
+- **EMA**: Exponential Moving Average for stable checkpoints
+- **LR Spike**: Automatic plateau recovery mechanism
 
 ---
 
