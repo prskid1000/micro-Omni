@@ -125,6 +125,16 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1, x2 = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]
     return torch.cat([-x2, x1], dim=-1)
 
+class LearnableTemperature(nn.Module):
+    """Learnable temperature parameter for contrastive learning (CLIP-style)."""
+    def __init__(self, init_value=0.07):
+        super().__init__()
+        self.logit_scale = nn.Parameter(torch.ones([]) * torch.log(torch.tensor(1.0 / init_value)))
+    
+    def forward(self):
+        # Clip to prevent scaling logits by more than 100 (CLIP paper requirement)
+        return torch.clamp(self.logit_scale.exp(), min=0.01, max=100.0)
+
 def make_positions(T: int, device: torch.device) -> torch.Tensor:
     """Create position indices from 0 to T-1."""
     return torch.arange(T, device=device).long()
@@ -200,6 +210,22 @@ class EMA:
         """Load EMA state from checkpoint."""
         self.decay = state_dict['decay']
         self.shadow = state_dict['shadow']
+
+class ProjectionHead(nn.Module):
+    """MLP projection head for contrastive learning (CLIP-style)."""
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
+        self.ln = nn.LayerNorm(output_dim)
+    
+    def forward(self, x):
+        return self.ln(self.net(x))
 
 class LRFinder:
     """

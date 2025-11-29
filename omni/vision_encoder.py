@@ -143,45 +143,64 @@ class AttentionPooling(nn.Module):
         return pooled
 
 
-class SimpleTextEncoder(nn.Module):
+class TransformerTextEncoder(nn.Module):
     """
-    Simple text encoder with learned attention pooling and positional encoding.
-    
-    Uses learned attention mechanism to weight different tokens,
-    providing better semantic understanding than simple mean pooling.
+    Transformer-based text encoder for CLIP-style contrastive learning.
+    Uses causal Transformer layers with final token pooling (CLIP standard).
     """
-    def __init__(self, vocab_size: int, d_model: int, max_len: int = 512, dropout: float = 0.1) -> None:
+    def __init__(self, vocab_size: int, d_model: int, n_layers: int = 6, n_heads: int = 8, 
+                 d_ff: int = 2048, max_len: int = 77, dropout: float = 0.1) -> None:
         """
-        Initialize text encoder with attention pooling and positional encoding.
+        Initialize Transformer text encoder.
         
         Args:
             vocab_size: size of vocabulary
             d_model: embedding dimension
-            max_len: maximum sequence length for positional encoding
+            n_layers: number of transformer layers
+            n_heads: number of attention heads
+            d_ff: feedforward dimension
+            max_len: maximum sequence length (CLIP uses 77)
             dropout: dropout rate
         """
         super().__init__()
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+        self.max_len = max_len
+        
         self.token_embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = nn.Embedding(max_len, d_model)
-        self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm(d_model)
-        self.attention_pool = AttentionPooling(d_model)
         
-        # Initialize embeddings properly
+        # Transformer layers (causal)
+        self.layers = nn.ModuleList([
+            nn.TransformerDecoderLayer(
+                d_model=d_model,
+                nhead=n_heads,
+                dim_feedforward=d_ff,
+                dropout=dropout,
+                activation='gelu',
+                batch_first=True,
+                norm_first=True
+            )
+            for _ in range(n_layers)
+        ])
+        
+        self.ln_final = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        
+        # Initialize embeddings
         nn.init.normal_(self.token_embed.weight, mean=0, std=0.02)
         nn.init.normal_(self.pos_embed.weight, mean=0, std=0.02)
     
-    def forward(self, token_ids: torch.Tensor, return_cls: bool = True, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, token_ids: torch.Tensor, return_cls: bool = True) -> torch.Tensor:
         """
-        Encode text tokens to embeddings with positional encoding.
+        Encode text tokens using Transformer.
         
         Args:
             token_ids: (B, T) or (T,) token indices
-            return_cls: if True, return pooled embedding; if False, return all tokens
-            mask: (B, T) attention mask (1=valid, 0=padding)
+            return_cls: if True, return final token embedding; if False, return all tokens
         
         Returns:
-            If return_cls=True: (B, d_model) pooled embedding via attention
+            If return_cls=True: (B, d_model) final token embedding
             If return_cls=False: (B, T, d_model) all token embeddings
         """
         # Handle both batched and unbatched input
@@ -193,20 +212,37 @@ class SimpleTextEncoder(nn.Module):
         
         B, T = token_ids.shape
         
+        # Truncate if too long
+        if T > self.max_len:
+            token_ids = token_ids[:, :self.max_len]
+            T = self.max_len
+        
         # Token embeddings + positional embeddings
         token_emb = self.token_embed(token_ids)  # (B, T, d_model)
         positions = torch.arange(T, device=token_ids.device).unsqueeze(0).expand(B, -1)  # (B, T)
         pos_emb = self.pos_embed(positions)  # (B, T, d_model)
         
-        # Combine and normalize
-        embeddings = self.dropout(self.layer_norm(token_emb + pos_emb))  # (B, T, d_model)
+        # Combine embeddings
+        x = self.dropout(token_emb + pos_emb)  # (B, T, d_model)
+        
+        # Create causal mask for autoregressive attention
+        causal_mask = torch.triu(torch.ones(T, T, device=token_ids.device), diagonal=1).bool()
+        causal_mask = causal_mask.unsqueeze(0).expand(B, -1, -1)  # (B, T, T)
+        
+        # Transformer layers (using decoder layer as encoder with self-attention)
+        for layer in self.layers:
+            # For encoder-like behavior, we use the same tensor for both tgt and memory
+            # and apply causal masking
+            x = layer(x, x, tgt_mask=causal_mask)
+        
+        x = self.ln_final(x)  # (B, T, d_model)
         
         if not return_cls:
             # Return all tokens
-            return embeddings.squeeze(0) if squeeze_output else embeddings
+            return x.squeeze(0) if squeeze_output else x
         
-        # Apply learned attention pooling
-        pooled = self.attention_pool(embeddings, mask)  # (B, d_model)
+        # CLIP uses the final token (EOS token) embedding
+        final_token_emb = x[:, -1, :]  # (B, d_model)
         
-        return pooled.squeeze(0) if squeeze_output else pooled
+        return final_token_emb.squeeze(0) if squeeze_output else final_token_emb
 

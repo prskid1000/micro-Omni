@@ -136,10 +136,11 @@ python train_vision.py --config configs/vision_tiny.json
 **Configuration Note:**
 
 - Uses trained tokenizer from Stage A (`thinker_ckpt/tokenizer.model`)
-- Configurable text encoding: `use_thinker_for_text` (default: true)
-  - `true`: Uses frozen Thinker model for contextual embeddings (recommended)
-  - `false`: Uses simple tokenizer + embedding layer (lighter option)
+- Configurable text encoding: `use_thinker_for_text` (default: false)
+  - `true`: Uses frozen Thinker model for contextual embeddings (recommended for quality)
+  - `false`: Uses TransformerTextEncoder (CLIP-style) with causal attention and final token pooling
 - If tokenizer not found, trains new one from image captions
+- **CLIP-style training**: Learnable temperature, MLP projections, proper contrastive loss
 
 ### Stage D: Talker + RVQ
 

@@ -189,7 +189,7 @@ def calculate_vision_encoder_params(img_size, patch, d_model, n_layers, n_heads,
       - MLP: fc1 (bias=True), fc2 (bias=True)
       - LayerNorm: weight + bias (2*d_model per layer)
     - Final norm: RMSNorm (weight only, d_model params)
-    - Optional text encoder: SimpleTextEncoder with AttentionPooling (when not using Thinker)
+    - Optional text encoder: TransformerTextEncoder (CLIP-style) (when not using Thinker)
     """
     params = 0
     
@@ -231,11 +231,25 @@ def calculate_vision_encoder_params(img_size, patch, d_model, n_layers, n_heads,
     
     # Text encoder (when not using Thinker)
     if not use_thinker_for_text:
-        # SimpleTextEncoder with AttentionPooling
-        # Embedding: vocab_size × d_model
-        params += vocab_size * d_model
-        # AttentionPooling: Linear(d_model, 1) - single attention weight per dimension
-        params += d_model * 1  # No bias in attention layer
+        # TransformerTextEncoder (CLIP-style)
+        text_n_layers = cfg.get("text_n_layers", 6)
+        text_n_heads = cfg.get("text_n_heads", 8)
+        text_d_ff = cfg.get("text_d_ff", 2048)
+        
+        # Token and position embeddings: vocab_size × d_model + max_len × d_model
+        text_max_len = cfg.get("text_max_len", 77)
+        params += vocab_size * d_model  # token embeddings
+        params += text_max_len * d_model  # position embeddings
+        
+        # Transformer layers: each layer has 2 sub-layers (self-attn + FF)
+        for _ in range(text_n_layers):
+            # Self-attention: Q, K, V projections + output projection
+            # 3 × (d_model × d_model) for QKV, + (d_model × d_model) for output
+            params += 4 * d_model * d_model
+            # Feed-forward: 2 × (d_model × d_ff)
+            params += 2 * d_model * text_d_ff
+            # Layer norms: 2 × (2 × d_model) for attention and FF
+            params += 4 * d_model
     
     # Image projection head: d_model → embed_dim (bias=True by default)
     if embed_dim is None:
@@ -505,7 +519,7 @@ def calculate_model_sizes():
         results["vision_encoder"] = params
         print(f"  Config: {cfg['n_layers']} layers, d_model={cfg['d_model']}, n_heads={cfg['n_heads']}, d_ff={cfg['d_ff']}")
         print(f"  Image size: {cfg['img_size']}×{cfg['img_size']}, patch size: {cfg['patch']}")
-        print(f"  Text encoder: {'Thinker (frozen)' if cfg.get('use_thinker_for_text', False) else 'SimpleTextEncoder w/ AttentionPooling'}")
+        print(f"  Text encoder: {'Thinker (frozen)' if cfg.get('use_thinker_for_text', False) else 'TransformerTextEncoder (CLIP-style)'}")
         print(f"  Embed dim: {cfg.get('embed_dim', cfg['d_model'])}")
         print(f"  Parameters: {params:,} ({format_size(params)})")
     else:

@@ -256,7 +256,7 @@ Image (224×224×3)
 │ Use as image representation         │
 └──────────────────────────────────────┘
 
-μOmni: 14×14 patches, d_model=128, 4 layers
+μOmni: 14×14 patches, d_model=768, 12 layers (ViT-Base)
 ```
 
 ---

@@ -458,13 +458,13 @@ Example: If LR is too high:
 
 ### Current Configuration (Tiny)
 
-**Total: 25.65M parameters** - Fits on 12GB GPU
+**Total: 110.31M parameters** - Requires 24GB+ GPU
 
 | Component          | Config                                        | Parameters |
 | ------------------ | --------------------------------------------- | ---------- |
 | **Thinker**        | d_model=256, n_layers=4, n_heads=4, d_ff=1024 | 20.32M     |
 | **Audio Encoder**  | d_model=192, n_layers=4, n_heads=3, d_ff=768  | 2.05M      |
-| **Vision Encoder** | d_model=128, n_layers=4, n_heads=2, d_ff=512  | 914K       |
+| **Vision Encoder** | d_model=768, n_layers=12, n_heads=12, d_ff=3072 + TransformerTextEncoder | 85.7M      |
 | **Talker**         | d_model=192, n_layers=4, n_heads=3, d_ff=768  | 2.24M      |
 
 ### Scaling to Larger Models

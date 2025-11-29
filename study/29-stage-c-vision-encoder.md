@@ -30,55 +30,67 @@
 {
   "img_size": 224,
   "patch": 16, // 14×14 = 196 patches
-  "d_model": 128,
-  "n_layers": 4, // Compact ViT
-  "n_heads": 2,
-  "d_ff": 512,
+  "d_model": 768,  // ViT-Base
+  "n_layers": 12,  // ViT-Base layers
+  "n_heads": 12,   // ViT-Base heads
+  "d_ff": 3072,    // ViT-Base FF dim
 
-  "train_manifest": "data/images/annotations.json",
+  "train_manifest": "data/images/production_annotations.json",
   "image_root": "data/images",
-  "use_thinker_for_text": true, // Use Thinker model (true) or simple embedding (false)
+  "use_thinker_for_text": false, // Use Thinker (true) or TransformerTextEncoder (false)
   "thinker_ckpt": "checkpoints/thinker_tiny", // Uses tokenizer from Stage A
-  "ctx_len": 512, // Context length for text encoding
+  "text_max_len": 77,  // CLIP standard context length
+  "text_n_layers": 6,  // Text encoder layers
+  "text_n_heads": 8,   // Text encoder heads
+  "text_d_ff": 2048,   // Text encoder FF dim
   "vocab_size": 32000, // Tokenizer vocabulary size
-  "embed_dim": 128, // Contrastive embedding dimension
-  "temperature": 0.07, // Contrastive loss temperature
+  "embed_dim": 512,    // CLIP standard embedding dimension
+  "temperature": 0.07, // Learnable temperature (CLIP standard)
 
-  "batch_size": 8,
-  "max_epochs": 3,
-  "learning_rate": 3e-4
+  "batch_size": 32,
+  "gradient_accumulation_steps": 8,  // Effective batch size: 256
+  "lr": 0.0005,      // CLIP learning rate
+  "wd": 0.2,         // CLIP weight decay
+  "warmup_steps": 2000, // Longer warmup for stability
+  "max_steps": 2500000,
+  "max_epochs": 36,
+  "use_augmentation": true  // Strong data augmentation
 }
 ```
 
 **Key Configuration Notes:**
 
 - **`use_thinker_for_text`**: Whether to use Thinker model for text encoding
-  - **`true` (recommended)**: Uses frozen Thinker model - better contextual embeddings, aligned with Stage E
-  - **`false`**: Uses simple tokenizer + embedding - lighter, faster, but less contextual
+  - **`true`**: Uses frozen Thinker model - better contextual embeddings, aligned with Stage E
+  - **`false` (recommended)**: Uses TransformerTextEncoder (CLIP-style) - proper Transformer with causal attention and final token pooling
 - **`thinker_ckpt`**: Directory containing the trained tokenizer from Stage A (`tokenizer.model`) and optionally trained Thinker (`thinker.pt`)
-- **`ctx_len`**: Context length for text encoding (matches Thinker's context length)
-- **`vocab_size`**: Vocabulary size (automatically detected from tokenizer if available)
+- **`text_max_len`**: Context length for TransformerTextEncoder (CLIP standard: 77 tokens)
+- **`embed_dim`**: Shared embedding dimension for contrastive learning (CLIP standard: 512)
+- **`temperature`**: Learnable temperature parameter (adapts during training)
+- **CLIP-style training**: MLP projection heads, symmetric loss, proper contrastive learning
 - If tokenizer not found, it will be trained from image captions
 
 ### Expected Progress
 
 ```
 Random init → High contrastive loss (random alignment)
-After 1 epoch → Loss decreasing (learning image-text alignment)
-After 3 epochs → Good vision-language alignment (ready for Stage E)
+After 10k steps → Loss decreasing (learning image-text alignment)
+After 100k steps → Good vision-language alignment
+After 2.5M steps → Excellent CLIP-style alignment (ready for Stage E)
 ```
 
 ### Metrics
 
-- **Loss:** Contrastive loss (InfoNCE) - measures image-text alignment
+- **Loss:** Symmetric contrastive loss (InfoNCE) - measures image-text alignment
+- **Temperature:** Learnable parameter (starts at 0.07, adapts during training)
 - **Validation Loss:** Average contrastive loss on validation set
 - **Target:** Low contrastive loss indicates good vision-language alignment
 
 **Expected Validation Loss:**
 
-- Target Contrastive Loss: < 0.5
-- Good: < 0.3
-- Excellent: < 0.2
+- Target Contrastive Loss: < 2.0 (CLIP-style training)
+- Good: < 1.5
+- Excellent: < 1.0
 
 ---
 

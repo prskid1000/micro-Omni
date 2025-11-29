@@ -563,7 +563,7 @@ for batch in dataloader:
     img_emb = img_proj(cls_output)  # (B, embed_dim)
     img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
 
-    # 2. Encode captions (configurable: Thinker or SimpleTextEncoder with attention pooling)
+    # 2. Encode captions (configurable: Thinker or TransformerTextEncoder)
     text_embs = []
     for caption in captions:
         token_ids = tokenizer.encode(caption)  # Use trained tokenizer
@@ -576,11 +576,11 @@ for batch in dataloader:
                 text_emb = think(idx=token_tensor)  # (1, T, thinker_d_model)
             text_emb = text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,) - mean pooling
         else:
-            # Option 2: Use SimpleTextEncoder with learned attention pooling
-            # Attention pooling learns which tokens are important for each caption
+            # Option 2: Use TransformerTextEncoder (CLIP-style)
+            # Uses causal Transformer with final token pooling (CLIP standard)
             token_tensor = torch.tensor(token_ids)  # (T,)
             text_emb = text_encoder(token_tensor, return_cls=True)  # (d_model,)
-            # Uses AttentionPooling internally - learns to weight tokens by importance
+            # Final token embedding captures full context (like CLIP)
 
         text_embs.append(text_emb)
     text_embs = torch.stack(text_embs)  # (B, d_model or thinker_d_model)
@@ -603,10 +603,10 @@ for batch in dataloader:
 - If tokenizer not found, trains new one from image captions
 - **Configurable text encoding** via `use_thinker_for_text`:
   - **`true` (recommended)**: Uses frozen Thinker model for contextual embeddings - better quality, aligned with Stage E
-  - **`false`**: Uses **SimpleTextEncoder with learned attention pooling** - lighter, faster, learns to weight important tokens
-    - **AttentionPooling**: Learns which tokens are semantically important for each caption
-    - **Masked attention**: Handles variable-length captions properly (ignores padding)
-    - **Better than mean pooling**: Reduces train/val gap, improves text-image alignment
+  - **`false`**: Uses **TransformerTextEncoder (CLIP-style)** - proper Transformer with causal attention and final token pooling
+    - **Causal Transformer**: 6 layers, 8 heads, context length 77 (CLIP standard)
+    - **Final token pooling**: Uses EOS token embedding (CLIP standard)
+    - **Better than attention pooling**: Proper contextual understanding, industry standard
 - **Contrastive learning** aligns image and text embeddings in shared space
 - **InfoNCE loss** encourages matching image-caption pairs to be similar
 

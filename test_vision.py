@@ -13,7 +13,7 @@ import random
 import numpy as np
 from PIL import Image
 from torchvision import transforms
-from omni.vision_encoder import ViTTiny, SimpleTextEncoder
+from omni.vision_encoder import ViTTiny, TransformerTextEncoder
 from omni.utils import ImgCapDataset, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
@@ -168,9 +168,17 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
                 text_proj_state = strip_orig_mod(text_proj_state)
                 text_proj.load_state_dict(text_proj_state, strict=False)
         else:
-            # Use SimpleTextEncoder with attention pooling
-            ctx_len = cfg.get("ctx_len", 512)
-            text_encoder = SimpleTextEncoder(vocab_size, d_model, max_len=ctx_len).to(device)
+            # Use TransformerTextEncoder (CLIP-style)
+            ctx_len = cfg.get("text_max_len", 77)
+            text_encoder = TransformerTextEncoder(
+                vocab_size, 
+                d_model, 
+                n_layers=cfg.get("text_n_layers", 6),
+                n_heads=cfg.get("text_n_heads", 8),
+                d_ff=cfg.get("text_d_ff", 2048),
+                max_len=ctx_len,
+                dropout=cfg.get("dropout", 0.1)
+            ).to(device)
             # Try loading from both text_encoder and text_embed (backward compatibility)
             if "text_encoder" in checkpoint:
                 text_encoder.load_state_dict(checkpoint["text_encoder"])
@@ -181,7 +189,7 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
                 except:
                     pass
             text_encoder.eval()
-            print(f"✓ Using SimpleTextEncoder with attention pooling for text encoding")
+            print(f"✓ Using TransformerTextEncoder for text encoding")
     
     model.eval()
     img_proj.eval()
@@ -196,8 +204,8 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
 
 
 def encode_caption(caption, tok, text_encoder, cfg, device="cuda", use_thinker=True):
-    """Encode caption using tokenizer and either Thinker model or SimpleTextEncoder"""
-    ctx_len = cfg.get("ctx_len", 512)
+    """Encode caption using tokenizer and either Thinker model or TransformerTextEncoder"""
+    ctx_len = cfg.get("text_max_len", 77)  # CLIP standard context length
     
     # Tokenize caption
     token_ids = tok.encode(caption)
@@ -218,10 +226,10 @@ def encode_caption(caption, tok, text_encoder, cfg, device="cuda", use_thinker=T
         with torch.no_grad():
             # Use Thinker to get contextual embeddings
             text_emb = text_encoder(idx=token_tensor)  # (1, T, thinker_d_model)
-        # Use mean pooling for Thinker (attention pooling only for SimpleTextEncoder)
+        # Use mean pooling for Thinker (final token pooling for TransformerTextEncoder)
         return text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
     else:
-        # Use SimpleTextEncoder with learned attention pooling
+        # Use TransformerTextEncoder (CLIP-style)
         with torch.no_grad():
             text_emb = text_encoder(token_tensor, return_cls=True)  # (d_model,)
         return text_emb

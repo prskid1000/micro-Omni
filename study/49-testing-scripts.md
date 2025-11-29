@@ -274,7 +274,7 @@ python test_audio_enc.py \
 
 ```
 Image Dataset → ViTTiny → Image Projection → Image Embeddings
-Caption → Text Encoder (Thinker/SimpleTextEncoder) → Text Projection → Text Embeddings
+Caption → Text Encoder (Thinker/TransformerTextEncoder) → Text Projection → Text Embeddings
 → Contrastive Similarity & Retrieval Metrics
 ```
 
@@ -319,7 +319,7 @@ python test_vision.py \
 
 **Key Features:**
 
-- **Proper Text Encoding**: Uses trained Thinker model or SimpleTextEncoder (matches training)
+- **Proper Text Encoding**: Uses trained Thinker model or TransformerTextEncoder (matches training)
 - **CLIP-style Evaluation**: Measures image-text alignment via contrastive learning
 - **Embedding Quality Analysis**: Detects collapse, measures diversity
 - **Retrieval Performance**: R@K metrics for image-text matching
@@ -472,13 +472,13 @@ The vision encoder test script loads multiple components:
 1. **ViT Model** (`vit`): Vision transformer for image encoding
 2. **Image Projection** (`img_proj`): Linear → Dropout → LayerNorm
 3. **Text Projection** (`text_proj`): Linear → Dropout → LayerNorm
-4. **Text Encoder** (optional): Thinker model or SimpleTextEncoder
+4. **Text Encoder** (optional): Thinker model or TransformerTextEncoder
 5. **Tokenizer**: For text encoding (from Thinker checkpoint)
 
 **Configuration-Based Text Encoder:**
 
 - If `use_thinker_for_text=true`: Loads frozen Thinker model (better quality)
-- If `use_thinker_for_text=false`: Loads SimpleTextEncoder with attention pooling
+- If `use_thinker_for_text=false`: Loads TransformerTextEncoder (CLIP-style)
 - Retrieval metrics only available if text encoder is present
 
 ---
@@ -694,7 +694,7 @@ After individual tests pass:
    - Detected via diversity score < 0.05
 
 7. **Text encoder usage:**
-   - Loads trained Thinker model (frozen) or SimpleTextEncoder
+   - Loads trained Thinker model (frozen) or TransformerTextEncoder
    - Encodes captions using same method as training
    - Projects text embeddings to contrastive space
    - Enables proper image-text retrieval metrics

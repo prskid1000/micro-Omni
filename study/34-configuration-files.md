@@ -738,37 +738,45 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 ```json
 {
   "save_dir": "checkpoints/vision_tiny",
-  "train_manifest": "data/images/annotations.json",
+  "train_manifest": "data/images/production_annotations.json",
   "image_root": "data/images",
   "img_size": 224,
   "patch": 16,
-  "d_model": 128,
-  "n_layers": 4,
-  "n_heads": 2,
-  "d_ff": 512,
-  "dropout": 0.3,
-  "embed_dim": 128,
-  "use_thinker_for_text": true,
+  "d_model": 768,
+  "n_layers": 12,
+  "n_heads": 12,
+  "d_ff": 3072,
+  "dropout": 0.1,
+  "embed_dim": 512,
+  "use_thinker_for_text": false,
   "thinker_ckpt": "checkpoints/thinker_tiny",
-  "ctx_len": 512,
+  "text_max_len": 77,
+  "text_n_layers": 6,
+  "text_n_heads": 8,
+  "text_d_ff": 2048,
   "vocab_size": 32000,
   "thinker": {
     "vocab_size": 32000,
-    "n_layers": 4,
-    "d_model": 256,
-    "n_heads": 4,
-    "d_ff": 1024,
-    "dropout": 0.3,
+    "n_layers": 8,
+    "d_model": 384,
+    "n_heads": 6,
+    "d_ff": 1536,
+    "dropout": 0.1,
     "rope_theta": 10000,
-    "use_gqa": false,
+    "use_gqa": true,
+    "kv_groups": 3,
     "use_swiglu": true,
     "use_moe": false
   },
   "temperature": 0.07,
-  "batch_size": 8,
-  "lr": 3e-4,
-  "max_steps": 199716,
-  "max_epochs": 3
+  "batch_size": 32,
+  "gradient_accumulation_steps": 8,
+  "lr": 0.0005,
+  "wd": 0.2,
+  "warmup_steps": 2000,
+  "max_steps": 2500000,
+  "max_epochs": 36,
+  "use_augmentation": true
 }
 ```
 
@@ -777,7 +785,11 @@ print(f"Samples skipped (ctc_too_short): {stats['ctc_too_short']}")  # ASR only
 - `train_manifest`: Path to JSON file with image-caption pairs (format: `[{"image": "path", "caption": "text"}, ...]`)
 - `image_root`: Root directory for image files
 - `thinker_ckpt`: Directory containing trained tokenizer from Stage A (`tokenizer.model`) and optionally trained Thinker (`thinker.pt`)
-- `use_thinker_for_text`: Whether to use Thinker model (true) or simple tokenizer+embedding (false) for text encoding
+- `use_thinker_for_text`: Whether to use Thinker model (true) or TransformerTextEncoder (false) for text encoding
+- **CLIP-style settings**: ViT-Base architecture (768 dim, 12 layers), 512 embed dim, TransformerTextEncoder with 77 token context
+- **MLP projections**: 2-layer projection heads with GELU activation
+- **Learnable temperature**: Adapts during training (CLIP standard)
+- **CLIP optimizer**: lr=5e-4, wd=0.2, betas=(0.9, 0.98)
   - **`true` (recommended)**: Uses frozen Thinker model for contextual text embeddings - better quality, more aligned with Stage E
   - **`false`**: Uses simple tokenizer + embedding layer - lighter, faster, but less contextual
 - `ctx_len`: Context length for text encoding (matches Thinker's context length)

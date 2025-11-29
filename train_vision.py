@@ -2,7 +2,7 @@ import argparse, json, os, torch
 from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
-from omni.vision_encoder import ViTTiny, SimpleTextEncoder
+from omni.vision_encoder import ViTTiny, TransformerTextEncoder
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.utils import (
@@ -10,7 +10,7 @@ from omni.utils import (
     check_gradient_explosion, ImgCapDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, find_checkpoint, save_training_metadata, load_training_metadata,
-    LRSpike
+    LRSpike, LearnableTemperature, ProjectionHead
 )
 from tqdm import tqdm
 
@@ -35,17 +35,13 @@ def main(cfg):
     # torch.compile() support (optional, PyTorch 2.0+)
     use_compile = cfg.get("use_compile", False)
     
-    d_model = cfg.get("d_model", 128)
-    vit = ViTTiny(cfg.get("img_size", 224), cfg.get("patch", 16), d_model, cfg.get("n_layers", 4), cfg.get("n_heads", 2), cfg.get("d_ff", 512), cfg.get("dropout", 0.1), compile_model=use_compile).to(device)
+    d_model = cfg.get("d_model", 768)  # ViT-Base: 768
+    vit = ViTTiny(cfg.get("img_size", 224), cfg.get("patch", 16), d_model, cfg.get("n_layers", 12), cfg.get("n_heads", 12), cfg.get("d_ff", 3072), cfg.get("dropout", 0.1), compile_model=use_compile).to(device)
     
     # Use contrastive learning (CLIP-style) for proper vision-language alignment
     # Project image CLS token to embedding space for contrastive learning
-    embed_dim = cfg.get("embed_dim", d_model)  # Embedding dimension for contrastive learning
-    img_proj = nn.Sequential(
-        nn.Linear(d_model, embed_dim),
-        nn.Dropout(cfg.get("dropout", 0.1)),
-        nn.LayerNorm(embed_dim)
-    ).to(device)
+    embed_dim = cfg.get("embed_dim", 512)  # CLIP standard: 512
+    img_proj = ProjectionHead(d_model, d_model, embed_dim).to(device)
     
     # Configurable: Use Thinker model or simple tokenizer+embedding for text encoding
     use_thinker_for_text = cfg.get("use_thinker_for_text", True)
@@ -65,11 +61,7 @@ def main(cfg):
         # Use Thinker model for text encoding (frozen) - better contextual embeddings
         print("Using Thinker model for text encoding (recommended)")
         thinker_d_model = cfg.get("thinker_d_model", 256)
-        text_proj = nn.Sequential(
-            nn.Linear(thinker_d_model, embed_dim),
-            nn.Dropout(cfg.get("dropout", 0.1)),
-            nn.LayerNorm(embed_dim)
-        ).to(device)
+        text_proj = ProjectionHead(thinker_d_model, thinker_d_model, embed_dim).to(device)
         
         # Load Thinker model architecture
         think = ThinkerLM(
@@ -111,13 +103,9 @@ def main(cfg):
         think.eval()
         print("✓ Thinker model frozen (used only for text encoding)")
     else:
-        # Use SimpleTextEncoder with learned attention pooling (lighter, faster, but less contextual than Thinker)
-        print(f"Using SimpleTextEncoder with learned attention pooling for text encoding")
-        text_proj = nn.Sequential(
-            nn.Linear(d_model, embed_dim),
-            nn.Dropout(cfg.get("dropout", 0.1)),
-            nn.LayerNorm(embed_dim)
-        ).to(device)
+        # Use TransformerTextEncoder (CLIP-style) for proper text encoding
+        print(f"Using TransformerTextEncoder for text encoding")
+        text_proj = ProjectionHead(d_model, d_model, embed_dim).to(device)
         # text_encoder will be created after tokenizer is loaded
     
     # Load or train tokenizer
@@ -152,13 +140,16 @@ def main(cfg):
     
     # Create text encoder if not using Thinker
     if not use_thinker_for_text:
-        text_encoder = SimpleTextEncoder(
+        text_encoder = TransformerTextEncoder(
             vocab_size, 
             d_model, 
-            max_len=ctx_len, 
+            n_layers=cfg.get("text_n_layers", 6),
+            n_heads=cfg.get("text_n_heads", 8),
+            d_ff=cfg.get("text_d_ff", 2048),
+            max_len=cfg.get("text_max_len", 77),  # CLIP standard
             dropout=cfg.get("dropout", 0.1)
         ).to(device)
-        print(f"✓ Created SimpleTextEncoder with vocab_size={vocab_size}, d_model={d_model}, max_len={ctx_len}, pooling=attention")
+        print(f"✓ Created TransformerTextEncoder with vocab_size={vocab_size}, d_model={d_model}, n_layers={cfg.get('text_n_layers', 6)}, max_len={cfg.get('text_max_len', 77)}")
     
     # Initialize projections with Xavier uniform (better than normal(0.01))
     for module in [img_proj, text_proj]:
@@ -172,12 +163,13 @@ def main(cfg):
                 nn.init.zeros_(m.bias)
     print("✓ Initialized projection weights with Xavier uniform")
     
-    # Optimizer: include text_encoder if using simple mode
-    opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters())
+    # Optimizer: include text_encoder, temperature, and projection heads
+    opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters()) + list(temperature.parameters())
     if text_encoder is not None:
         opt_params += list(text_encoder.parameters())
         print(f"✓ Optimizer includes text_encoder parameters")
-    opt = torch.optim.AdamW(opt_params, lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
+    # CLIP optimizer settings
+    opt = torch.optim.AdamW(opt_params, lr=cfg.get("lr", 5e-4), weight_decay=cfg.get("wd", 0.2), betas=(0.9, 0.98))
     
     # EMA for improved model quality (optional)
     use_ema = cfg.get("use_ema", False)
@@ -191,17 +183,18 @@ def main(cfg):
                 self.vit = vit
                 self.img_proj = img_proj
                 self.text_proj = text_proj
+                self.temperature = temperature
                 if text_encoder is not None:
                     self.text_encoder = text_encoder
         ema_model = EMAWrapper()
         ema = EMA(ema_model, decay=ema_decay, device=device)
         logger.info(f"✓ EMA enabled with decay={ema_decay}")
     
-    # Contrastive loss (InfoNCE)
-    temperature = cfg.get("temperature", 0.07)  # Temperature for contrastive loss
+    # Contrastive loss (InfoNCE) with learnable temperature
+    temperature = LearnableTemperature(init_value=cfg.get("temperature", 0.07)).to(device)
     
-    # Learning rate scheduler with warmup
-    warmup_steps = cfg.get("warmup_steps", 500)
+    # Learning rate scheduler with warmup (CLIP-style: longer warmup, cosine decay)
+    warmup_steps = cfg.get("warmup_steps", 2000)
     max_steps = cfg.get("max_steps", 5000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
@@ -234,7 +227,7 @@ def main(cfg):
         print(f"Gradient accumulation: {accumulation_steps} steps")
     
     def encode_caption(caption):
-        """Encode caption using tokenizer and either Thinker model or SimpleTextEncoder"""
+        """Encode caption using tokenizer and either Thinker model or TransformerTextEncoder"""
         # Handle two possible caption representations:
         # - A raw Python string (tokenize here)
         # - A 1D torch.Tensor or list of token ids (already tokenized by the dataset worker)
@@ -266,7 +259,7 @@ def main(cfg):
             # Mean pooling across tokens
             return text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
         else:
-            # Use SimpleTextEncoder with learned attention pooling
+            # Use TransformerTextEncoder (CLIP-style)
             with (torch.no_grad() if not text_encoder.training else torch.enable_grad()):
                 text_emb = text_encoder(token_tensor, return_cls=True)  # (d_model,)
             return text_emb
@@ -337,6 +330,7 @@ def main(cfg):
             "vit": (vit, vit.load_state_dict),
             "img_proj": (img_proj, img_proj.load_state_dict),
             "text_proj": (text_proj, text_proj.load_state_dict),
+            "temperature": (temperature, temperature.load_state_dict),
             "text_encoder": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,
             "text_embed": (text_encoder, text_encoder.load_state_dict) if text_encoder is not None else None,  # Backward compatibility
             "optimizer": (opt, opt.load_state_dict),
@@ -447,7 +441,7 @@ def main(cfg):
                                 token_embs = think(idx=token_batch, return_embeddings=True)
                             text_embs = token_embs.mean(dim=1)  # (B, thinker_d_model)
                         else:
-                            # SimpleTextEncoder supports batched input and returns pooled (B, d_model)
+                            # TransformerTextEncoder supports batched input and returns pooled (B, d_model)
                             text_embs = text_encoder(token_batch, return_cls=True)
                     else:
                         # Fallback: handle strings or 1D tensors per-sample
@@ -457,8 +451,9 @@ def main(cfg):
                     
                     # Contrastive loss (InfoNCE)
                     # Similarity matrix: (B, B)
-                    logits_i2t = torch.matmul(img_emb, text_emb.t()) / temperature  # Image-to-Text (B, B)
-                    logits_t2i = torch.matmul(text_emb, img_emb.t()) / temperature  # Text-to-Image (B, B)
+                    temp = temperature()
+                    logits_i2t = torch.matmul(img_emb, text_emb.t()) / temp  # Image-to-Text (B, B)
+                    logits_t2i = torch.matmul(text_emb, img_emb.t()) / temp  # Text-to-Image (B, B)
                     labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
                     loss_i2t = nn.CrossEntropyLoss()(logits_i2t, labels)
                     loss_t2i = nn.CrossEntropyLoss()(logits_t2i, labels)
@@ -485,8 +480,9 @@ def main(cfg):
                 text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
                 
                 # Contrastive loss (InfoNCE)
-                logits_i2t = torch.matmul(img_emb, text_emb.t()) / temperature  # Image-to-Text (B, B)
-                logits_t2i = torch.matmul(text_emb, img_emb.t()) / temperature  # Text-to-Image (B, B)
+                temp = temperature()
+                logits_i2t = torch.matmul(img_emb, text_emb.t()) / temp  # Image-to-Text (B, B)
+                logits_t2i = torch.matmul(text_emb, img_emb.t()) / temp  # Text-to-Image (B, B)
                 labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
                 loss_i2t = nn.CrossEntropyLoss()(logits_i2t, labels)
                 loss_t2i = nn.CrossEntropyLoss()(logits_t2i, labels)
@@ -532,6 +528,19 @@ def main(cfg):
                     grad_norm_vit_before = clip_gradients(vit, max_grad_norm)
                     grad_norm_img_proj_before = clip_gradients(img_proj, max_grad_norm)
                     grad_norm_text_proj_before = clip_gradients(text_proj, max_grad_norm)
+                    grad_norm_temp_before = clip_gradients(temperature, max_grad_norm)
+                    
+                    if text_encoder is not None:
+                        grad_norm_text_enc_before = clip_gradients(text_encoder, max_grad_norm)
+                    
+                    # Check for large gradients (log warning if > 5x max_grad_norm)
+                    all_grad_norms = [grad_norm_vit_before, grad_norm_img_proj_before, grad_norm_text_proj_before, grad_norm_temp_before]
+                    if text_encoder is not None:
+                        all_grad_norms.append(grad_norm_text_enc_before)
+                    
+                    max_grad = max(all_grad_norms)
+                    if max_grad > max_grad_norm * 5:
+                        logger.warning(f"Large gradient detected: {max_grad:.2f} (vit: {grad_norm_vit_before:.2f}, img_proj: {grad_norm_img_proj_before:.2f}, text_proj: {grad_norm_text_proj_before:.2f}, temp: {grad_norm_temp_before:.2f}{f', text_enc: {grad_norm_text_enc_before:.2f}' if text_encoder is not None else ''})")
                     
                     # Check for gradient explosion AFTER clipping
                     # Use a higher threshold (10x max_grad_norm) since we've already clipped
@@ -540,9 +549,15 @@ def main(cfg):
                     grad_norm_vit_after, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=explosion_threshold, raise_on_error=False)
                     grad_norm_proj_after, is_exploded_proj = check_gradient_explosion(img_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
                     grad_norm_text_proj_after, is_exploded_text_proj = check_gradient_explosion(text_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
+                    grad_norm_temp_after, is_exploded_temp = check_gradient_explosion(temperature, max_grad_norm=explosion_threshold, raise_on_error=False)
                     
-                    if is_exploded_vit or is_exploded_proj or is_exploded_text_proj:
-                        logger.error(f"Step {step}: Gradient explosion detected after clipping (vit: {grad_norm_vit_before:.2f}->{grad_norm_vit_after:.2f}, img_proj: {grad_norm_img_proj_before:.2f}->{grad_norm_proj_after:.2f}, text_proj: {grad_norm_text_proj_before:.2f}->{grad_norm_text_proj_after:.2f}). Skipping this batch.")
+                    is_exploded = is_exploded_vit or is_exploded_proj or is_exploded_text_proj or is_exploded_temp
+                    if text_encoder is not None:
+                        grad_norm_text_enc_after, is_exploded_text_enc = check_gradient_explosion(text_encoder, max_grad_norm=explosion_threshold, raise_on_error=False)
+                        is_exploded = is_exploded or is_exploded_text_enc
+                    
+                    if is_exploded:
+                        logger.error(f"Step {step}: Gradient explosion detected after clipping. Skipping this batch.")
                         opt.zero_grad()  # Clear gradients
                         if use_amp:
                             scaler.update()  # Update scaler even though we skipped (unscale was called)
