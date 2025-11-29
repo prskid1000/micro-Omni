@@ -5,7 +5,7 @@
     "audio_encoder": true,
     "vision_encoder": true,
     "talker": true,
-    "ocr": false
+    "ocr": true
   },
   "configs_dir": "configs",
   "tokenizer": "tokenizer.model",

@@ -83,9 +83,10 @@ def main(cfg):
     ).to(device)
     thinker_ckpt = cfg.get("thinker_ckpt", "checkpoints/thinker_tiny")
     if os.path.exists(os.path.join(thinker_ckpt, "thinker.pt")):
-        thinker_state = torch.load(os.path.join(thinker_ckpt, "thinker.pt"), map_location=device)
-        thinker_state = strip_orig_mod(thinker_state)
-        think.load_state_dict(thinker_state)
+        checkpoint = torch.load(os.path.join(thinker_ckpt, "thinker.pt"), map_location=device)
+        state_dict = checkpoint.get("model", checkpoint)
+        state_dict = strip_orig_mod(state_dict)
+        think.load_state_dict(state_dict)
 
     # Load audio encoder config from checkpoint or use defaults
     audio_cfg_path = "configs/audio_enc_tiny.json"
@@ -229,7 +230,8 @@ def main(cfg):
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
     train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
-    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
+    val_batch_size = cfg.get("val_batch_size", cfg.get("batch_size", 2))
+    val_dl = DataLoader(val_ds, batch_size=val_batch_size, shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
     print(f"DataLoader created, starting training...")
     
     print(f"Starting training: max_epochs={max_epochs}, max_steps={cfg['max_steps']}, batch_size={cfg.get('batch_size', 2)}")
