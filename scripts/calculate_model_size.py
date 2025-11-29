@@ -594,8 +594,23 @@ def calculate_model_sizes():
     else:
         print("  Config file not found (optional)")
     
-    # 7. Projectors (for SFT)
-    print("\n7. Projectors (Vision & Audio)")
+    # 7. Vocoder (HiFi-GAN)
+    print("\n7. Vocoder (HiFi-GAN)")
+    print("-" * 60)
+    # Default HiFi-GAN config from vocoder_tiny.json
+    vocoder_params = calculate_vocoder_params(
+        n_mels=128,
+        upsample_initial_channel=256,  # From config
+        upsample_rates=[8, 8, 2, 2],
+        resblock_kernel_sizes=[3, 5, 7]  # From config
+    )
+    total_params += vocoder_params
+    results["vocoder"] = vocoder_params
+    print(f"  Config: upsample_initial_channel=256, rates=[8,8,2,2], kernels=[3,5,7]")
+    print(f"  Parameters: {vocoder_params:,} ({format_size(vocoder_params)})")
+    
+    # 8. Projectors (for SFT)
+    print("\n8. Projectors (Vision & Audio)")
     print("-" * 60)
     # Vision projector: 384 → 384 (updated to match new vision encoder)
     vision_proj_params = 384 * 384 + 384  # Linear with bias
