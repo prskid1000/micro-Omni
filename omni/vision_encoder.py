@@ -43,8 +43,8 @@ class ViTTiny(nn.Module):
         self.d = d
         self.proj = nn.Conv2d(3, d, kernel_size=patch, stride=patch)
         num_patches = (img_size//patch) * (img_size//patch)
-        self.cls = nn.Parameter(torch.zeros(1,1,d))
-        self.pos = nn.Parameter(torch.zeros(1, 1+num_patches, d))
+        self.cls = nn.Parameter(torch.randn(1,1,d) * 0.02)
+        self.pos = nn.Parameter(torch.randn(1, 1+num_patches, d) * 0.02)
         
         # PyTorch 2.0+ TransformerEncoderLayer uses Flash Attention automatically when available
         # We just need to ensure it's enabled

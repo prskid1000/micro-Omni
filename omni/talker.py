@@ -40,7 +40,7 @@ class TalkerTiny(nn.Module):
             raise ValueError(f"Model dimension d ({d}) must be divisible by number of heads ({n_heads}).")
             
         self.emb = nn.Embedding(codebook_size, d)
-        self.start = nn.Parameter(torch.zeros(1,1,d))
+        self.start = nn.Parameter(torch.randn(1,1,d) * 0.02)
         self.d = d
         self.n_heads = n_heads
         self.n_layers = n_layers
