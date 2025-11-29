@@ -11,7 +11,7 @@
   "embed_dim": 512,
   
   "lr": 0.001,
-  "wd": 0.2,
+  "wd": 0.01,
   "warmup_steps": 500,
   "max_steps": 2500000,
   "max_epochs": 36,
