@@ -16,9 +16,9 @@
   "embed_dim": 256,
   "dropout": 0.1,
   
-  "text_n_layers": 6,
-  "text_n_heads": 8,
-  "text_d_ff": 2048,
+  "text_n_layers": 4,
+  "text_n_heads": 4,
+  "text_d_ff": 1024,
   "text_max_len": 77,
   
   "use_thinker_for_text": false,
