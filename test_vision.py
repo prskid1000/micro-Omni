@@ -172,7 +172,7 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
             ctx_len = cfg.get("text_max_len", 77)
             text_encoder = TransformerTextEncoder(
                 vocab_size, 
-                d_model, 
+                d_model=cfg.get("text_d_model", d_model), 
                 n_layers=cfg.get("text_n_layers", 6),
                 n_heads=cfg.get("text_n_heads", 8),
                 d_ff=cfg.get("text_d_ff", 2048),
