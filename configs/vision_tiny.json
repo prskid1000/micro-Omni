@@ -44,8 +44,8 @@
   "num_workers": 1,
   "drop_last": true,
   
-  "lr": 1e-4,
-  "wd": 0.2,
+  "lr": 0.001,
+  "wd": 0.01,
   "warmup_steps": 500,
   "max_grad_norm": 1.0,
   

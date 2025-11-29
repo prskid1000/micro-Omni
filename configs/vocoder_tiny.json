@@ -6,7 +6,7 @@
   "n_fft": 1024,
   "hop_length": 256,
   "batch_size": 1,
-  "num_workers": 0,
+  "num_workers": 1,
   "drop_last": true,
   "max_audio_length_percentile": 30.0,
   "lr_g": 0.0002,
