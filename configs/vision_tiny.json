@@ -47,8 +47,8 @@
   
   "lr": 0.001,
   "wd": 0.01,
-  "warmup_steps": 500,
-  "max_grad_norm": 1.0,
+  "warmup_steps": 1000,
+  "max_grad_norm": 0.5,
   
   "temperature": 0.3,
   
@@ -62,12 +62,12 @@
   
   "print_freq": 50,
   "checkpoint_freq": 5000,
-  "val_freq": 500,
-  "val_batches": 100,
-  "val_batches_epoch_end": null,
-  "val_split": 0.05,
+  "val_freq": 100,
+  "val_batches": 80,
+  "val_batches_epoch_end": 150,
+  "val_split": 0.1,
   
   "val_loss_threshold": 0.5,
   
-  "use_lr_spike": false
+  "use_lr_spike": true
 }
