@@ -62,6 +62,7 @@ with **small datasets** (each modality well under **5GB**). Includes:
 - **Projection**: Linear layer mapping flattened conv features to `d_model`
 - **Encoder Blocks**: Stack of transformer encoder layers
 - **Final Norm**: RMSNorm
+- **Attention Pooling** (optional): Learned pooling for contrastive learning (CLAP-style)
 
 **Architecture**:
 ```
@@ -70,8 +71,13 @@ Mel (B, T, 128)
   → Flatten & Project 
   → Transformer Encoder Blocks 
   → RMSNorm 
-  → Output (B, T/downsample, d_model)
+  → Attention Pooling (optional) or Frame Embeddings
+  → Output (B, d_model) or (B, T/downsample, d_model)
 ```
+
+**Modes**:
+- **CTC Mode** (default): Frame-level embeddings for ASR `(B, T', d_model)`
+- **Contrastive Mode** (optional): Pooled embedding for CLAP-style training `(B, d_model)`
 
 **Algorithms Used**:
 - **Convolutional Downsampling**: Strided 2D convolutions reduce temporal resolution
@@ -285,6 +291,8 @@ The training follows a **staged approach** to fit within 12GB VRAM and enable ef
    - Loss: Cross-entropy on target tokens (padding ignored)
 4. **Features**:
    - Learning rate scheduling (warmup + cosine decay)
+   - LR spike recovery (automatic LR increase on validation plateaus)
+   - Exponential Moving Average (EMA) for model weights
    - Gradient clipping
    - Validation loop with best model saving
    - Periodic checkpointing
@@ -605,22 +613,33 @@ Video File
 
 ### Key Inference Optimizations
 
-1. **KV Caching**:
+1. **torch.compile() Support**:
+   - **All Models**: Optional compilation with inductor backend
+   - **Benefit**: 30-50% speedup on inference
+   - **Requirement**: PyTorch 2.0+
+   - **Usage**: Set `compile_model: true` in config
+
+2. **Flash Attention**:
+   - **All Transformers**: Uses PyTorch 2.0+ scaled_dot_product_attention
+   - **Benefit**: 2-4x speedup on attention operations
+   - **Automatic**: Enabled when available
+
+3. **KV Caching**:
    - **Thinker**: Caches attention keys/values for all previous tokens
    - **Talker**: Caches attention keys/values for all previous frames
    - **Benefit**: Reduces computation from O(n²) to O(n) for incremental generation
 
-2. **Model Evaluation Mode**:
+4. **Model Evaluation Mode**:
    - All models set to `.eval()` mode
    - Disables dropout, batch norm updates
    - Ensures consistent inference behavior
 
-3. **Context Management**:
+5. **Context Management**:
    - Dynamically allocates context between modalities
    - Truncates inputs if total exceeds context length
    - Preserves as much text context as possible
 
-4. **Batch Processing** (Training Only):
+6. **Batch Processing** (Training Only):
    - Efficient batching of images/audio during SFT
    - Reduces GPU memory usage
    - Faster training compared to one-by-one processing
@@ -673,6 +692,8 @@ Use:
 python scripts/download_small_datasets.py --modality text images audio_asr audio_tts
 ```
 All datasets are kept under **5GB per modality** on disk via subsetting.
+
+**Note**: All training scripts use **streaming datasets** (`IterableDataset`) for memory efficiency - no dataset caching required, 90%+ RAM reduction compared to traditional dataset loading.
 
 ## Training (stages)
 Train in stages to fit 12GB easily.
@@ -742,7 +763,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --video path/to.mp4 --
 - Default voice uses **Griffin-Lim** (no vocoder training needed). For better quality, train HiFi-GAN vocoder (Stage F).
 - **Vocoder Training**: Optional but recommended for production TTS. Falls back to Griffin-Lim if HiFi-GAN checkpoint unavailable.
 - **OCR Training**: Optional for text extraction from images. Can enhance multimodal understanding capabilities.
-- All configs target ~**120–140M** total params across modules and fit a **12GB** GPU with gradient accumulation + checkpointing.
+- All configs target ~**157M** total params across modules and fit a **12GB** GPU with gradient accumulation + checkpointing.
 - Use smaller context (`ctx=1024`) during pretrain; go `2048` for SFT if VRAM allows.
 
 ## License

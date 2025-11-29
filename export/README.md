@@ -106,10 +106,10 @@ python infer_chat.py --ckpt_dir export --text "Generate speech" --audio_out outp
 ### Model Configuration
 
 The exported model uses the "tiny" configuration:
-- **Thinker**: vocab_size=32000, d_model=256, n_layers=4, n_heads=4, use_gqa=True
-- **Audio Encoder**: d_model=192, n_layers=4, n_heads=3
-- **Vision Encoder**: d_model=128, n_layers=4, n_heads=2
-- **Talker**: d_model=192, n_layers=4, n_heads=3
+- **Thinker**: vocab_size=32000, d_model=384, n_layers=8, n_heads=6, use_gqa=True
+- **Audio Encoder**: d_model=384, n_layers=8, n_heads=6
+- **Vision Encoder**: d_model=512, n_layers=8, n_heads=8
+- **Talker**: d_model=384, n_layers=8, n_heads=6
 
 See `configs/*_tiny.json` for full component configurations.
 
