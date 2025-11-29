@@ -16,7 +16,7 @@
   "max_steps": 2500000,
   "max_epochs": 36,
   
-  "batch_size": 16,
+  "batch_size": 8,
   "gradient_accumulation_steps": 1,
   "num_workers": 0,
   "drop_last": true,
