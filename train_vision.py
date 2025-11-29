@@ -666,7 +666,7 @@ def main(cfg):
                                     val_text_emb = text_proj(val_text_embs)
                                     val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
                                     
-                                    val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                                    val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                                     val_labels = torch.arange(val_B, device=device)
                                     val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                             else:
@@ -678,7 +678,7 @@ def main(cfg):
                                 val_text_emb = text_proj(val_text_embs)
                                 val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
                                 
-                                val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                                val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                                 val_labels = torch.arange(val_B, device=device)
                                 val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                             
@@ -817,7 +817,7 @@ def main(cfg):
                             val_text_emb = text_proj(val_text_embs)
                             val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
                             
-                            val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                            val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                             val_labels = torch.arange(val_B, device=device)
                             val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                     else:
@@ -838,7 +838,7 @@ def main(cfg):
                         val_text_emb = text_proj(val_text_embs)
                         val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
                         
-                        val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature
+                        val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                         val_labels = torch.arange(val_B, device=device)
                         val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
                     
