@@ -1,83 +1,72 @@
 {
-  "img_size": 224,
-  "patch": 16,
-  
-  "d_model": 384,
-  "n_layers": 6,
-  "n_heads": 6,
-  "d_ff": 1536,
-  "dropout": 0.1,
-  
-  "embed_dim": 384,
-  
-  "lr": 0.0007,
-  "wd": 0.01,
-  "warmup_steps": 500,
-  "max_steps": 2500000,
-  "max_epochs": 36,
-  
-  "batch_size": 8,
-  "gradient_accumulation_steps": 1,
-  "num_workers": 0,
-  "drop_last": true,
-  
-  "use_amp": true,
-  "use_flash": true,
-  "use_compile": false,
-  
-  "max_grad_norm": 1.0,
-  
-  "val_loss_threshold": 0.1,
-  "val_split": 0.1,
-  "val_freq": 500,
-  "val_batches": 80,
-  "val_batches_epoch_end": 150,
-  
-  "print_freq": 50,
-  "checkpoint_freq": 5000,
-  
-  "seed": 42,
-  "shuffle_buffer_size": 100,
-  
-  "use_ema": true,
-  "ema_decay": 0.9995,
-  
-  "use_lr_spike": true,
-  "lr_spike_multiplier": 8.0,
-  "lr_spike_duration": 150,
-  "lr_spike_consecutive_increases": 2,
-  
+  "save_dir": "checkpoints/vision_tiny",
   "train_manifest": "data/images/production_annotations.json",
   "image_root": "data/images",
   
-  "vocab_size": 32000,
-  "ctx_len": 77,
-  "use_thinker_for_text": false,
+  "seed": 42,
+  "max_epochs": 36,
+  "max_steps": 320000,
   
-  "text_n_layers": 4,
+  "img_size": 224,
+  "patch": 16,
+  "d_model": 192,
+  "n_layers": 12,
+  "n_heads": 3,
+  "d_ff": 768,
+  "embed_dim": 256,
+  "dropout": 0.1,
+  
+  "text_n_layers": 6,
   "text_n_heads": 8,
   "text_d_ff": 2048,
   "text_max_len": 77,
   
+  "use_thinker_for_text": false,
   "thinker_ckpt": "checkpoints/thinker_tiny",
-  "thinker_d_model": 384,
   "thinker": {
     "vocab_size": 32000,
-    "n_layers": 8,
-    "d_model": 384,
-    "n_heads": 6,
-    "d_ff": 1536,
+    "n_layers": 4,
+    "d_model": 256,
+    "n_heads": 4,
+    "d_ff": 1024,
     "dropout": 0.1,
     "rope_theta": 10000,
-    "use_gqa": true,
-    "kv_groups": 3,
+    "use_gqa": false,
     "use_swiglu": true,
     "use_moe": false
   },
   
-  "temperature": 0.07,
+  "ctx_len": 77,
+  "vocab_size": 32000,
   
-  "save_dir": "checkpoints/vision_tiny",
+  "batch_size": 64,
+  "gradient_accumulation_steps": 4,
+  "num_workers": 1,
+  "drop_last": true,
   
-  "use_augmentation": true
-} 
+  "lr": 1e-4,
+  "wd": 0.2,
+  "warmup_steps": 500,
+  "max_grad_norm": 1.0,
+  
+  "temperature": 0.3,
+  
+  "use_amp": true,
+  "use_compile": false,
+  "use_ema": true,
+  "ema_decay": 0.999,
+  
+  "use_augmentation": true,
+  "shuffle_buffer_size": 10000,
+  
+  "print_freq": 50,
+  "checkpoint_freq": 5000,
+  "val_freq": 500,
+  "val_batches": 100,
+  "val_batches_epoch_end": null,
+  "val_split": 0.05,
+  
+  "val_loss_threshold": 0.5,
+  
+  "use_lr_spike": false
+}
