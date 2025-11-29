@@ -2,22 +2,22 @@
   "img_size": 224,
   "patch": 16,
   
-  "d_model": 768,
-  "n_layers": 12,
-  "n_heads": 12,
-  "d_ff": 3072,
+  "d_model": 512,
+  "n_layers": 8,
+  "n_heads": 8,
+  "d_ff": 2048,
   "dropout": 0.1,
   
   "embed_dim": 512,
   
-  "lr": 0.0005,
+  "lr": 0.001,
   "wd": 0.2,
-  "warmup_steps": 2000,
+  "warmup_steps": 500,
   "max_steps": 2500000,
   "max_epochs": 36,
   
-  "batch_size": 32,
-  "gradient_accumulation_steps": 8,
+  "batch_size": 16,
+  "gradient_accumulation_steps": 1,
   "num_workers": 0,
   "drop_last": true,
   
@@ -54,7 +54,7 @@
   "ctx_len": 77,
   "use_thinker_for_text": false,
   
-  "text_n_layers": 6,
+  "text_n_layers": 4,
   "text_n_heads": 8,
   "text_d_ff": 2048,
   "text_max_len": 77,

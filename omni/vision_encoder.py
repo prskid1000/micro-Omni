@@ -166,6 +166,7 @@ class TransformerTextEncoder(nn.Module):
         self.vocab_size = vocab_size
         self.d_model = d_model
         self.max_len = max_len
+        self.n_heads = n_heads
         
         self.token_embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = nn.Embedding(max_len, d_model)
@@ -227,7 +228,7 @@ class TransformerTextEncoder(nn.Module):
         
         # Create causal mask for autoregressive attention
         causal_mask = torch.triu(torch.ones(T, T, device=token_ids.device), diagonal=1).bool()
-        causal_mask = causal_mask.unsqueeze(0).expand(B, -1, -1)  # (B, T, T)
+        causal_mask = causal_mask.unsqueeze(0).expand(B * self.n_heads, -1, -1)  # (B*n_heads, T, T)
         
         # Transformer layers (using decoder layer as encoder with self-attention)
         for layer in self.layers:

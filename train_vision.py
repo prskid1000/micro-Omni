@@ -163,6 +163,9 @@ def main(cfg):
                 nn.init.zeros_(m.bias)
     print("✓ Initialized projection weights with Xavier uniform")
     
+    # Contrastive loss (InfoNCE) with learnable temperature
+    temperature = LearnableTemperature(init_value=cfg.get("temperature", 0.07)).to(device)
+    
     # Optimizer: include text_encoder, temperature, and projection heads
     opt_params = list(vit.parameters()) + list(img_proj.parameters()) + list(text_proj.parameters()) + list(temperature.parameters())
     if text_encoder is not None:
@@ -190,8 +193,6 @@ def main(cfg):
         ema = EMA(ema_model, decay=ema_decay, device=device)
         logger.info(f"✓ EMA enabled with decay={ema_decay}")
     
-    # Contrastive loss (InfoNCE) with learnable temperature
-    temperature = LearnableTemperature(init_value=cfg.get("temperature", 0.07)).to(device)
     
     # Learning rate scheduler with warmup (CLIP-style: longer warmup, cosine decay)
     warmup_steps = cfg.get("warmup_steps", 2000)
