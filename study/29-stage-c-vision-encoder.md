@@ -30,28 +30,28 @@
 {
   "img_size": 224,
   "patch": 16, // 14×14 = 196 patches
-  "d_model": 768,  // ViT-Base
-  "n_layers": 12,  // ViT-Base layers
-  "n_heads": 12,   // ViT-Base heads
-  "d_ff": 3072,    // ViT-Base FF dim
+  "d_model": 512,  // ViT-Tiny
+  "n_layers": 8,   // ViT-Tiny layers
+  "n_heads": 8,    // ViT-Tiny heads
+  "d_ff": 2048,    // ViT-Tiny FF dim
 
   "train_manifest": "data/images/production_annotations.json",
   "image_root": "data/images",
   "use_thinker_for_text": false, // Use Thinker (true) or TransformerTextEncoder (false)
   "thinker_ckpt": "checkpoints/thinker_tiny", // Uses tokenizer from Stage A
   "text_max_len": 77,  // CLIP standard context length
-  "text_n_layers": 6,  // Text encoder layers
+  "text_n_layers": 4,  // Text encoder layers
   "text_n_heads": 8,   // Text encoder heads
   "text_d_ff": 2048,   // Text encoder FF dim
   "vocab_size": 32000, // Tokenizer vocabulary size
   "embed_dim": 512,    // CLIP standard embedding dimension
   "temperature": 0.07, // Learnable temperature (CLIP standard)
 
-  "batch_size": 32,
-  "gradient_accumulation_steps": 8,  // Effective batch size: 256
-  "lr": 0.0005,      // CLIP learning rate
-  "wd": 0.2,         // CLIP weight decay
-  "warmup_steps": 2000, // Longer warmup for stability
+  "batch_size": 8,
+  "gradient_accumulation_steps": 1,  // Effective batch size: 8
+  "lr": 0.0007,      // Learning rate
+  "wd": 0.01,        // Weight decay
+  "warmup_steps": 500, // Warmup steps
   "max_steps": 2500000,
   "max_epochs": 36,
   "use_augmentation": true  // Strong data augmentation

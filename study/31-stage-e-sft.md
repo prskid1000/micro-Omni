@@ -32,19 +32,58 @@ Train on mixed batches with different modality combinations:
   "thinker_ckpt": "checkpoints/thinker_tiny",
   "audio_ckpt": "checkpoints/audio_enc_tiny",
   "vision_ckpt": "checkpoints/vision_tiny",
-
-  // Training strategy
-  "freeze_encoders": true, // Only fine-tune Thinker
-  "batch_size": 8,
-  "num_epochs": 5,
-  "learning_rate": 1e-4,
-
-  // Data mix (balance modalities)
-  "data_mix": {
-    "text_only": 0.4, // 40% text
-    "image_text": 0.3, // 30% vision
-    "audio_text": 0.3 // 30% audio
-  }
+  "talker_ckpt": "checkpoints/talker_tiny",
+  "ctx_len": 512,
+  "lr": 5e-05,
+  "wd": 0.01,
+  "warmup_steps": 1000,
+  "max_steps": 1936100,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 1,
+  "use_amp": true,
+  "use_flash": true,
+  "use_compile": false,
+  "num_workers": 0,
+  "drop_last": true,
+  "print_freq": 100,
+  "max_epochs": 2,
+  "val_loss_threshold": 0.05,
+  "val_split": 0.1,
+  "val_freq": 100,
+  "checkpoint_freq": 30,
+  "val_batch_size": 2,
+  "max_grad_norm": 1.0,
+  "use_ema": true,
+  "ema_decay": 0.999,
+  "seed": 42,
+  "shuffle_buffer_size": 100,
+  "thinker": {
+    "vocab_size": 32000,
+    "n_layers": 8,
+    "d_model": 384,
+    "n_heads": 6,
+    "d_ff": 1536,
+    "dropout": 0.1,
+    "rope_theta": 10000,
+    "use_gqa": true,
+    "kv_groups": 3,
+    "use_swiglu": true,
+    "use_moe": false,
+    "num_experts": 8,
+    "num_experts_per_tok": 2
+  },
+  "prompt": "You are an omni assistant.",
+  "sft_mix": {
+    "text_path": "data/text/production_corpus.txt",
+    "image_manifest": "data/images/production_annotations.json",
+    "image_root": "data/images",
+    "asr_csv": "data/audio/production_asr.csv"
+  },
+  "save_dir": "checkpoints/omni_sft_tiny",
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 10.0,
+  "lr_spike_duration": 100,
+  "lr_spike_consecutive_increases": 2
 }
 ```
 

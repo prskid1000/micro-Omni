@@ -73,14 +73,11 @@ pip install flash-attn --no-build-isolation
 ### 4. Verify Installation
 
 ```bash
-python scripts/check_setup.py
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.cuda.is_available()}')"
 
 # Expected output:
-✓ PyTorch installed: 2.1.0
-✓ CUDA available: True
-✓ GPU: NVIDIA GeForce RTX 3060 (12GB)
-✓ All dependencies installed
-✓ Setup complete!
+PyTorch: 2.1.0+cu118
+CUDA: True
 ```
 
 ---

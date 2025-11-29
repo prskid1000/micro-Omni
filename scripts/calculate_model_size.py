@@ -232,12 +232,12 @@ def calculate_vision_encoder_params(img_size, patch, d_model, n_layers, n_heads,
     # Text encoder (when not using Thinker)
     if not use_thinker_for_text:
         # TransformerTextEncoder (CLIP-style)
-        text_n_layers = cfg.get("text_n_layers", 6)
-        text_n_heads = cfg.get("text_n_heads", 8)
-        text_d_ff = cfg.get("text_d_ff", 2048)
+        text_n_layers = 6  # Default value
+        text_n_heads = 8   # Default value
+        text_d_ff = 2048   # Default value
         
         # Token and position embeddings: vocab_size × d_model + max_len × d_model
-        text_max_len = cfg.get("text_max_len", 77)
+        text_max_len = 77  # Default value
         params += vocab_size * d_model  # token embeddings
         params += text_max_len * d_model  # position embeddings
         

@@ -145,7 +145,7 @@ response = model.chat(
 
 ### 1. Larger Scale
 
-**Current:** 25.65M parameters  
+**Current:** 157.75M parameters  
 **Target:** 1B-7B parameters
 
 - Requires: Multi-GPU training
@@ -158,24 +158,23 @@ response = model.chat(
 Scale vs Performance:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Current (25M):    40-50% of max performance
-Medium (100M):   70-80% of max performance
-Large (500M):    85-90% of max performance
-XL (1B-7B):      90-95% of max performance
+Current (157.75M):  70-80% of max performance
+Medium (500M):     85-90% of max performance
+Large (1B):        90-95% of max performance
+XL (7B+):          95-98% of max performance
 
 Key Finding: Models under 15B parameters can achieve
 90% of larger model performance on many tasks.
 
 Diminishing Returns:
-- 25M→100M: ~30% performance gain per 2x params
-- 100M→500M: ~15% performance gain per 2x params
+- 157M→500M: ~15% performance gain per 2x params
 - 500M→1B: ~8% performance gain per 2x params
 - 1B→2B: ~4% performance gain per 2x params
+- 2B→4B: ~2% performance gain per 2x params
 
 Training Time Scaling:
-- 25M: 40-60 hours (single GPU)
-- 100M: 80-120 hours (single GPU)
-- 500M: 200-400 hours (single GPU)
+- 157M: 200-400 hours (single GPU)
+- 500M: 500-1000 hours (single GPU)
 - 1B+: 1000+ hours (multi-GPU required)
 ```
 

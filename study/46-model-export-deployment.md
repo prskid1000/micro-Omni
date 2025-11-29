@@ -60,12 +60,13 @@ python export.py \
 - `--vision_ckpt`: Directory containing `vision.pt`
 - `--talker_ckpt`: Directory containing `talker.pt` (contains both talker and rvq)
 - `--ocr_ckpt`: (Optional) Directory containing `ocr.pt`
-- `--output_dir`: Output directory for merged model and support files
+- `--vocoder_ckpt`: (Optional) Directory containing `vocoder.pt`
+- `--output_dir`: Output directory for merged model and support files (default: `export`)
 - `--output_file`: Name of the safetensors file (default: `model.safetensors`)
 - `--configs_dir`: Directory containing config JSON files (default: `configs`)
-- `--skip_component_configs`: Skip copying individual component configs (minimal export, only main config.json)
+- `--omni_config`: Name of the omni config file to read checkpoint paths from (default: `omni_sft_tiny.json`)
 
-**Note:** The export script prioritizes `model.pt` (the new standard). If not found, it falls back to legacy `*_step_*.pt` checkpoints.
+**Note:** The export script prioritizes standard checkpoint names (e.g., `thinker.pt`). If not found, it falls back to `model.pt` (new standard), then to legacy `*_step_*.pt` checkpoints.
 
 ### What Gets Merged
 

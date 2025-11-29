@@ -92,11 +92,11 @@ Image (B, 3, 224, 224)
     ↓
 [Vision Encoder (ViT)]
     ↓
-Image Features (B, N, 512)
+Image Features (B, N, 192)
     ↓
 [Image Projection]
     ↓
-Image Features (B, N, 1024)
+Image Features (B, N, 384)
     ↓
 [Text Decoder]
     ├─ Self-Attention (causal, with RoPE)
@@ -114,12 +114,12 @@ Text: "STOP"
 
 - Input: Image `(B, 3, 224, 224)`
 - Process: Patch embedding + Transformer layers
-- Output: Grid features `(B, N, 512)` where N = (224/16)² = 196 patches
+- Output: Grid features `(B, N, 192)` where N = (224/16)² = 196 patches
 - Purpose: Extract visual features from image patches
 
 **2. Image Projection**
 
-- Projects vision features from 512-dim to decoder dimension (1024-dim)
+- Projects vision features from 192-dim to decoder dimension (384-dim)
 - Aligns vision and text embeddings
 
 **3. Text Decoder**
@@ -196,20 +196,20 @@ Output: (B, T, 1024)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Image: (B, 3, 224, 224)
     ↓ ViT Encoder
-Grid: (B, 196, 512)  [196 = (224/16)² patches]
+Grid: (B, 196, 192)  [196 = (224/16)² patches]
     ↓ Image Projection
-Img Features: (B, 196, 1024)
+Img Features: (B, 196, 384)
 
 2. TEXT EMBEDDING:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Text IDs: (B, T)  [T = sequence length]
     ↓ Character Embedding
-Text Embed: (B, T, 1024)
+Text Embed: (B, T, 384)
 
 3. DECODER PROCESSING:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 For each decoder layer:
-    x = Text Embed (B, T, 1024)
+    x = Text Embed (B, T, 384)
 
     # Self-attention (causal)
     x = x + Dropout(SelfAttn(Norm1(x), RoPE))
@@ -231,9 +231,9 @@ Logits = Linear(x)  # (B, T, vocab_size)
 **Self-Attention (Causal)**
 
 ```
-Query: Q = Text Embeddings (B, T, 1024)
-Key:   K = Text Embeddings (B, T, 1024)
-Value: V = Text Embeddings (B, T, 1024)
+Query: Q = Text Embeddings (B, T, 384)
+Key:   K = Text Embeddings (B, T, 384)
+Value: V = Text Embeddings (B, T, 384)
 
 Apply RoPE to Q and K
 Apply causal mask (lower triangular)
@@ -243,9 +243,9 @@ Attention = Softmax(QK^T / √d) V
 **Cross-Attention**
 
 ```
-Query: Q = Text Embeddings (B, T, 1024)
-Key:   K = Image Features (B, N, 1024)
-Value: V = Image Features (B, N, 1024)
+Query: Q = Text Embeddings (B, T, 384)
+Key:   K = Image Features (B, N, 384)
+Value: V = Image Features (B, N, 384)
 
 No RoPE (cross-attention doesn't need position)
 No causal mask (can attend to all image patches)
@@ -301,20 +301,20 @@ Ignore: PAD tokens (index 0)
 {
   "img_size": 224,
   "patch": 16,
-  "vision_d_model": 512,
-  "vision_layers": 4,
-  "vision_heads": 8,
-  "vision_d_ff": 2048,
-  "decoder_d_model": 1024,
-  "decoder_layers": 4,
-  "decoder_heads": 16,
-  "decoder_d_ff": 4096,
-  "dropout": 0.3,
-  "use_gqa": false,
+  "vision_d_model": 192,
+  "vision_layers": 2,
+  "vision_heads": 3,
+  "vision_d_ff": 768,
+  "decoder_d_model": 384,
+  "decoder_layers": 3,
+  "decoder_heads": 6,
+  "decoder_d_ff": 1536,
+  "dropout": 0.1,
+  "use_gqa": true,
   "use_swiglu": true,
   "use_flash": true,
   "rope_theta": 10000.0,
-  "vocab_size": <dynamic from dataset>
+  "vocab_size": "<dynamic from dataset>"
 }
 ```
 
@@ -434,20 +434,20 @@ print(f"Extracted text: {text}")
 
 ```
 Vision Encoder (ViT-Tiny):
-- Layers: 4
-- Heads: 8
-- Dimension: 512
-- FFN: 2048
+- Layers: 2
+- Heads: 3
+- Dimension: 192
+- FFN: 768
 - Patches: 196 (14×14)
 
 Text Decoder:
-- Layers: 4
-- Heads: 16
-- Dimension: 1024
-- FFN: 4096
+- Layers: 3
+- Heads: 6
+- Dimension: 384
+- FFN: 1536
 - Vocabulary: Dynamic (from dataset)
 
-Total Parameters: ~60-80M (depends on vocab size)
+Total Parameters: ~21.5M (from calculate_model_size.py)
 ```
 
 ---

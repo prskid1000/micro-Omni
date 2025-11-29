@@ -6,7 +6,7 @@ Complete learning documentation for the μOmni multimodal AI system, covering ev
 
 ## 📚 Documentation Overview
 
-This comprehensive guide contains **45 chapters** organized into 8 parts, designed to take you from zero AI knowledge to complete understanding of the μOmni codebase.
+This comprehensive guide contains **50 chapters** organized into 8 parts, designed to take you from zero AI knowledge to complete understanding of the μOmni codebase.
 
 ### ✅ Available Chapters (Complete with Diagrams & Examples)
 
