@@ -86,11 +86,19 @@ python train_ocr.py --config configs/ocr_tiny.json
 - Memory optimized: batch_size=4, gradient accumulation=2
 - Supports synthetic OCR datasets (MJSynth)
 
-### 5. Arthemis Neuromorphic Extensions ✅ **IMPLEMENTED**
+### 5. Arthemis Neuromorphic Extensions ✅ **FULLY IMPLEMENTED**
 
 **Current:** Standard transformer with optional optimizations  
-**Status:** Arthemis features available in Thinker
+**Status:** Arthemis features available across all applicable models
 
+**Implemented In:**
+- ✅ **Thinker (LLM)**: SpikingAttention + Liquid Time Constants
+- ✅ **Talker (Speech Gen)**: Inherits Arthemis from shared transformer blocks
+- ✅ **Audio Encoder**: Custom Arthemis-enabled transformer blocks
+- ✅ **OCR Model**: Arthemis-enabled decoder blocks
+- ❌ **Vision Encoder**: Uses PyTorch's built-in layers (not implemented)
+
+**Features:**
 - SpikingAttention: Event-driven attention with SNNs
 - Liquid Time Constants: Adaptive temporal dynamics in FFN
 - Neuromorphic processing for energy-efficient AI
@@ -99,7 +107,7 @@ python train_ocr.py --config configs/ocr_tiny.json
 **Usage:**
 
 ```json
-// Enable Arthemis features in config
+// Enable Arthemis features in any supported model config
 {
   "use_spiking": true,  // SpikingAttention
   "use_ltc": true       // Liquid Time Constants
@@ -107,7 +115,6 @@ python train_ocr.py --config configs/ocr_tiny.json
 ```
 
 **Benefits:**
-
 - Energy-efficient computation (sparse spikes)
 - Temporal pattern recognition
 - Neuromorphic hardware compatibility

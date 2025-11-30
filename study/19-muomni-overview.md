@@ -62,6 +62,9 @@ Key Features:
 ✅ RoPE positional encoding
 ✅ KV caching for fast generation
 ✅ Optional GQA, SwiGLU, MoE
+✅ **Arthemis Neuromorphic Features**:
+   - SpikingAttention (event-driven processing)
+   - Liquid Time Constants (adaptive temporal dynamics)
 ```
 
 ---
@@ -96,6 +99,12 @@ Output: Frame embeddings (T/8, 192)
 
 → Audio Projector (192→256)
 Final: (T/8, 256) embeddings for Thinker
+
+Key Features:
+✅ Custom transformer blocks with Flash Attention
+✅ Arthemis Neuromorphic Features:
+   - SpikingAttention in encoder blocks
+   - Liquid Time Constants in MLP layers
 ```
 
 ---
@@ -109,6 +118,12 @@ Size: 192-dim, 4 layers
 
 Input: Previous RVQ codes (or start token)
 Output: Next frame codes (base + residual)
+
+Key Features:
+✅ Inherits Thinker's transformer architecture
+✅ Arthemis Neuromorphic Features (inherited):
+   - SpikingAttention in decoder blocks
+   - Liquid Time Constants in MLP layers
 
 Works with:
 - RVQ Codec (2 codebooks, 128 codes each)

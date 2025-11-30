@@ -169,11 +169,13 @@ Layer 1:
   Input: (3, 192)
   → RMSNorm
   → Causal Self-Attention with RoPE
+     - **Arthemis SpikingAttention**: Optional event-driven processing with spiking neurons
      - token_0 sees only: [token_0]
      - token_1 sees only: [token_0, token_1]
      - token_2 sees only: [token_0, token_1, token_2]
      (Causal = can't see future!)
   → Feedforward network
+     - **Arthemis Liquid Time Constants**: Optional adaptive temporal dynamics
   → RMSNorm
   Output: (3, 192)
 

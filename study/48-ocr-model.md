@@ -331,6 +331,9 @@ Ignore: PAD tokens (index 0)
 ✅ RoPE: Relative position encoding
 ✅ SwiGLU: Modern activation function
 ✅ Flash Attention: 2-4x speedup (optional)
+✅ Arthemis Neuromorphic Features:
+   - SpikingAttention in decoder blocks
+   - Liquid Time Constants in MLP layers
 ```
 
 ### 2. Optimizations

@@ -163,7 +163,9 @@ Process with attention:
 
 4 layers of:
   - Self-attention (frames talk to each other)
+    - **Arthemis SpikingAttention**: Optional event-driven processing with spiking neurons
   - Feedforward network (process each frame)
+    - **Arthemis Liquid Time Constants**: Optional adaptive temporal dynamics
   - RMSNorm (stabilize)
 
 Output: (1, 37, 192)
