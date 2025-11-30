@@ -41,7 +41,7 @@
   "val_batches": 80,
   "val_batches_epoch_end": 150,
   
-  "checkpoint_freq": 25000,
+  "checkpoint_freq": 10000,
   "max_grad_norm": 1.0,
   
   "seed": 42,
