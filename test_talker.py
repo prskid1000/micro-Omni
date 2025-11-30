@@ -63,7 +63,9 @@ def load_model_and_codec(checkpoint_dir, device="cuda"):
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
         rope_theta=cfg.get("rope_theta", 10000.0),
-        compile_model=False
+        compile_model=False,
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False)
     ).to(device)
     
     # Load weights

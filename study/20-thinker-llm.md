@@ -145,7 +145,60 @@ Token/Embeddings Input (B, T, 256)
 - **SwiGLU**: Modern activation function for better performance
 - **MoE** (Mixture of Experts): Sparse computation (activates subset of parameters)
 - **Flash Attention**: 2-4x speedup using optimized kernels
+- **Arthemis Features**: Neuromorphic components for enhanced temporal processing
+  - **SpikingAttention**: Event-driven attention with spiking neurons
+  - **Liquid Time Constants**: Adaptive temporal dynamics in feed-forward layers
 - **Numerical Stability**: Built-in NaN/Inf detection for robust training
+
+### 5. **Arthemis Neuromorphic Extensions**
+
+**SpikingAttention**: Replaces standard attention with spiking neural networks
+```
+Standard Attention Flow:
+Q, K, V = Linear_projections(input)
+Attention_weights = softmax(Q @ K^T / sqrt(d))
+Output = Attention_weights @ V
+
+Arthemis SpikingAttention Flow:
+Q, K, V = Linear_projections(input)
+↓
+Spiking_Q = SpikingNeuron(Q)  ← LIF spiking neuron
+Spiking_K = SpikingNeuron(K)  ← LIF spiking neuron  
+Spiking_V = SpikingNeuron(V)  ← LIF spiking neuron
+↓
+RoPE_Q, RoPE_K = apply_rotary_embedding(Spiking_Q, Spiking_K)
+↓
+Attention_weights = softmax(RoPE_Q @ RoPE_K^T / sqrt(d))
+Output = Attention_weights @ RoPE_V
+```
+
+**Liquid Time Constants (LTC)**: Adaptive feed-forward networks
+```
+Standard Feed-Forward:
+Gate = SiLU(Gate_projection(input))
+Up = Up_projection(input)  
+Intermediate = Gate * Up
+Output = Down_projection(Intermediate)
+
+Arthemis LTC Feed-Forward:
+Gate = SiLU(Gate_projection(input))
+Up = Up_projection(input)
+Intermediate = Gate * Up
+↓
+LTC_input = Intermediate
+for each LTC_layer:
+    LTC_output = LiquidTimeConstant(LTC_input)  ← Adaptive time constants
+    LTC_input = LTC_output
+↓
+Enhanced = Intermediate + LTC_projection(LTC_output)
+Output = Down_projection(Enhanced)
+```
+
+**Benefits**:
+- Event-driven processing (sparsity)
+- Temporal pattern recognition
+- Adaptive temporal dynamics
+- Neuromorphic hardware compatibility
 
 ## 💻 Implementation
 
@@ -156,6 +209,7 @@ class ThinkerLM(nn.Module):
                  dropout: float = 0.1, rope_theta: float = 10000, ctx: int = 1024, 
                  use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False, 
                  num_experts: int = 8, num_experts_per_tok: int = 2, use_flash: bool = True,
+                 use_spiking: bool = False, use_ltc: bool = False,
                  compile_model: bool = False) -> None:
         """
         ThinkerLM with optional Qwen3 Omni features and performance optimizations.
@@ -175,6 +229,8 @@ class ThinkerLM(nn.Module):
             num_experts: number of experts for MoE (default: 8)
             num_experts_per_tok: number of experts to activate per token (default: 2)
             use_flash: use Flash Attention for 2-4x speedup (default: True, requires PyTorch 2.0+)
+            use_spiking: use SpikingAttention (Arthemis) (default: False)
+            use_ltc: use Liquid Time Constants in MLP (Arthemis) (default: False)
             compile_model: use torch.compile() for 30-50% speedup (default: False, requires PyTorch 2.0+)
         """
         super().__init__()

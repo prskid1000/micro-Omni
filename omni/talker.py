@@ -15,7 +15,8 @@ class TalkerTiny(nn.Module):
     def __init__(self, d: int = 384, n_layers: int = 8, n_heads: int = 6, ff: int = 1536, 
                  codebooks: int = 2, codebook_size: int = 128, dropout: float = 0.1, 
                  use_gqa: bool = False, use_swiglu: bool = True, rope_theta: float = 10000.0,
-                 use_flash: bool = True, compile_model: bool = False) -> None:
+                 use_flash: bool = True, use_spiking: bool = False, use_ltc: bool = False,
+                 compile_model: bool = False) -> None:
         """
         Initialize TalkerTiny with performance optimizations.
         
@@ -31,6 +32,8 @@ class TalkerTiny(nn.Module):
             use_swiglu: use SwiGLU activation
             rope_theta: RoPE theta parameter
             use_flash: use Flash Attention for 2-4x speedup (default: True)
+            use_spiking: use SpikingAttention (Arthemis) (default: False)
+            use_ltc: use Liquid Time Constants in MLP (Arthemis) (default: False)
             compile_model: use torch.compile() for 30-50% speedup (default: False)
         """
         super().__init__()
@@ -47,7 +50,8 @@ class TalkerTiny(nn.Module):
         
         # Use optimized blocks (GQA + SwiGLU + Flash Attention support)
         self.blocks = nn.ModuleList([
-            Block(d, n_heads, ff, rope_theta, dropout, use_gqa=use_gqa, use_swiglu=use_swiglu, use_flash=use_flash)
+            Block(d, n_heads, ff, rope_theta, dropout, use_gqa=use_gqa, use_swiglu=use_swiglu, 
+                  use_flash=use_flash, use_spiking=use_spiking, use_ltc=use_ltc)
             for _ in range(n_layers)
         ])
         self.norm = RMSNorm(d)

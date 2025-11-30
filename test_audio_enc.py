@@ -252,7 +252,9 @@ def load_model_and_head(checkpoint_dir, device="cuda"):
         layers=cfg.get("n_layers", 4),
         dropout=cfg.get("dropout", 0.1),
         downsample_factor=cfg.get("downsample_time", 8),
-        compile_model=False
+        compile_model=False,
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False)
     ).to(device)
     
     # Load model weights

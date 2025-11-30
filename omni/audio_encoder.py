@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from typing import Optional
 from omni.utils import RMSNorm
+from omni.thinker import SpikingNeuron, LiquidTimeConstant, MLP
 import warnings
 
 # Check for Flash Attention support (PyTorch 2.0+)
@@ -58,12 +59,14 @@ class ConvDown(nn.Module):
         return self.net(x)
 
 class EncoderBlock(nn.Module):
-    def __init__(self, d: int, heads: int, ff: int, dropout: float = 0.1, use_flash: bool = True) -> None:
+    def __init__(self, d: int, heads: int, ff: int, dropout: float = 0.1, use_flash: bool = True,
+                 use_spiking: bool = False, use_ltc: bool = False) -> None:
         super().__init__()
         self.d = d
         self.heads = heads
         self.head_dim = d // heads
         self.use_flash = use_flash and HAS_FLASH_ATTENTION
+        self.use_spiking = use_spiking
         
         if use_flash and not HAS_FLASH_ATTENTION:
             warnings.warn("Flash Attention requested but not available. Falling back to standard attention.")
@@ -75,8 +78,13 @@ class EncoderBlock(nn.Module):
         self.qkv_proj = nn.Linear(d, 3 * d, bias=True)
         self.out_proj = nn.Linear(d, d, bias=True)
         
+        if use_spiking:
+            self.spike_q = SpikingNeuron(d)
+            self.spike_k = SpikingNeuron(d)
+            self.spike_v = SpikingNeuron(d)
+        
         self.norm2 = RMSNorm(d)
-        self.mlp = nn.Sequential(nn.Linear(d, ff), nn.GELU(), nn.Linear(ff, d))
+        self.mlp = MLP(d, ff, use_swiglu=False, use_ltc=use_ltc)
         self.drop = nn.Dropout(dropout)
         self.dropout_p = dropout
     
@@ -89,6 +97,22 @@ class EncoderBlock(nn.Module):
         qkv = self.qkv_proj(normed).reshape(B, T, 3, self.heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, heads, T, head_dim)
         q, k, v = qkv[0], qkv[1], qkv[2]
+        
+        # Apply SpikingAttention if enabled (Arthemis)
+        if self.use_spiking:
+            # Flatten heads for spiking neurons
+            q_flat = q.permute(0, 2, 1, 3).reshape(B, T, -1)  # (B, T, heads * head_dim)
+            k_flat = k.permute(0, 2, 1, 3).reshape(B, T, -1)
+            v_flat = v.permute(0, 2, 1, 3).reshape(B, T, -1)
+            
+            q_flat = self.spike_q(q_flat)
+            k_flat = self.spike_k(k_flat)
+            v_flat = self.spike_v(v_flat)
+            
+            # Reshape back
+            q = q_flat.reshape(B, self.heads, T, self.head_dim).permute(0, 1, 2, 3)
+            k = k_flat.reshape(B, self.heads, T, self.head_dim).permute(0, 1, 2, 3)
+            v = v_flat.reshape(B, self.heads, T, self.head_dim).permute(0, 1, 2, 3)
         
         # Compute attention
         if self.use_flash:
@@ -132,7 +156,8 @@ class AudioEncoderTiny(nn.Module):
     """
     def __init__(self, d: int = 192, heads: int = 3, ff: int = 768, layers: int = 4, 
                  dropout: float = 0.1, downsample_factor: int = 4, use_flash: bool = True,
-                 compile_model: bool = False, use_attention_pooling: bool = False) -> None:
+                 compile_model: bool = False, use_attention_pooling: bool = False,
+                 use_spiking: bool = False, use_ltc: bool = False) -> None:
         """
         Initialize AudioEncoderTiny with performance optimizations.
         
@@ -148,6 +173,8 @@ class AudioEncoderTiny(nn.Module):
             use_attention_pooling: use attention pooling for temporal aggregation (default: False)
                                    False = frame sequence output for CTC (ASR)
                                    True = pooled embedding output for contrastive learning (CLAP)
+            use_spiking: use SpikingAttention in transformer blocks (Arthemis)
+            use_ltc: use Liquid Time Constants in MLP (Arthemis)
         """
         super().__init__()
         
@@ -171,7 +198,7 @@ class AudioEncoderTiny(nn.Module):
         # Projection: 64 channels * (128 mel bins / freq_downsample) -> d
         freq_downsample = downsample_factor  # Same as time downsample
         self.proj = nn.Linear(64 * (128 // freq_downsample), d)
-        self.blocks = nn.ModuleList([EncoderBlock(d, heads, ff, dropout, use_flash=use_flash) for _ in range(layers)])
+        self.blocks = nn.ModuleList([EncoderBlock(d, heads, ff, dropout, use_flash=use_flash, use_spiking=use_spiking, use_ltc=use_ltc) for _ in range(layers)])
         self.norm = RMSNorm(d)
         
         # Attention pooling for contrastive learning (CLAP-style)

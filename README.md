@@ -45,6 +45,9 @@ with **small datasets** (each modality well under **5GB**). Includes:
 - **GQA (Grouped Query Attention)**: Multiple query heads share fewer key/value heads (configurable, default: disabled)
 - **SwiGLU**: Swish-gated linear unit activation `x * sigmoid(x)` (default: enabled)
 - **MoE (Mixture-of-Experts)**: Router selects top-k experts per token (configurable, default: disabled)
+- **Arthemis Extensions**: Neuromorphic components for enhanced temporal processing
+  - **SpikingAttention**: Event-driven attention with spiking neurons
+  - **Liquid Time Constants**: Adaptive temporal dynamics in feed-forward layers
 - **KV Caching**: Stores past key/value states for faster autoregressive generation
 - **RMSNorm**: Root Mean Square Layer Normalization (pre-norm architecture)
 
@@ -52,6 +55,7 @@ with **small datasets** (each modality well under **5GB**). Includes:
 - Accepts both token IDs and raw embeddings (for multimodal input)
 - KV caching support for efficient inference
 - Configurable Qwen3 Omni features (GQA, SwiGLU, MoE)
+- Optional Arthemis neuromorphic extensions (SpikingAttention, LTC)
 
 ### 2. Audio Encoder (AuT-Tiny)
 

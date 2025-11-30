@@ -27,6 +27,35 @@ class SwiGLU(nn.Module):
         swish = gate * torch.sigmoid(gate)
         return self.down_proj(swish * up)
 
+class SpikingNeuron(nn.Module):
+    """Leaky Integrate-and-Fire Spiking Neuron for Arthemis SpikingAttention"""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.tau = nn.Parameter(torch.ones(dim) * 0.5)  # time constant
+        self.threshold = nn.Parameter(torch.ones(dim) * 1.0)
+        self.reset_value = nn.Parameter(torch.zeros(dim))
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Simplified: apply a spiking-like transformation
+        # For surrogate gradient, use straight-through estimator
+        spike_prob = torch.sigmoid((x - self.threshold) / 0.1)
+        spike = (spike_prob > 0.5).float() - spike_prob.detach() + spike_prob
+        return spike
+
+class LiquidTimeConstant(nn.Module):
+    """Liquid Time Constant layer for Arthemis LTCFeedForward"""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.tau_net = nn.Linear(dim, dim)  # learnable time constant
+        self.state_net = nn.Linear(dim * 2, dim)  # input + state -> new state
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        tau = torch.sigmoid(self.tau_net(x)) + 0.1  # tau > 0.1
+        state = torch.zeros_like(x)  # initialize state
+        # Simple Euler integration for one step
+        new_state = state + (self.state_net(torch.cat([x, state], dim=-1)) - state) / tau
+        return new_state
+
 class MLP(nn.Module):
     """
     Multi-Layer Perceptron with optional SwiGLU activation.
@@ -43,9 +72,11 @@ class MLP(nn.Module):
         d: model dimension (input/output size)
         ff: feedforward dimension (gate/up projection size)
         use_swiglu: if True, use SwiGLU; if False, use standard GELU MLP
+        use_ltc: if True, use Liquid Time Constants (Arthemis)
     """
-    def __init__(self, d: int, ff: int, use_swiglu: bool = True) -> None:
+    def __init__(self, d: int, ff: int, use_swiglu: bool = True, use_ltc: bool = False) -> None:
         super().__init__()
+        self.use_ltc = use_ltc
         if use_swiglu:
             # SwiGLU implementation: gate + up projections, then down projection
             # Note: Standard SwiGLU uses 2/3 * ff for gate/up, but we use full ff
@@ -59,6 +90,11 @@ class MLP(nn.Module):
             self.act = nn.GELU()
             self.fc2 = nn.Linear(ff, d)
         self.use_swiglu = use_swiglu
+        
+        if use_ltc:
+            self.ltc1 = LiquidTimeConstant(ff)
+            self.ltc2 = LiquidTimeConstant(ff)
+            self.ltc_proj = nn.Linear(ff, ff, bias=False)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_swiglu:
@@ -66,13 +102,31 @@ class MLP(nn.Module):
             gate = self.gate_proj(x)
             up = self.up_proj(x)
             swish = gate * torch.sigmoid(gate)  # Swish activation
-            return self.down_proj(swish * up)
+            intermediate = swish * up
+            
+            if self.use_ltc:
+                ltc_input = intermediate
+                ltc_output = self.ltc1(ltc_input)
+                ltc_output = self.ltc2(ltc_output)
+                enhanced = intermediate + self.ltc_proj(ltc_output)
+                return self.down_proj(enhanced)
+            else:
+                return self.down_proj(intermediate)
         else:
-            return self.fc2(self.act(self.fc1(x)))
+            if self.use_ltc:
+                # For standard MLP, apply LTC to the hidden layer
+                hidden = self.act(self.fc1(x))
+                ltc_output = self.ltc1(hidden)
+                ltc_output = self.ltc2(ltc_output)
+                enhanced = hidden + self.ltc_proj(ltc_output)
+                return self.fc2(enhanced)
+            else:
+                return self.fc2(self.act(self.fc1(x)))
 
 class Attention(nn.Module):
     def __init__(self, d: int, heads: int, rope_theta: float = 10000.0, dropout: float = 0.0, 
-                 use_gqa: bool = False, kv_groups: Optional[int] = None, use_flash: bool = True) -> None:
+                 use_gqa: bool = False, kv_groups: Optional[int] = None, use_flash: bool = True,
+                 use_spiking: bool = False) -> None:
         """
         Attention with optional GQA (Grouped Query Attention) and Flash Attention.
         
@@ -84,6 +138,7 @@ class Attention(nn.Module):
             use_gqa: whether to use GQA
             kv_groups: number of key/value groups (if None and use_gqa=True, uses heads//2)
             use_flash: whether to use Flash Attention (PyTorch 2.0+ scaled_dot_product_attention)
+            use_spiking: whether to use SpikingAttention (Arthemis)
         """
         super().__init__()
         self.h = heads  # query heads
@@ -91,10 +146,16 @@ class Attention(nn.Module):
         self.dk = d // heads
         self.use_gqa = use_gqa
         self.use_flash = use_flash and HAS_FLASH_ATTENTION
+        self.use_spiking = use_spiking
         
         if use_flash and not HAS_FLASH_ATTENTION:
             warnings.warn("Flash Attention requested but not available. Falling back to standard attention.")
             self.use_flash = False
+        
+        if use_spiking:
+            self.spike_q = SpikingNeuron(self.dk * heads)
+            self.spike_k = SpikingNeuron(self.dk * heads)
+            self.spike_v = SpikingNeuron(self.dk * heads)
         
         if use_gqa:
             # GQA: multiple query heads share key/value heads
@@ -226,6 +287,11 @@ class Attention(nn.Module):
             k = self.k(x)  # (B, T, kv_groups * dk)
             v = self.v(x)  # (B, T, kv_groups * dk)
             
+            if self.use_spiking:
+                q = self.spike_q(q)
+                k = self.spike_k(k)
+                v = self.spike_v(v)
+            
             # Reshape
             q = rearrange(q, "b t (h d) -> b h t d", h=self.h)
             k_new = rearrange(k, "b t (g d) -> b g t d", g=self.kv_groups)
@@ -262,7 +328,14 @@ class Attention(nn.Module):
         else:
             # Standard MHA
             qkv = self.qkv(x).chunk(3, dim=-1)  # 3 * (B,T,D)
-            q, k, v = [rearrange(t, "b t (h d) -> b h t d", h=self.h) for t in qkv]
+            q, k, v = qkv
+            
+            if self.use_spiking:
+                q = self.spike_q(q)
+                k = self.spike_k(k)
+                v = self.spike_v(v)
+            
+            q, k, v = [rearrange(t, "b t (h d) -> b h t d", h=self.h) for t in [q, k, v]]
             
             # Apply RoPE
             if pos is None:
@@ -394,16 +467,17 @@ class MoE(nn.Module):
 class Block(nn.Module):
     def __init__(self, d: int, heads: int, ff: int, rope_theta: float, dropout: float, 
                  use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False, 
-                 num_experts: int = 8, num_experts_per_tok: int = 2, use_flash: bool = True) -> None:
+                 num_experts: int = 8, num_experts_per_tok: int = 2, use_flash: bool = True,
+                 use_spiking: bool = False, use_ltc: bool = False) -> None:
         super().__init__()
         self.norm1 = RMSNorm(d)
-        self.attn = Attention(d, heads, rope_theta=rope_theta, dropout=dropout, use_gqa=use_gqa, use_flash=use_flash)
+        self.attn = Attention(d, heads, rope_theta=rope_theta, dropout=dropout, use_gqa=use_gqa, use_flash=use_flash, use_spiking=use_spiking)
         self.norm2 = RMSNorm(d)
         self.use_moe = use_moe
         if use_moe:
             self.moe = MoE(d, ff, num_experts, num_experts_per_tok, use_swiglu)
         else:
-            self.mlp = MLP(d, ff, use_swiglu=use_swiglu)
+            self.mlp = MLP(d, ff, use_swiglu=use_swiglu, use_ltc=use_ltc)
         self.drop = nn.Dropout(dropout)
     
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None, 
@@ -435,6 +509,7 @@ class ThinkerLM(nn.Module):
                  dropout: float = 0.1, rope_theta: float = 10000, ctx: int = 1024, 
                  use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False, 
                  num_experts: int = 8, num_experts_per_tok: int = 2, use_flash: bool = True,
+                 use_spiking: bool = False, use_ltc: bool = False,
                  compile_model: bool = False) -> None:
         """
         ThinkerLM with optional Qwen3 Omni features and performance optimizations.
@@ -454,6 +529,8 @@ class ThinkerLM(nn.Module):
             num_experts: number of experts for MoE (default: 8)
             num_experts_per_tok: number of experts to activate per token (default: 2)
             use_flash: use Flash Attention for 2-4x speedup (default: True, requires PyTorch 2.0+)
+            use_spiking: use SpikingAttention (Arthemis) (default: False)
+            use_ltc: use Liquid Time Constants in MLP (Arthemis) (default: False)
             compile_model: use torch.compile() for 30-50% speedup (default: False, requires PyTorch 2.0+)
         """
         super().__init__()
@@ -467,7 +544,7 @@ class ThinkerLM(nn.Module):
         self.blocks = nn.ModuleList([
             Block(d, heads, ff, rope_theta, dropout, use_gqa=use_gqa, use_swiglu=use_swiglu,
                   use_moe=use_moe, num_experts=num_experts, num_experts_per_tok=num_experts_per_tok,
-                  use_flash=use_flash) 
+                  use_flash=use_flash, use_spiking=use_spiking, use_ltc=use_ltc) 
             for _ in range(n_layers)
         ])
         self.norm = RMSNorm(d)

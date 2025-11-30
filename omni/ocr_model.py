@@ -28,7 +28,8 @@ class OCRDecoderBlock(nn.Module):
     Follows Thinker's Block pattern with separate norm instances.
     """
     def __init__(self, d: int, heads: int, ff: int, rope_theta: float, dropout: float,
-                 use_gqa: bool = False, use_swiglu: bool = True, use_flash: bool = True) -> None:
+                 use_gqa: bool = False, use_swiglu: bool = True, use_flash: bool = True,
+                 use_spiking: bool = False, use_ltc: bool = False) -> None:
         super().__init__()
         # Separate norm instances for each sub-layer (like Thinker's Block)
         self.norm1 = RMSNorm(d)  # For self-attention
@@ -37,16 +38,16 @@ class OCRDecoderBlock(nn.Module):
         
         # Self-attention with RoPE (causal)
         self.self_attn = Attention(d, heads, rope_theta=rope_theta, dropout=dropout,
-                                   use_gqa=use_gqa, use_flash=use_flash)
+                                   use_gqa=use_gqa, use_flash=use_flash, use_spiking=use_spiking)
         
         # Cross-attention to image features (no RoPE needed for cross-attention)
         self.cross_attn = nn.MultiheadAttention(d, heads, dropout=dropout, batch_first=True)
         
         # Feedforward network
         if use_swiglu:
-            self.mlp = MLP(d, ff, use_swiglu=True)
+            self.mlp = MLP(d, ff, use_swiglu=True, use_ltc=use_ltc)
         else:
-            self.mlp = MLP(d, ff, use_swiglu=False)
+            self.mlp = MLP(d, ff, use_swiglu=False, use_ltc=use_ltc)
         
         self.drop = nn.Dropout(dropout)
     
@@ -96,8 +97,8 @@ class OCRDecoder(nn.Module):
                  d_ff: int = 1024, vocab_size: int = 128, dropout: float = 0.1,
                  max_seq_len: int = 256, use_gqa: bool = False, kv_groups: int = 1,
                  use_swiglu: bool = True, rope_theta: float = 10000.0,
-                 use_flash: bool = True, compile_model: bool = False,
-                 vision_dim: int = 128) -> None:
+                 use_flash: bool = True, use_spiking: bool = False, use_ltc: bool = False,
+                 compile_model: bool = False, vision_dim: int = 128) -> None:
         """
         Initialize OCR decoder.
         
@@ -114,6 +115,8 @@ class OCRDecoder(nn.Module):
             use_swiglu: Use SwiGLU activation
             rope_theta: RoPE theta parameter
             use_flash: Use Flash Attention for speedup
+            use_spiking: Use SpikingAttention (Arthemis)
+            use_ltc: Use Liquid Time Constants in MLP (Arthemis)
             compile_model: Use torch.compile()
         """
         super().__init__()
@@ -132,7 +135,8 @@ class OCRDecoder(nn.Module):
         # Decoder blocks (each with separate norms)
         self.blocks = nn.ModuleList([
             OCRDecoderBlock(d_model, n_heads, d_ff, rope_theta, dropout,
-                           use_gqa=use_gqa, use_swiglu=use_swiglu, use_flash=use_flash)
+                           use_gqa=use_gqa, use_swiglu=use_swiglu, use_flash=use_flash,
+                           use_spiking=use_spiking, use_ltc=use_ltc)
             for _ in range(n_layers)
         ])
         
@@ -250,7 +254,8 @@ class OCRModel(nn.Module):
                  decoder_heads: int = 4, decoder_d_ff: int = 1024,
                  vocab_size: int = 128, dropout: float = 0.1,
                  use_gqa: bool = False, use_swiglu: bool = True,
-                 use_flash: bool = True, compile_model: bool = False) -> None:
+                 use_flash: bool = True, compile_model: bool = False,
+                 use_spiking: bool = False, use_ltc: bool = False) -> None:
         """
         Initialize complete OCR model.
         
@@ -271,6 +276,8 @@ class OCRModel(nn.Module):
             use_swiglu: Use SwiGLU activation in decoder
             use_flash: Use Flash Attention in decoder
             compile_model: Use torch.compile()
+            use_spiking: Use SpikingAttention in decoder (Arthemis)
+            use_ltc: Use Liquid Time Constants in decoder MLP (Arthemis)
         """
         super().__init__()
         
@@ -298,7 +305,9 @@ class OCRModel(nn.Module):
             use_swiglu=use_swiglu,
             use_flash=use_flash,
             compile_model=compile_model,
-            vision_dim=vision_d_model  # Pass vision encoder dimension
+            vision_dim=vision_d_model,  # Pass vision encoder dimension
+            use_spiking=use_spiking,
+            use_ltc=use_ltc
         )
     
     def forward(self, image: torch.Tensor, text_ids: torch.Tensor) -> torch.Tensor:

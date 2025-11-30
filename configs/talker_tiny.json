@@ -11,6 +11,8 @@
   "use_gqa": true,
   "kv_groups": 1,
   "use_swiglu": true,
+  "use_spiking": false,
+  "use_ltc": false,
   "lr": 0.0005,
   "wd": 0.01,
   "warmup_steps": 100,

@@ -46,6 +46,8 @@ def main(cfg):
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
         rope_theta=cfg.get("rope_theta", 10000.0),
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False),
         compile_model=use_compile
     ).to(device)
     opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))

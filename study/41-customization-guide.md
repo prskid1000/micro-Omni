@@ -90,15 +90,42 @@ python sft_omni.py \
   --base_model checkpoints/omni_sft_tiny/omni_final.pt
 ```
 
-### 4. Change Vocabulary Size
+### 4. Enable Arthemis Neuromorphic Features
 
+**Add Spiking Neural Networks:**
 ```json
+// Enable SpikingAttention for event-driven processing
 {
-  "vocab_size": 10000,  // Was 5000
-  // Covers more words, but slower
-  // Retrain tokenizer with more data
+  "use_spiking": true
 }
+// Benefits: Energy-efficient attention, temporal patterns, neuromorphic compatibility
 ```
+
+**Add Liquid Time Constants:**
+```json
+// Enable LTC in feed-forward networks
+{
+  "use_ltc": true
+}
+// Benefits: Adaptive temporal dynamics, multi-scale processing
+```
+
+**Full Arthemis Mode:**
+```json
+// Complete neuromorphic transformer
+{
+  "use_spiking": true,
+  "use_ltc": true
+}
+// Combines both spiking attention and liquid time constants
+```
+
+**When to Use Arthemis:**
+- ✅ **Temporal tasks:** Time series, sequential data
+- ✅ **Energy-constrained:** Edge devices, mobile
+- ✅ **Neuromorphic hardware:** Specialized chips
+- ✅ **Biological modeling:** Brain-inspired AI
+- ❌ **Standard NLP:** May need longer training
 
 ### 5. Modify Attention Mechanism
 

@@ -67,7 +67,9 @@ def load_model_and_tokenizer(checkpoint_dir, device="cuda"):
         use_moe=cfg.get("use_moe", False),
         num_experts=cfg.get("num_experts", 8),
         num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
-        compile_model=False
+        compile_model=False,
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False)
     ).to(device)
     
     # Load weights

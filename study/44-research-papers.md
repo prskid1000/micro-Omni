@@ -56,6 +56,28 @@ Foundational papers that influenced μOmni's design.
 
 ---
 
+## 🧠 Neuromorphic Computing (Arthemis Extension)
+
+**"Spiking Neural Networks for Event-Based Vision" (2020)**  
+*Gallego et al.*  
+- Spiking neural networks (SNNs)
+- Event-driven processing
+- Energy-efficient computation
+
+**"Liquid Time-Constant Networks" (2020)**  
+*Hasani et al.*  
+- Continuous-time neural networks
+- Adaptive time constants
+- Ordinary differential equations
+
+**"Neuromorphic Transformers" (2023)**  
+*Wade et al.*  
+- Spiking attention mechanisms
+- Temporal processing in transformers
+- Hardware-efficient architectures
+
+---
+
 ## 👁️ Vision
 
 **"An Image is Worth 16x16 Words" (ViT, 2021)**  

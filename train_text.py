@@ -92,6 +92,8 @@ def main(cfg):
         use_moe=cfg.get("use_moe", False),
         num_experts=cfg.get("num_experts", 8),
         num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False),
         compile_model=use_compile
     ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))

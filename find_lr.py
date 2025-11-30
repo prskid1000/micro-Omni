@@ -120,7 +120,9 @@ def setup_audio_enc_model(cfg, device):
         cfg.get("n_layers", 4),
         cfg.get("dropout", 0.1),
         downsample_factor=cfg.get("downsample_time", 8),
-        compile_model=False
+        compile_model=False,
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False)
     ).to(device)
     
     head = nn.Linear(d_model, cfg.get("ctc_vocab_size", 100)).to(device)
@@ -201,17 +203,24 @@ def setup_talker_model(cfg, device):
 def setup_ocr_model(cfg, device):
     """Setup OCR model and data."""
     model = OCRModel(
-        cfg.get("d_model", 192),
-        cfg.get("n_heads", 3),
-        cfg.get("d_ff", 768),
-        cfg.get("n_layers", 4),
-        cfg.get("dropout", 0.1),
-        cfg.get("img_height", 64),
-        cfg.get("img_width", 256),
-        cfg.get("patch_height", 8),
-        cfg.get("patch_width", 8),
-        cfg.get("vocab_size", 100),
-        compile_model=False
+        img_size=cfg.get("img_size", 224),
+        patch=cfg.get("patch", 16),
+        vision_d_model=cfg.get("vision_d_model", 128),
+        vision_layers=cfg.get("vision_layers", 4),
+        vision_heads=cfg.get("vision_heads", 2),
+        vision_d_ff=cfg.get("vision_d_ff", 512),
+        decoder_d_model=cfg.get("decoder_d_model", 256),
+        decoder_layers=cfg.get("decoder_layers", 4),
+        decoder_heads=cfg.get("decoder_heads", 4),
+        decoder_d_ff=cfg.get("decoder_d_ff", 1024),
+        vocab_size=cfg.get("vocab_size", 100),
+        dropout=cfg.get("dropout", 0.1),
+        use_gqa=cfg.get("use_gqa", False),
+        use_swiglu=cfg.get("use_swiglu", True),
+        use_flash=cfg.get("use_flash", True),
+        compile_model=False,
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False)
     ).to(device)
     
     # OCRModel has built-in head, no separate head needed

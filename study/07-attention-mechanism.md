@@ -485,6 +485,67 @@ class Attention(nn.Module):
 
 ---
 
+## 🧠 Advanced: SpikingAttention (Arthemis Extension)
+
+μOmni includes an optional neuromorphic attention mechanism inspired by spiking neural networks.
+
+### Spiking Neural Networks (SNNs)
+
+**Biological Inspiration:**
+```
+Real neurons communicate via discrete spikes:
+- Neurons either fire (spike) or remain silent
+- Information encoded in spike timing and frequency
+- Energy-efficient (sparse) computation
+```
+
+**Mathematical Model:**
+```
+Leaky Integrate-and-Fire (LIF) Neuron:
+
+τ * dV/dt = -V + I(t)           # Membrane potential dynamics
+if V(t) ≥ V_threshold: spike    # Threshold crossing
+V → V_reset                     # Reset after spiking
+```
+
+### SpikingAttention Implementation
+
+```
+Standard Attention:
+Q, K, V = Linear_projections(input)
+Attention_weights = softmax(Q @ K^T / √d)
+
+Arthemis SpikingAttention:
+Q, K, V = Linear_projections(input)
+↓
+Spiking_Q = LIF_Neuron(Q)    ← Convert to spike trains
+Spiking_K = LIF_Neuron(K)    ← Event-driven processing
+Spiking_V = LIF_Neuron(V)    ← Sparse representation
+↓
+RoPE_Q, RoPE_K = apply_rotary_embedding(Spiking_Q, Spiking_K)
+↓
+Attention_weights = softmax(RoPE_Q @ RoPE_K^T / √d)
+Output = Attention_weights @ Spiking_V
+```
+
+### Benefits
+
+- **Energy Efficiency**: Sparse spike-based computation
+- **Temporal Dynamics**: Natural handling of sequential patterns
+- **Neuromorphic Hardware**: Compatible with specialized chips
+- **Biological Plausibility**: Closer to brain-like processing
+
+### Configuration
+
+Enable in config files:
+```json
+{
+  "use_spiking": true
+}
+```
+
+---
+
 ## 🎓 Self-Check Questions
 
 1. What are Q, K, V in attention mechanism?

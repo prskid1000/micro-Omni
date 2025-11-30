@@ -36,9 +36,63 @@ configs/
   "n_heads": 4, // Attention heads
   "d_ff": 1024, // FFN hidden size (usually 4×d_model)
   "dropout": 0.3, // Dropout rate (0-1)
-  "ctx_len": 512 // Context length (tokens)
+  "ctx_len": 512, // Context length (tokens)
+  
+  // Advanced Features
+  "use_gqa": false, // Grouped Query Attention (fewer KV heads)
+  "kv_groups": 2, // KV groups for GQA (when use_gqa=true)
+  "use_swiglu": true, // SwiGLU activation (vs GELU)
+  "use_moe": false, // Mixture of Experts
+  "num_experts": 8, // Number of experts for MoE
+  "num_experts_per_tok": 2, // Experts activated per token
+  
+  // Arthemis Neuromorphic Features
+  "use_spiking": false, // SpikingAttention (SNN-based attention)
+  "use_ltc": false // Liquid Time Constants (adaptive FFN)
 }
 ```
+
+### Arthemis Neuromorphic Features
+
+**SpikingAttention (`use_spiking`):**
+- Replaces standard attention with spiking neural networks
+- Uses Leaky Integrate-and-Fire (LIF) neurons for event-driven processing
+- Benefits: Energy-efficient, temporal pattern recognition, neuromorphic hardware compatibility
+- Default: `false` (use standard attention)
+
+**Liquid Time Constants (`use_ltc`):**
+- Adds adaptive time constants to feed-forward networks
+- Enables different processing speeds within the same layer
+- Benefits: Multi-scale temporal processing, continuous-time dynamics
+- Default: `false` (use standard MLP)
+
+**Configuration Examples:**
+
+```json
+// Standard transformer (default)
+{
+  "use_spiking": false,
+  "use_ltc": false
+}
+
+// Arthemis full neuromorphic mode
+{
+  "use_spiking": true,
+  "use_ltc": true
+}
+
+// Hybrid: Spiking attention only
+{
+  "use_spiking": true,
+  "use_ltc": false
+}
+```
+
+**Performance Notes:**
+- Arthemis features add ~10-20% parameters
+- May require longer training for convergence
+- Best suited for temporal/sequential tasks
+- Compatible with all other optimizations (GQA, MoE, etc.)
 
 ### Training Hyperparameters
 

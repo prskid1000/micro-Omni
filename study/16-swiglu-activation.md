@@ -475,6 +475,92 @@ class MLP(nn.Module):
 
 ---
 
+## 🧠 Advanced: Liquid Time Constants (Arthemis Extension)
+
+μOmni includes an optional neuromorphic feed-forward mechanism that adapts processing speeds dynamically.
+
+### Beyond Static Activations
+
+**Traditional FFN:**
+```
+Input → Linear → Activation → Linear → Output
+        ↑         ↑         ↑
+     Fixed     Fixed     Fixed
+   weights   function   weights
+```
+
+**Liquid Time Constants:**
+```
+Input → Linear → LTC_Layer → Linear → Output
+        ↑         ↑         ↑
+     Fixed   Adaptive   Fixed
+   weights   time const weights
+```
+
+### How LTC Works
+
+**Mathematical Foundation:**
+```
+dh/dt = f(input, h, θ) / τ(input, h)
+
+Where:
+- h: hidden state (evolves over time)
+- f: state update function
+- τ: learned time constant (controls evolution speed)
+- θ: learned parameters
+```
+
+**Adaptive Processing:**
+```
+Fast τ (τ ≈ 0.1): Quick responses to sudden changes
+Slow τ (τ ≈ 1.0): Smooth processing of gradual trends
+Learned τ: Model decides optimal speed per input
+```
+
+### Implementation in μOmni
+
+```
+Standard SwiGLU:
+Gate = SiLU(Gate_proj(x))
+Up = Up_proj(x)
+Intermediate = Gate × Up
+Output = Down_proj(Intermediate)
+
+Arthemis LTC-SwiGLU:
+Gate = SiLU(Gate_proj(x))
+Up = Up_proj(x)
+Intermediate = Gate × Up
+↓
+LTC_input = Intermediate
+LTC_output = LTC(LTC_input)  ← Adaptive time constants
+LTC_output = LTC(LTC_output) ← Multiple layers
+↓
+Enhanced = Intermediate + LTC_proj(LTC_output)
+Output = Down_proj(Enhanced)
+```
+
+### Benefits
+
+- **Multi-scale Processing:** Handle both fast transients and slow trends
+- **Adaptive Dynamics:** Time constants adjust based on input patterns
+- **Temporal Reasoning:** Better at sequential/temporal tasks
+- **Neuromorphic:** Closer to biological neural processing
+
+### Configuration
+
+Enable in config:
+```json
+{
+  "use_ltc": true
+}
+```
+
+**When to Use:**
+- ✅ Sequential data (time series, language)
+- ✅ Multi-scale patterns (fast + slow dynamics)
+- ✅ Temporal reasoning tasks
+- ❌ Static classification (may overfit)
+
 ## 🎓 Self-Check Questions
 
 1. Why do we need activation functions at all?

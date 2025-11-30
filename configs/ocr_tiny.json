@@ -21,6 +21,8 @@
   "use_swiglu": true,
   "use_flash": true,
   "rope_theta": 10000.0,
+  "use_spiking": false,
+  "use_ltc": false,
   
   "batch_size": 32,
   "num_workers": 1,

@@ -133,7 +133,9 @@ def main(cfg):
         cfg.get("dropout", 0.1),
         downsample_factor=downsample_factor,
         compile_model=use_compile,
-        use_attention_pooling=use_attention_pooling
+        use_attention_pooling=use_attention_pooling,
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False)
     ).to(device)
     
     # CTC head with dynamic vocabulary (only for CTC mode)

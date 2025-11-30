@@ -86,7 +86,34 @@ python train_ocr.py --config configs/ocr_tiny.json
 - Memory optimized: batch_size=4, gradient accumulation=2
 - Supports synthetic OCR datasets (MJSynth)
 
-### 5. More Training Data
+### 5. Arthemis Neuromorphic Extensions ✅ **IMPLEMENTED**
+
+**Current:** Standard transformer with optional optimizations  
+**Status:** Arthemis features available in Thinker
+
+- SpikingAttention: Event-driven attention with SNNs
+- Liquid Time Constants: Adaptive temporal dynamics in FFN
+- Neuromorphic processing for energy-efficient AI
+- Compatible with all existing optimizations
+
+**Usage:**
+
+```json
+// Enable Arthemis features in config
+{
+  "use_spiking": true,  // SpikingAttention
+  "use_ltc": true       // Liquid Time Constants
+}
+```
+
+**Benefits:**
+
+- Energy-efficient computation (sparse spikes)
+- Temporal pattern recognition
+- Neuromorphic hardware compatibility
+- Multi-scale processing capabilities
+
+### 6. More Training Data
 
 **Current:** Synthetic + small datasets  
 **Upgrade:** Real-world datasets

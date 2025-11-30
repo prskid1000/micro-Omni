@@ -147,7 +147,9 @@ def load_model_and_vocab(checkpoint_dir, device="cuda"):
         use_gqa=cfg.get("use_gqa", False),
         use_swiglu=cfg.get("use_swiglu", True),
         use_flash=cfg.get("use_flash", True),
-        compile_model=False
+        compile_model=False,
+        use_spiking=cfg.get("use_spiking", False),
+        use_ltc=cfg.get("use_ltc", False)
     ).to(device)
     
     # Load weights

@@ -20,6 +20,8 @@
   "use_amp": true,
   "use_flash": true,
   "use_compile": false,
+  "use_spiking": false,
+  "use_ltc": false,
   "num_workers": 1,
   "drop_last": true,
   "print_freq": 100,
