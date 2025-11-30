@@ -527,7 +527,7 @@ def main(cfg):
                 break
             
             # Checkpointing - save only model file and metadata
-            if step > 0 and step % checkpoint_freq == 0:
+            if batch_step % checkpoint_freq == 0 and batch_step > 0:
                 # Save model weights only (overwrite existing file)
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
                 model_data = {

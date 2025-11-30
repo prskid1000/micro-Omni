@@ -23,7 +23,7 @@
   "max_steps": 3872200,
   
   "batch_size": 32,
-  "gradient_accumulation_steps": 1,
+  "gradient_accumulation_steps": 2,
   
   "use_amp": true,
   "use_flash": true,
@@ -41,7 +41,7 @@
   "val_batches": 80,
   "val_batches_epoch_end": 150,
   
-  "checkpoint_freq": 5000,
+  "checkpoint_freq": 25000,
   "max_grad_norm": 1.0,
   
   "seed": 42,

@@ -988,7 +988,7 @@ def main(cfg):
                 break
             
             # Checkpointing
-            if step > 0 and step % checkpoint_freq == 0:
+            if batch_step % checkpoint_freq == 0 and batch_step > 0:
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
                 checkpoint_data = {
                     "generator": generator.state_dict(),

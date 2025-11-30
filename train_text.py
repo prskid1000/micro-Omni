@@ -488,6 +488,7 @@ def main(cfg):
                     "step": step,
                     "epoch": epoch,
                     "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+                    "ctx_len": ctx_len
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.checkpoint(step, model_path)
