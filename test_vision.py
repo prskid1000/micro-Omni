@@ -305,7 +305,7 @@ def compute_retrieval_metrics(image_embeds, text_embeds, batch_size):
         'avg_t2i_rank': np.mean(t2i_ranks),
     }
 
-def evaluate_embedding_quality(model, proj_head, cfg, device="cuda", num_samples=100, verbose=True):
+def evaluate_embedding_quality(model, proj_head, cfg, tok, device="cuda", num_samples=100, verbose=True):
     """
     Evaluate vision encoder embedding quality.
     
@@ -324,10 +324,15 @@ def evaluate_embedding_quality(model, proj_head, cfg, device="cuda", num_samples
     if not os.path.exists(manifest_path):
         raise FileNotFoundError(f"Image manifest not found: {manifest_path}")
     
-    # Create dataset
+    # Create dataset (requires tokenizer and ctx_len for caption tokenization)
+    ctx_len = cfg.get("ctx_len", cfg.get("text_max_len", 77))
+    if tok is None:
+        raise ValueError("Tokenizer required for ImgCapDataset. Ensure tokenizer.model exists in thinker checkpoint.")
     dataset = ImgCapDataset(
         manifest=manifest_path,
         image_root=image_root,
+        tokenizer=tok,
+        ctx_len=ctx_len,
         img_size=cfg.get("img_size", 224),
         shuffle_buffer_size=10000,
         seed=42,  # Fixed seed for reproducibility
@@ -353,11 +358,13 @@ def evaluate_embedding_quality(model, proj_head, cfg, device="cuda", num_samples
                 img_tensor = img_tensor.unsqueeze(0).to(device)
                 
                 # Forward pass
-                cls, grid = model(img_tensor)  # cls: (1, d), grid: (1, num_patches, d)
+                cls, grid = model(img_tensor)  # cls: (1, 1, d), grid: (1, num_patches, d)
                 
-                # Apply projection if available
+                # Apply projection if available (squeeze sequence dim: (1, 1, d) -> (1, d))
                 if proj_head is not None:
-                    cls = proj_head(cls)
+                    cls = proj_head(cls.squeeze(1))
+                else:
+                    cls = cls.squeeze(1)
                 
                 all_cls_embeds.append(cls.cpu())
                 all_grid_embeds.append(grid.cpu())
@@ -432,10 +439,15 @@ def evaluate_retrieval(model, img_proj, text_proj, text_encoder, tok, cfg, devic
     if not os.path.exists(manifest_path):
         raise FileNotFoundError(f"Image manifest not found: {manifest_path}")
     
-    # Create dataset
+    # Create dataset (requires tokenizer and ctx_len for caption tokenization)
+    ctx_len = cfg.get("ctx_len", cfg.get("text_max_len", 77))
+    if tok is None:
+        raise ValueError("Tokenizer required for ImgCapDataset. Ensure tokenizer.model exists in thinker checkpoint.")
     dataset = ImgCapDataset(
         manifest=manifest_path,
         image_root=image_root,
+        tokenizer=tok,
+        ctx_len=ctx_len,
         img_size=cfg.get("img_size", 224),
         shuffle_buffer_size=10000,
         seed=42,
@@ -661,7 +673,7 @@ def main():
     # Evaluate embedding quality
     try:
         embedding_metrics = evaluate_embedding_quality(
-            model, img_proj, cfg,
+            model, img_proj, cfg, tok,
             device=args.device,
             num_samples=args.num_samples,
             verbose=True

@@ -1035,7 +1035,7 @@ def main(cfg):
             val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
             
             with torch.no_grad():
-                for val_mel, val_audio in val_dl:
+                for val_mel, val_audio, val_mel_lengths, val_audio_lengths in val_dl:
                     val_mel = val_mel.to(device)
                     val_audio = val_audio.to(device)
                     

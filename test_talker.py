@@ -53,10 +53,10 @@ def load_model_and_codec(checkpoint_dir, device="cuda"):
     ).to(device)
     
     talker = TalkerTiny(
-        d_model=cfg.get("d_model", 256),
+        d=cfg.get("d_model", cfg.get("d", 384)),
         n_layers=cfg.get("n_layers", 4),
         n_heads=cfg.get("n_heads", 4),
-        d_ff=cfg.get("d_ff", 1024),
+        ff=cfg.get("d_ff", cfg.get("ff", 1536)),
         codebooks=codebooks,
         codebook_size=codebook_size,
         dropout=cfg.get("dropout", 0.1),

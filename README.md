@@ -673,15 +673,36 @@ pip install -r requirements.txt
 ## Datasets (< 5GB per modality)
 You have two options:
 
-### Option A: Tiny synthetic samples (included)
-Run once to generate toy data that exercises the pipeline:
+### Option A: Synthetic samples (recommended for quick start)
+Run once to generate toy data that exercises the full pipeline. Outputs to **production paths** so configs work without changes:
 ```
 python scripts/make_synthetic_datasets.py
+# Or with fewer samples for quick validation:
+python scripts/make_synthetic_datasets.py --num-samples 1000
 ```
 This creates:
-- `data/text/tiny_corpus.txt` (~2MB)
-- `data/images/{images,annotations}.json` (~20MB)
-- `data/audio/{wav/*.wav, asr.csv, tts.csv}` (~15MB)
+- `data/text/production_corpus.txt`
+- `data/images/production_annotations.json` + `data/images/images/*.png`
+- `data/audio/production_asr.csv`, `production_tts.csv` + `data/audio/wav/*.wav`
+- `data/ocr/production_ocr.csv` + `data/ocr/images/*.png`
+
+**Synthetic configs** (`configs/synthetic_*.json`): Use these with small datasets. They set `vocab_size=1024` (required when corpus has &lt;~50K tokens; SentencePiece errors with 32K on tiny data) and lower `max_steps` for quicker runs.
+
+**Full workflow (create → train → test):**
+```
+python scripts/run_synthetic_full.py --num-samples 1000
+# Or skip data creation if already done:
+python scripts/run_synthetic_full.py --skip-data --stages A,B,C,D,E,G
+```
+
+If you previously ran with production configs and got a tokenizer error, remove the old tokenizer before re-running:
+```
+del checkpoints\thinker_tiny\tokenizer.model
+```
+
+**Vocoder (Stage F)** is optional and excluded from the default workflow. Griffin-Lim works without it. To train and test the vocoder, run: `python scripts/run_synthetic_full.py --stages A,B,C,D,E,F,G`
+
+**No valid samples (audio test):** Synthetic ASR transcriptions are kept short (`sample N`) so they satisfy CTC's constraint: output frames must be >= text length (after 4x temporal downsampling).
 
 ### Option B: Real small datasets (each <5GB locally)
 Scripts are provided but commented with URLs (so you can choose mirrors). Examples:

@@ -1,0 +1,65 @@
+{
+  "save_dir": "checkpoints/ocr_tiny",
+  "train_csv": "data/ocr/production_ocr.csv",
+  "image_root": "data/ocr",
+
+  "img_size": 224,
+  "patch": 16,
+
+  "vision_d_model": 192,
+  "vision_layers": 2,
+  "vision_heads": 3,
+  "vision_d_ff": 768,
+
+  "decoder_d_model": 384,
+  "decoder_layers": 3,
+  "decoder_heads": 6,
+  "decoder_d_ff": 1536,
+
+  "dropout": 0.1,
+  "use_gqa": true,
+  "use_swiglu": true,
+  "use_flash": true,
+  "rope_theta": 10000.0,
+  "use_spiking": false,
+  "use_ltc": false,
+
+  "batch_size": 32,
+  "num_workers": 1,
+  "drop_last": true,
+
+  "lr": 0.001,
+  "wd": 0.01,
+  "warmup_steps": 100,
+  "max_steps": 3000,
+  "max_epochs": 2,
+
+  "gradient_accumulation_steps": 1,
+  "max_grad_norm": 1.0,
+
+  "use_amp": true,
+
+  "val_loss_threshold": 0.1,
+  "val_split": 0.1,
+
+  "print_freq": 50,
+  "checkpoint_freq": 1000,
+  "val_freq": 200,
+  "val_batches": 20,
+  "val_batches_epoch_end": 50,
+
+  "seed": 42,
+  "shuffle_buffer_size": 10000,
+
+  "use_ema": true,
+  "ema_decay": 0.9995,
+
+  "use_compile": false,
+
+  "max_text_length_percentile": 95.0,
+
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 8.0,
+  "lr_spike_duration": 150,
+  "lr_spike_consecutive_increases": 2
+}
