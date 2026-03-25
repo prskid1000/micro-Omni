@@ -280,33 +280,62 @@ def generate_text(model, tokenizer, prompt, device="cuda", max_length=100, tempe
     return generated_text
 
 
+def load_corpus_lines(cfg, min_length=10):
+    """Load non-empty lines from the training corpus, filtered by minimum character length."""
+    text_path = cfg.get("train_text", "data/text/production_corpus.txt")
+    if not os.path.exists(text_path):
+        raise FileNotFoundError(f"Training corpus not found: {text_path}")
+    with open(text_path, 'r', encoding='utf-8') as f:
+        lines = [line.strip() for line in f if len(line.strip()) >= min_length]
+    return lines
+
+
+def make_prompt_from_line(line, tokenizer, prompt_token_count=4):
+    """
+    Split a corpus line into a prompt (first N tokens) and the expected continuation.
+
+    Returns (prompt_text, full_line) or None if the line is too short.
+    """
+    token_ids = tokenizer.encode(line)
+    if len(token_ids) < prompt_token_count + 2:
+        return None  # Line too short to split meaningfully
+    prompt_ids = token_ids[:prompt_token_count]
+    prompt_text = tokenizer.decode(prompt_ids)
+    return prompt_text, line
+
+
 def evaluate_generation_quality(model, tokenizer, cfg, device="cuda", num_prompts=10):
     """
-    Evaluate generation quality with sample prompts.
-    
+    Evaluate generation quality using in-distribution prompts from the training corpus.
+
+    Reads random lines from the training data, uses the first few tokens of each line
+    as the prompt, and generates continuations.
+
     Returns generated texts and basic quality metrics.
     """
     model.eval()
-    
-    # Sample prompts (you can customize these)
-    prompts = [
-        "The quick brown fox",
-        "Once upon a time",
-        "In a world where",
-        "The meaning of life is",
-        "Artificial intelligence will",
-        "The future of technology",
-        "Scientists have discovered",
-        "The most important thing",
-        "When I was young",
-        "The best way to learn",
-    ]
-    
+
+    # Load prompts from the actual training corpus
+    corpus_lines = load_corpus_lines(cfg)
+    if not corpus_lines:
+        raise ValueError("Training corpus is empty or not found")
+
+    random.seed(42)
+    sampled_lines = random.sample(corpus_lines, min(num_prompts * 2, len(corpus_lines)))
+
     generated_samples = []
-    
-    print(f"\nGenerating {num_prompts} text samples...")
-    
-    for i, prompt in enumerate(prompts[:num_prompts]):
+
+    print(f"\nGenerating {num_prompts} text samples from training corpus prompts...")
+
+    for line in sampled_lines:
+        if len(generated_samples) >= num_prompts:
+            break
+
+        result = make_prompt_from_line(line, tokenizer, prompt_token_count=4)
+        if result is None:
+            continue
+        prompt, full_line = result
+
         try:
             generated_text = generate_text(
                 model, tokenizer, prompt,
@@ -317,16 +346,17 @@ def evaluate_generation_quality(model, tokenizer, cfg, device="cuda", num_prompt
                 top_p=0.95,
                 ctx_len=cfg.get("ctx_len", 512)
             )
-            
+
             generated_samples.append({
                 'prompt': prompt,
+                'expected': full_line,
                 'generated': generated_text,
             })
-            
+
         except Exception as e:
-            print(f"⚠️  Error generating text for prompt '{prompt}': {e}")
+            print(f"  Error generating text for prompt '{prompt}': {e}")
             continue
-    
+
     return generated_samples
 
 
@@ -388,7 +418,9 @@ def print_results(ppl_metrics, generation_samples=None):
         
         for idx, sample in enumerate(generation_samples):
             print(f"\nSample {idx+1}:")
-            print(f"  Prompt: '{sample['prompt']}'")
+            print(f"  Prompt:    '{sample['prompt']}'")
+            if 'expected' in sample:
+                print(f"  Expected:  '{sample['expected']}'")
             print(f"  Generated: '{sample['generated']}'")
     
     # Overall assessment

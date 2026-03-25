@@ -305,13 +305,12 @@ def main(cfg):
                     continue
             
             # Unpack batch data (now includes mel_lengths)
-            if isinstance(batch_data, tuple) and len(batch_data) == 2:
+            if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
                 mel, mel_lengths = batch_data
                 mel_lengths = mel_lengths.to(device)
             else:
                 # Fallback for old collate function that doesn't return lengths
-                mel = batch_data
-                # Estimate lengths from mel energy (fallback)
+                mel = batch_data if not isinstance(batch_data, (tuple, list)) else batch_data[0]
                 mel_energy = mel.abs().sum(dim=-1)  # (B, T)
                 threshold = mel_energy.max(dim=1, keepdim=True)[0] * 0.01
                 mel_lengths = (mel_energy > threshold).sum(dim=1)  # (B,)
@@ -506,7 +505,7 @@ def main(cfg):
                     with torch.no_grad():
                         for val_batch_data in val_dl:
                             # Unpack validation batch (may include mel_lengths)
-                            if isinstance(val_batch_data, tuple) and len(val_batch_data) == 2:
+                            if isinstance(val_batch_data, (tuple, list)) and len(val_batch_data) == 2:
                                 val_mel, val_mel_lengths = val_batch_data
                                 val_mel_lengths = val_mel_lengths.to(device)
                             else:
@@ -586,7 +585,8 @@ def main(cfg):
                         ema.restore()
                     
                     # Check for LR spike trigger
-                    lr_spike.check_and_spike(avg_val_loss, opt, logger)
+                    if lr_spike is not None:
+                        lr_spike.check_and_spike(avg_val_loss, opt, logger)
                     
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
@@ -680,7 +680,7 @@ def main(cfg):
             with torch.no_grad():
                 for val_batch_data in val_dl:
                     # Unpack validation batch (may include mel_lengths)
-                    if isinstance(val_batch_data, tuple) and len(val_batch_data) == 2:
+                    if isinstance(val_batch_data, (tuple, list)) and len(val_batch_data) == 2:
                         val_mel, val_mel_lengths = val_batch_data
                         val_mel_lengths = val_mel_lengths.to(device)
                     else:
