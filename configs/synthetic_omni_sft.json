@@ -16,7 +16,7 @@
   "num_workers": 2,
   "drop_last": true,
   "print_freq": 50,
-  "max_epochs": 2,
+  "max_epochs": 50,
   "val_loss_threshold": 0.05,
   "val_split": 0.1,
   "val_freq": 100,

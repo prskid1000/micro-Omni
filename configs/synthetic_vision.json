@@ -4,7 +4,7 @@
   "image_root": "data/images",
 
   "seed": 42,
-  "max_epochs": 2,
+  "max_epochs": 50,
   "max_steps": 5000,
 
   "img_size": 224,

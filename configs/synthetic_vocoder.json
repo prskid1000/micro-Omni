@@ -14,7 +14,7 @@
   "wd": 1e-6,
   "warmup_steps": 50,
   "max_steps": 5000,
-  "max_epochs": 2,
+  "max_epochs": 50,
   "gradient_accumulation_steps": 1,
   "max_grad_norm": 1.0,
   "use_amp": true,
