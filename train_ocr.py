@@ -469,8 +469,18 @@ def main(cfg):
                     val_loss_sum = 0.0
                     val_count = 0
 
+                    # Recreate val_dl each validation (IterableDataset exhausts after one pass)
+                    val_dl_iter = DataLoader(
+                        val_ds,
+                        batch_size=cfg.get("batch_size", 4),
+                        shuffle=False,
+                        num_workers=cfg.get("num_workers", 2),
+                        drop_last=cfg.get("drop_last", True),
+                        collate_fn=collate_fn_with_max
+                    )
+
                     with torch.no_grad():
-                        for val_images, val_text_ids in val_dl:
+                        for val_images, val_text_ids in val_dl_iter:
                             val_images = val_images.to(device)
                             val_text_ids = val_text_ids.to(device)
                             val_input_ids = val_text_ids[:, :-1]
@@ -573,14 +583,24 @@ def main(cfg):
             # Apply EMA weights for validation if enabled
             if ema is not None:
                 ema.apply_shadow()
-            
+
             model.eval()
             val_loss_sum = 0.0
             val_count = 0
-            val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
-            
+            val_batches_epoch = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
+
+            # Recreate val_dl each validation (IterableDataset exhausts after one pass)
+            val_dl_epoch = DataLoader(
+                val_ds,
+                batch_size=cfg.get("batch_size", 4),
+                shuffle=False,
+                num_workers=cfg.get("num_workers", 2),
+                drop_last=cfg.get("drop_last", True),
+                collate_fn=collate_fn_with_max
+            )
+
             with torch.no_grad():
-                for val_images, val_text_ids in val_dl:
+                for val_images, val_text_ids in val_dl_epoch:
                     val_images = val_images.to(device)
                     val_text_ids = val_text_ids.to(device)
                     val_input_ids = val_text_ids[:, :-1]
@@ -601,9 +621,9 @@ def main(cfg):
                     except RuntimeError:
                         pass
                     
-                    if val_batches is not None and val_count >= val_batches:
+                    if val_batches_epoch is not None and val_count >= val_batches_epoch:
                         break
-            
+
             if val_count > 0:
                 avg_val_loss = val_loss_sum / val_count
                 logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)

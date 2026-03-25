@@ -24,29 +24,39 @@ from omni.thinker import ThinkerLM
 torch.set_float32_matmul_precision('high')
 
 
-def load_model_and_head(checkpoint_dir, device="cuda"):
+def load_model_and_head(checkpoint_dir, device="cuda", config_path=None):
     """Load Vision Encoder model, projection heads, and text encoder from checkpoint."""
     checkpoint_path, checkpoint = find_checkpoint(checkpoint_dir, "vision.pt", "vision_step_", device)
     if checkpoint is None:
         raise FileNotFoundError(f"Checkpoint not found in: {checkpoint_dir}")
-    
+
     print(f"Loading checkpoint from: {checkpoint_path}")
-    
-    # Get config from checkpoint or load from config file
-    if "config" in checkpoint:
+
+    # Get config: explicit path > checkpoint > config file by name
+    if config_path and os.path.exists(config_path):
+        print(f"Loading config from: {config_path}")
+        with open(config_path, 'r') as f:
+            cfg = json.load(f)
+    elif "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
         # Load config from JSON file based on checkpoint directory
         checkpoint_name = os.path.basename(checkpoint_dir)
-        config_path = f"configs/{checkpoint_name}.json"
-        
-        if os.path.exists(config_path):
-            print(f"Loading config from: {config_path}")
-            with open(config_path, 'r') as f:
-                cfg = json.load(f)
-        else:
+        candidates = [
+            f"configs/{checkpoint_name}.json",
+            os.path.join(checkpoint_dir, "config.json"),
+            "configs/vision_tiny.json",
+        ]
+        cfg = None
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                print(f"Loading config from: {candidate}")
+                with open(candidate, 'r') as f:
+                    cfg = json.load(f)
+                break
+        if cfg is None:
             raise FileNotFoundError(
-                f"Config not found in checkpoint and config file not found: {config_path}"
+                f"Config not found in checkpoint and no config file found. Tried: {candidates}"
             )
     
     d_model = cfg.get("d_model", 128)
@@ -644,6 +654,8 @@ def main():
                        help="Quick test with 10 samples")
     parser.add_argument("--retrieval", action="store_true",
                        help="Also evaluate retrieval metrics (requires more samples)")
+    parser.add_argument("--config", type=str, default=None,
+                       help="Path to config JSON (overrides checkpoint/auto-detected config)")
     args = parser.parse_args()
     
     if args.quick:
@@ -658,7 +670,7 @@ def main():
     
     # Load model
     try:
-        model, img_proj, text_proj, text_encoder, tok, cfg = load_model_and_head(args.checkpoint, args.device)
+        model, img_proj, text_proj, text_encoder, tok, cfg = load_model_and_head(args.checkpoint, args.device, config_path=args.config)
     except Exception as e:
         print(f"✗ Error loading model: {e}")
         import traceback
