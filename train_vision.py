@@ -7,7 +7,7 @@ from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, ImgCapDataset, EMA,
+    ImgCapDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, find_checkpoint, save_training_metadata, load_training_metadata,
     LRSpike, LearnableTemperature, ProjectionHead
@@ -21,6 +21,7 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.backends.cudnn.benchmark = True
     save_dir = cfg.get("save_dir", "checkpoints/vision_tiny")
     os.makedirs(save_dir, exist_ok=True)
     train_manifest = cfg.get("train_manifest", "data/images/production_annotations.json")
@@ -307,8 +308,8 @@ def main(cfg):
         train_size = val_size = None  # Unknown size
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
-    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), pin_memory=True)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), pin_memory=True)
     
     step=0
     vit.train()
@@ -394,9 +395,9 @@ def main(cfg):
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
-            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, 
-                                 num_workers=cfg.get("num_workers", 2), 
-                                 drop_last=cfg.get("drop_last", True))
+            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False,
+                                 num_workers=cfg.get("num_workers", 2),
+                                 drop_last=cfg.get("drop_last", True), pin_memory=True)
         
         # Create progress bar with correct starting position when resuming mid-epoch
         remaining_epochs = max_epochs - epoch - 1
@@ -520,56 +521,35 @@ def main(cfg):
                 except RuntimeError as e:
                     logger.error(f"Step {step}: {e}")
                     logger.error("Skipping this batch due to invalid loss")
-                    opt.zero_grad()
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
                         scaler.update()
                     continue
                 
-                # Gradient clipping first (already unscaled if using AMP)
-                # Clip gradients to prevent explosion, then check if still too high
+                # Gradient clipping (already unscaled if using AMP)
                 try:
-                    grad_norm_vit_before = clip_gradients(vit, max_grad_norm)
-                    grad_norm_img_proj_before = clip_gradients(img_proj, max_grad_norm)
-                    grad_norm_text_proj_before = clip_gradients(text_proj, max_grad_norm)
-                    grad_norm_temp_before = clip_gradients(temperature, max_grad_norm)
-                    
+                    grad_norm_vit = clip_gradients(vit, max_grad_norm)
+                    grad_norm_img_proj = clip_gradients(img_proj, max_grad_norm)
+                    grad_norm_text_proj = clip_gradients(text_proj, max_grad_norm)
+                    grad_norm_temp = clip_gradients(temperature, max_grad_norm)
+
+                    all_grad_norms = [grad_norm_vit, grad_norm_img_proj, grad_norm_text_proj, grad_norm_temp]
                     if text_encoder is not None:
-                        grad_norm_text_enc_before = clip_gradients(text_encoder, max_grad_norm)
-                    
-                    # Check for large gradients (log warning if > 5x max_grad_norm)
-                    all_grad_norms = [grad_norm_vit_before, grad_norm_img_proj_before, grad_norm_text_proj_before, grad_norm_temp_before]
-                    if text_encoder is not None:
-                        all_grad_norms.append(grad_norm_text_enc_before)
-                    
+                        grad_norm_text_enc = clip_gradients(text_encoder, max_grad_norm)
+                        all_grad_norms.append(grad_norm_text_enc)
                     max_grad = max(all_grad_norms)
-                    if max_grad > max_grad_norm * 5:
-                        logger.warning(f"Large gradient detected: {max_grad:.2f} (vit: {grad_norm_vit_before:.2f}, img_proj: {grad_norm_img_proj_before:.2f}, text_proj: {grad_norm_text_proj_before:.2f}, temp: {grad_norm_temp_before:.2f}{f', text_enc: {grad_norm_text_enc_before:.2f}' if text_encoder is not None else ''})")
-                    
-                    # Check for gradient explosion AFTER clipping
-                    # Use a higher threshold (10x max_grad_norm) since we've already clipped
-                    # This allows clipping to fix most cases, only skip if truly exploded
                     explosion_threshold = max(100.0, max_grad_norm * 10)
-                    grad_norm_vit_after, is_exploded_vit = check_gradient_explosion(vit, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    grad_norm_proj_after, is_exploded_proj = check_gradient_explosion(img_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    grad_norm_text_proj_after, is_exploded_text_proj = check_gradient_explosion(text_proj, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    grad_norm_temp_after, is_exploded_temp = check_gradient_explosion(temperature, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    
-                    is_exploded = is_exploded_vit or is_exploded_proj or is_exploded_text_proj or is_exploded_temp
-                    if text_encoder is not None:
-                        grad_norm_text_enc_after, is_exploded_text_enc = check_gradient_explosion(text_encoder, max_grad_norm=explosion_threshold, raise_on_error=False)
-                        is_exploded = is_exploded or is_exploded_text_enc
-                    
-                    if is_exploded:
-                        logger.error(f"Step {step}: Gradient explosion detected after clipping. Skipping this batch.")
-                        opt.zero_grad()  # Clear gradients
+                    if max_grad > explosion_threshold:
+                        logger.error(f"Step {step}: Gradient explosion detected (max: {max_grad:.2f}). Skipping batch.")
+                        opt.zero_grad(set_to_none=True)
                         if use_amp:
-                            scaler.update()  # Update scaler even though we skipped (unscale was called)
+                            scaler.update()
                         continue
                 except RuntimeError as e:
                     logger.error(f"Step {step}: {e}")
-                    opt.zero_grad()  # Clear gradients
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
-                        scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        scaler.update()
                     continue
                 
                 # Optimizer step (gradients already clipped)
@@ -588,7 +568,7 @@ def main(cfg):
                 if lr_spike is not None:
                     lr_spike.step(opt, logger)
                 
-                opt.zero_grad()  # Clear gradients after stepping
+                opt.zero_grad(set_to_none=True)  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
 
             # Use batch_step for all frequency checks

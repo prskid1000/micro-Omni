@@ -21,6 +21,8 @@ from tqdm import tqdm
 from omni.tokenizer import BPETokenizer
 from omni.thinker import ThinkerLM
 
+torch.set_float32_matmul_precision('high')
+
 
 def load_model_and_head(checkpoint_dir, device="cuda"):
     """Load Vision Encoder model, projection heads, and text encoder from checkpoint."""
@@ -225,14 +227,14 @@ def encode_caption(caption, tok, text_encoder, cfg, device="cuda", use_thinker=T
     if use_thinker:
         # Use Thinker model for contextual embeddings (better quality)
         token_tensor = token_tensor.unsqueeze(0)  # (1, T)
-        with torch.no_grad():
+        with torch.inference_mode():
             # Use Thinker to get contextual embeddings
             text_emb = text_encoder(idx=token_tensor)  # (1, T, thinker_d_model)
         # Use mean pooling for Thinker (final token pooling for TransformerTextEncoder)
         return text_emb.squeeze(0).mean(dim=0)  # (thinker_d_model,)
     else:
         # Use TransformerTextEncoder (CLIP-style)
-        with torch.no_grad():
+        with torch.inference_mode():
             text_emb = text_encoder(token_tensor, return_cls=True)  # (d_model,)
         return text_emb
 
@@ -349,7 +351,7 @@ def evaluate_embedding_quality(model, proj_head, cfg, tok, device="cuda", num_sa
     else:
         iterator = iter(dataset)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, (img_tensor, caption) in enumerate(iterator):
             if i >= num_samples:
                 break
@@ -470,7 +472,7 @@ def evaluate_retrieval(model, img_proj, text_proj, text_encoder, tok, cfg, devic
         print("⚠️  Warning: Text encoder or tokenizer not available. Cannot evaluate retrieval.")
         return None
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, (img_tensor, caption) in enumerate(iterator):
             if i >= num_samples:
                 break
@@ -609,7 +611,7 @@ def test_single_image(model, proj_head, image_path, cfg, device="cuda"):
     if proj_head is not None:
         proj_head.eval()
     
-    with torch.no_grad():
+    with torch.inference_mode():
         cls, grid = model(img_tensor)
         if proj_head is not None:
             cls_proj = proj_head(cls)
@@ -650,6 +652,9 @@ def main():
     print("=" * 70)
     print("VISION ENCODER ACCURACY TEST")
     print("=" * 70)
+
+    if args.device == "cuda" and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     
     # Load model
     try:

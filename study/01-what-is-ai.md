@@ -1,423 +1,163 @@
-# Chapter 01: What is Artificial Intelligence?
+# Chapter 01: What is AI?
 
-[← Back to Index](00-INDEX.md) | [Next Chapter: Neural Networks Basics →](02-neural-networks-basics.md)
+### What AI Actually Means
 
----
+Artificial Intelligence is not about sentient robots or sci-fi overlords. At its core,
+AI is software that takes in data, finds patterns, and makes decisions -- things that
+would normally require a human brain. A spam filter reading your email, a thermostat
+learning your schedule, a voice assistant understanding "set a timer for 5 minutes" --
+all AI.
 
-## 🎯 Learning Objectives
-
-By the end of this chapter, you will understand:
-- What artificial intelligence really means
-- The difference between AI, Machine Learning, and Deep Learning
-- Different types of AI and their applications
-- Where μOmni fits in the AI landscape
-
----
-
-## 📖 What is Artificial Intelligence?
-
-### Starting from Zero
-
-Imagine you're teaching a child to recognize cats. You show them many pictures and say "cat" each time. Eventually, they learn what a cat looks like and can spot one they've never seen before.
-
-**Artificial Intelligence (AI)** works similarly - it's about teaching computers to learn from examples, just like humans do, but using mathematics and code instead of a biological brain.
-
-### What Can AI Do?
-
-AI can perform tasks that we typically think require human intelligence:
-
-- 🗣️ **Understanding and generating human language** - Like chatting with Siri or ChatGPT
-- 👁️ **Recognizing objects in images** - Like your phone unlocking with your face
-- 👂 **Understanding speech and audio** - Like Alexa responding to your voice
-- 🤔 **Making decisions based on data** - Like Netflix recommending movies you might like
-- 🎨 **Creating new content** - Like AI writing stories or generating images
-
-### A Simple Analogy
-
-Think of AI like teaching a very fast, very literal student:
-- **Traditional programming**: You write exact instructions: "If temperature > 30, say 'hot'"
-- **AI/Machine Learning**: You show examples: Here are 1000 days with temperatures and what people said. Now figure out the pattern yourself!
-
-### The Three Levels of AI (Explained Simply)
-
-Imagine learning to cook:
-
-1. **AI (Artificial Intelligence)** = The goal of making great food
-2. **Machine Learning (ML)** = Learning recipes from examples, not memorizing exact steps
-3. **Deep Learning (DL)** = Learning like a chef with many years of experience (many layers of understanding)
-
-```
-┌─────────────────────────────────────────────────────┐
-│         ARTIFICIAL INTELLIGENCE (Broadest)          │
-│  The BIG GOAL: Make computers smart                 │
-│  Example: A robot that can navigate a room          │
-│                                                     │
-│  ┌───────────────────────────────────────────────┐ │
-│  │       MACHINE LEARNING (Subset of AI)         │ │
-│  │  HOW: Computers learn patterns from examples  │ │
-│  │  Example: Email sorting learns from labeled   │ │
-│  │  spam/not-spam examples                       │ │
-│  │                                               │ │
-│  │  ┌─────────────────────────────────────────┐ │ │
-│  │  │    DEEP LEARNING (Subset of ML)        │ │ │
-│  │  │  HOW: Using "brain-like" networks      │ │ │
-│  │  │  with many layers                      │ │ │
-│  │  │  Example: Face recognition with 100+   │ │ │
-│  │  │  layers of pattern detection           │ │ │
-│  │  └─────────────────────────────────────────┘ │ │
-│  └───────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────┘
-```
-
-**Key Point**: All Deep Learning is Machine Learning. All Machine Learning is AI. But not all AI is Deep Learning!
+The key idea: instead of a programmer writing every rule by hand ("if email contains
+'free money', mark as spam"), the machine **learns the rules from examples**.
 
 ---
 
-## 🧠 The Three Paradigms
+### The Hierarchy: AI, Machine Learning, Deep Learning
 
-### 1. **Traditional AI (Rule-Based)**
+Think of learning to cook.
 
-The earliest form of AI where humans explicitly program rules.
+| Level | Cooking Analogy | What It Means |
+|-------|----------------|---------------|
+| **AI** | The entire kitchen | Any technique that makes a machine act "smart" |
+| **Machine Learning (ML)** | Following recipes you improve over time | A subset of AI where the machine learns from data |
+| **Deep Learning (DL)** | Developing instinct after cooking thousands of meals | A subset of ML using neural networks with many layers |
 
-**Example:**
-```python
-if temperature > 30:
-    print("It's hot!")
-elif temperature < 10:
-    print("It's cold!")
-else:
-    print("It's moderate")
-```
-
-**Limitations:**
-- Requires manual rule creation for every scenario
-- Cannot handle unforeseen situations
-- Doesn't learn from experience
-
----
-
-### 2. **Machine Learning (ML)** - Learning from Examples
-
-**Think of learning to ride a bike:**
-- No one gives you physics equations about balance and momentum
-- You try, fall, adjust, and eventually learn through practice
-- Machine Learning works the same way - learn by trying!
-
-**Example: Email Spam Detector (Detailed)**
-
-**Without Machine Learning** (Traditional Programming):
-```
-A programmer writes rules:
-IF email contains "free money" → SPAM
-IF email contains "viagra" → SPAM
-IF email from friend@work.com → NOT SPAM
-...
-
-Problem: Need thousands of rules!
-Problem: Spammers change tactics ("fr33 m0ney")
-```
-
-**With Machine Learning:**
-```
-Step 1: Collect examples (training data)
-Email 1: "Win free money!" → Human labeled: SPAM ✓
-Email 2: "Meeting at 3pm" → Human labeled: NOT SPAM ✓
-Email 3: "Click here for prizes!" → Human labeled: SPAM ✓
-... (thousands more examples)
-
-Step 2: Computer finds patterns automatically
-Pattern learned: "free" + "win" + "!" = 95% likely spam
-Pattern learned: "meeting" + time = 90% likely legitimate
-
-Step 3: New email arrives
-"Get free stuff!!!"
-Computer thinks: Has "free" (spam word), has "!!!" (spam pattern)
-→ Classifies as SPAM (confident: 87%)
-```
-
-**Key Insight:** 
-- **Traditional**: Human writes all the rules (hard!)
-- **Machine Learning**: Human provides examples, computer figures out rules (easier!)
-
----
-
-### 3. **Deep Learning (DL)**
-
-A subset of ML that uses artificial neural networks inspired by the human brain.
-
-**Why "Deep"?**
-Because these networks have many layers (sometimes hundreds!), each learning increasingly complex patterns.
+AI is the broadest umbrella. Machine Learning is the most successful approach inside
+that umbrella. Deep Learning is the rocket fuel inside Machine Learning that powers
+modern breakthroughs like ChatGPT, image generators, and speech recognition.
 
 ```
-Image Recognition Example:
-
-Input Image: Photo of a cat
-
-Layer 1 learns: Edges and lines
-Layer 2 learns: Shapes (circles, triangles)
-Layer 3 learns: Parts (ears, eyes, whiskers)
-Layer 4 learns: Complete objects (cat face, cat body)
-Output: "This is a cat!"
++-----------------------------------------------+
+|                  AI                            |
+|   (any system that acts "smart")               |
+|                                                |
+|   +---------------------------------------+   |
+|   |        Machine Learning               |   |
+|   |   (learns patterns from data)         |   |
+|   |                                       |   |
+|   |   +-------------------------------+   |   |
+|   |   |      Deep Learning            |   |   |
+|   |   |  (many-layered neural nets)   |   |   |
+|   |   |                               |   |   |
+|   |   |   +---------------------+     |   |   |
+|   |   |   | Transformers /      |     |   |   |
+|   |   |   | micro-Omni lives    |     |   |   |
+|   |   |   | here                |     |   |   |
+|   |   |   +---------------------+     |   |   |
+|   |   +-------------------------------+   |   |
+|   +---------------------------------------+   |
++-----------------------------------------------+
 ```
 
 ---
 
-## 🤖 Types of AI Systems
+### Three Ways Machines Learn
 
-### By Capability
+Every ML system falls into one (or a blend) of three paradigms.
 
-| Type | Description | Example |
-|------|-------------|---------|
-| **Narrow AI** | Specialized in one task | Chess-playing AI, spam filter |
-| **General AI** | Can do any intellectual task humans can | Not yet achieved (sci-fi) |
-| **Super AI** | Surpasses human intelligence | Theoretical concept |
+#### 1. Supervised Learning -- "Teacher Gives Answers"
 
-📌 **μOmni is a Narrow AI** - specialized in multimodal understanding and generation.
+Imagine a cooking class where the chef shows you a finished dish (the label) and the
+recipe (the input) every time. You study hundreds of examples until you can predict the
+dish from the recipe on your own.
 
----
+- **Input:** photo of a cat, **Label:** "cat"
+- The model sees thousands of labeled examples and learns to map inputs to outputs.
+- Most of micro-Omni's training is supervised: given text, predict the next word; given
+  audio, predict the transcript.
 
-### By Learning Approach
+#### 2. Unsupervised Learning -- "Find Patterns Alone"
 
-#### **Supervised Learning**
-Learning from labeled examples (input → correct output).
+You walk into a grocery store with no signs. Nobody tells you what goes where, but
+after a while you notice fruits cluster together, meats cluster together, dairy clusters
+together. You discovered the structure yourself.
 
-```
-Training:
-Image of dog + Label: "Dog"
-Image of cat + Label: "Cat"
-→ Learn to classify animals
-```
+- No labels, just raw data.
+- The model finds hidden groupings, patterns, or compressed representations.
+- Example: clustering customer purchase data to find market segments.
 
-#### **Unsupervised Learning**
-Finding patterns in unlabeled data.
+#### 3. Reinforcement Learning -- "Trial and Error with Rewards"
 
-```
-Training:
-Collection of customer purchase data
-→ Discover customer groups with similar behavior
-```
+A toddler touches a hot stove (negative reward) and learns not to do it again. They
+share a toy and get a smile (positive reward) and learn to share more. No one gave a
+textbook -- just feedback after each action.
 
-#### **Reinforcement Learning**
-Learning through trial and error with rewards.
-
-```
-Game AI:
-Try action → Get reward/penalty → Adjust behavior
-→ Learn to play optimally
-```
-
-📌 **μOmni uses supervised learning** during training with labeled data.
-
----
-
-## 🌟 What Makes Modern AI Powerful?
-
-### 1. **Big Data**
-Modern AI systems train on enormous datasets:
-- GPT-3: Trained on ~45TB of text
-- DALL-E: Trained on millions of image-text pairs
-- μOmni: Uses text, audio, and image datasets
-
-### 2. **Compute Power**
-- Modern GPUs can perform trillions of calculations per second
-- Training large models requires days/weeks on powerful hardware
-- μOmni is designed to train on a single 12GB GPU!
-
-### 3. **Better Algorithms**
-- Transformers (2017): Revolutionary architecture for sequence processing
-- Attention mechanism: Lets models focus on relevant information
-- Transfer learning: Pre-train once, fine-tune for specific tasks
-
----
-
-## 🎯 Understanding Different AI Tasks
-
-### Natural Language Processing (NLP)
-
-Processing and understanding human language.
-
-**Tasks:**
-- 📝 Text generation (writing stories, articles)
-- 🔄 Translation (English → Spanish)
-- 💭 Sentiment analysis (Is this review positive?)
-- ❓ Question answering
-
-### Computer Vision (CV)
-
-Understanding visual information.
-
-**Tasks:**
-- 🖼️ Image classification (What's in this image?)
-- 🔍 Object detection (Where are the objects?)
-- 🎭 Face recognition
-- 🎨 Image generation
-
-### Speech Processing
-
-Understanding and generating audio.
-
-**Tasks:**
-- 🎤 Speech-to-text (ASR - Automatic Speech Recognition)
-- 🔊 Text-to-speech (TTS - Text-to-Speech Synthesis)
-- 🗣️ Voice cloning
-- 🎵 Music generation
-
----
-
-## 🔄 Multimodal AI: The Next Frontier
-
-**Multimodal AI** can understand and generate multiple types of data simultaneously.
-
-### Why Multimodal?
-
-Humans naturally use multiple senses:
-- We see a dog AND hear it bark
-- We read text AND see accompanying images
-- We watch videos with both visuals and audio
-
-### Traditional vs Multimodal AI
+- An agent takes actions in an environment.
+- It receives rewards or penalties.
+- Over time, it learns a strategy (policy) that maximizes total reward.
+- Example: a game-playing AI that learns chess by playing millions of games against
+  itself.
 
 ```
-Traditional (Single-Modal):
-┌─────────┐      ┌─────────┐
-│  Text   │ ───→ │  Text   │
-└─────────┘      └─────────┘
-
-Multimodal:
-┌─────────┐      
-│  Text   │ ───┐
-└─────────┘    │
-               ├─→ ┌─────────────┐
-┌─────────┐    │   │   Unified   │ ───→ Output
-│  Image  │ ───┤   │Understanding│      (Any modality)
-└─────────┘    │   └─────────────┘
-               │
-┌─────────┐    │
-│  Audio  │ ───┘
-└─────────┘
+Supervised        Unsupervised        Reinforcement
+----------        ------------        -------------
+Input + Label     Input only          Action -> Reward
+  |                  |                    |
+  v                  v                    v
+"This IS a cat"   "These look alike"  "That move won!"
 ```
 
-📌 **μOmni is a multimodal AI system** that can:
-- Accept text, images, audio, and video as input
-- Generate text and speech as output
-- Understand relationships between different modalities
-
 ---
 
-## 🚀 Where Does μOmni Fit?
+### Why Deep Learning Won
 
-### The AI Landscape
+Three ingredients came together around 2012-2017 that made Deep Learning dominate:
+
+**1. Big Data.** The internet exploded with text, images, and video. Suddenly there
+were billions of training examples available for free.
+
+**2. GPUs.** Graphics cards, originally built for video games, turned out to be perfect
+for the massive parallel math that neural networks need. Training that would take months
+on a CPU takes hours on a GPU.
+
+**3. Transformers.** In 2017, a new architecture called the Transformer replaced older
+designs (RNNs, LSTMs). Transformers process all words in a sentence simultaneously
+instead of one-by-one, making them faster and better at capturing long-range patterns.
+Nearly every modern AI -- GPT, BERT, Whisper, Stable Diffusion -- is built on
+Transformers.
 
 ```
-┌────────────────────────────────────────────────────┐
-│              Language Models (Text Only)           │
-│  GPT, BERT, LLaMA                                  │
-└────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────┐
-│              Vision Models (Images Only)           │
-│  ResNet, ViT, CLIP (image part)                    │
-└────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────┐
-│              Speech Models (Audio Only)            │
-│  Whisper, Wav2Vec, Tacotron                        │
-└────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────┐
-│         MULTIMODAL MODELS (All Together!)          │
-│  GPT-4 Vision, Gemini, μOmni ← YOU ARE HERE       │
-│  Text + Images + Audio + Video                     │
-└────────────────────────────────────────────────────┘
+Before 2012          2012-2016             2017-present
+-----------          ---------             ------------
+Hand-crafted     +   Big Data          +   Transformers
+rules, small     |   GPU training      |   Attention mechanism
+datasets         |   CNNs for images   |   Scales to billions
+                 |   RNNs for text     |   of parameters
+                 v                     v
+            "Deep Learning era"   "Transformer era"
 ```
 
-### μOmni's Special Features
-
-1. **🎯 Efficiency-Focused**
-   - Trains on single 12GB GPU
-   - Small datasets (<5GB per modality)
-   - Perfect for learning and experimentation
-
-2. **🔬 Research-Oriented**
-   - Clear, readable code
-   - Based on Qwen3 Omni architecture
-   - Includes all training stages
-
-3. **🎓 Educational**
-   - Designed for understanding
-   - Trades cutting-edge performance for clarity
-   - Comprehensive documentation (you're reading it!)
-
 ---
 
-## 📊 Quick Comparison Table
+### Where micro-Omni Fits
 
-| Feature | Traditional Software | Machine Learning | Deep Learning | μOmni |
-|---------|---------------------|------------------|---------------|--------|
-| **Programming** | Manual rules | Learn from examples | Neural networks | Transformer networks |
-| **Data Needed** | None | Moderate | Large | Moderate (efficient) |
-| **Adaptability** | Fixed | Good | Excellent | Excellent |
-| **Interpretability** | High | Medium | Low | Low |
-| **Modalities** | N/A | Usually 1 | Usually 1 | Multiple! |
+micro-Omni is a **tiny multimodal AI**. Let's unpack those words:
 
----
+- **Tiny:** only ~25 million parameters. For comparison, GPT-3 has 175 *billion*.
+  micro-Omni is roughly 7,000x smaller. It is designed to train and run on a single
+  consumer GPU.
 
-## 💡 Key Takeaways
+- **Multimodal:** it handles multiple types of data -- text, images, and audio -- in
+  one unified model. Most AIs specialize in just one modality. micro-Omni weaves them
+  together.
 
-✅ **AI** = Making computers intelligent  
-✅ **Machine Learning** = Learning from data  
-✅ **Deep Learning** = Using neural networks  
-✅ **Multimodal AI** = Understanding multiple data types together  
-✅ **μOmni** = Educational multimodal AI system you can run on your laptop!
+- **AI (Deep Learning, Transformer-based):** it sits in the innermost ring of our
+  hierarchy diagram above. It uses the Transformer architecture, the same family that
+  powers the largest models in the world, just scaled down to be accessible.
 
----
+```
+           micro-Omni at a glance
+  +--------------------------------------+
+  |  Text  ----+                         |
+  |             |                        |
+  |  Image ----+--->  Transformer  ---> Output
+  |             |     ("Thinker")       (text,
+  |  Audio ----+      8 blocks           audio,
+  |                   ~25M params        or both)
+  +--------------------------------------+
+         Runs on 1 GPU, trains in hours
+```
 
-## 🎓 Self-Check Questions
-
-1. What's the difference between AI, ML, and DL?
-2. Why is deep learning called "deep"?
-3. What does "multimodal" mean in AI?
-4. Name three tasks that AI can perform.
-5. What makes μOmni different from traditional language models?
-
-<details>
-<summary>📝 Click to see answers</summary>
-
-1. AI is the broad field of making computers intelligent. ML is a subset where computers learn from data. DL is a subset of ML using multi-layer neural networks.
-
-2. Because it uses neural networks with many layers (deep architecture), each layer learning progressively complex features.
-
-3. Multimodal means the AI can understand and work with multiple types of data (text, images, audio, video) simultaneously.
-
-4. Any three of: language translation, image recognition, speech-to-text, playing games, generating art, answering questions, etc.
-
-5. μOmni is multimodal (handles text, images, audio, video), efficient (trains on 12GB GPU), and educational (clear code, comprehensive docs).
-</details>
-
----
-
-## 🔍 Going Deeper
-
-**Recommended Reading:**
-- [Artificial Intelligence: A Modern Approach](http://aima.cs.berkeley.edu/) - Classic AI textbook
-- [Deep Learning Book](https://www.deeplearningbook.org/) - Comprehensive DL resource
-- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - The Transformer paper
-
-**Videos:**
-- [But what is a neural network?](https://www.youtube.com/watch?v=aircAruvnKk) - 3Blue1Brown
-- [AI Explained](https://www.youtube.com/c/ArtificialIntelligenceExplained) - Great AI channel
-
----
-
-## ➡️ Next Steps
-
-Ready to understand how neural networks actually work?
-
-[Continue to Chapter 02: Neural Networks Fundamentals →](02-neural-networks-basics.md)
-
-Or return to the [Index](00-INDEX.md) to choose a different chapter.
-
----
-
-**Chapter Progress:** Foundation ●○○○○ (1/5 complete)
-
+The goal of this study guide is to take you from zero to understanding every piece of
+that diagram. Next up: what those "blocks" and "parameters" actually are.

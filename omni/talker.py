@@ -57,7 +57,10 @@ class TalkerTiny(nn.Module):
         self.norm = RMSNorm(d)
         self.base_head = nn.Linear(d, codebook_size)
         self.res_head  = nn.Linear(d, codebook_size)
-        
+
+        # Pre-allocated causal mask (sliced at runtime — no allocation per forward)
+        self.register_buffer("_causal_mask", torch.tril(torch.ones(2048, 2048)).unsqueeze(0).unsqueeze(0), persistent=False)
+
         # KV cache for autoregressive generation
         self.kv_cache = None
         self.use_kv_cache = False
@@ -142,13 +145,13 @@ class TalkerTiny(nn.Module):
                     self.kv_cache[i] = new_cache
             else:
                 pos = make_positions(seq_len, x.device)
-                mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)).unsqueeze(0).unsqueeze(0)
+                mask = self._causal_mask[:, :, :seq_len, :seq_len]
                 for i, blk in enumerate(self.blocks):
                     x, new_cache = blk(x, mask=mask, pos=pos, cache=None, return_cache=True)
                     self.kv_cache[i] = new_cache
         else:
             pos = make_positions(seq_len, x.device)
-            mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)).unsqueeze(0).unsqueeze(0)
+            mask = self._causal_mask[:, :, :seq_len, :seq_len]
             for blk in self.blocks:
                 x, _ = blk(x, mask=mask, pos=pos, cache=None, return_cache=False)
         
@@ -156,16 +159,5 @@ class TalkerTiny(nn.Module):
         x = x[:, offset:, :]
         base_logits = self.base_head(x)
         res_logits = self.res_head(x)
-        
-        # Check for numerical stability (NaN/Inf detection)
-        if torch.isnan(base_logits).any() or torch.isinf(base_logits).any():
-            nan_count = torch.isnan(base_logits).sum().item()
-            inf_count = torch.isinf(base_logits).sum().item()
-            raise RuntimeError(f"Numerical instability in TalkerTiny base_head: NaN={nan_count}, Inf={inf_count}")
-        
-        if torch.isnan(res_logits).any() or torch.isinf(res_logits).any():
-            nan_count = torch.isnan(res_logits).sum().item()
-            inf_count = torch.isinf(res_logits).sum().item()
-            raise RuntimeError(f"Numerical instability in TalkerTiny res_head: NaN={nan_count}, Inf={inf_count}")
         
         return (base_logits, res_logits)

@@ -15,6 +15,8 @@ from omni.codec import RVQ
 from omni.utils import TTSDataset, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
+torch.set_float32_matmul_precision('high')
+
 
 def load_model_and_codec(checkpoint_dir, device="cuda"):
     """Load Talker model and RVQ codec from checkpoint."""
@@ -117,7 +119,7 @@ def compute_codec_metrics(rvq, mel, device="cuda"):
     rvq.eval()
     mel = mel.to(device)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         # Encode to discrete codes
         codes = rvq.encode(mel)  # (B, T, codebooks)
         
@@ -158,7 +160,7 @@ def compute_ar_accuracy(talker, codes, device="cuda"):
     talker.eval()
     codes = codes.to(device)  # (B, T, codebooks)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         # Shift codes for teacher forcing
         # prev: codes shifted right by 1, with 0 at beginning
         prev = torch.roll(codes, 1, dims=1)
@@ -262,7 +264,7 @@ def evaluate_tts_quality(rvq, talker, cfg, device="cuda", num_samples=100, verbo
     else:
         iterator = iter(dataset)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, mel in enumerate(iterator):
             if i >= num_samples:
                 break
@@ -472,6 +474,9 @@ def main():
     print("=" * 70)
     print("TALKER (TTS) ACCURACY TEST")
     print("=" * 70)
+
+    if args.device == "cuda" and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     
     # Load model
     try:

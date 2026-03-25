@@ -16,6 +16,8 @@ from omni.ocr_model import OCRModel
 from omni.utils import OCRDataset, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
+torch.set_float32_matmul_precision('high')
+
 # Try to import Levenshtein for better edit distance
 try:
     import Levenshtein
@@ -180,7 +182,7 @@ def decode_greedy(model, image_tensor, char_to_idx, idx_to_char, device="cuda", 
     model.eval()
     image_tensor = image_tensor.to(device)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         # Start with BOS token
         bos_id = char_to_idx.get('<BOS>', 1)
         current_ids = torch.tensor([[bos_id]], device=device)
@@ -225,7 +227,7 @@ def decode_beam_search(model, image_tensor, char_to_idx, idx_to_char, device="cu
     # Initialize beam: list of (sequence, score)
     beams = [([bos_id], 0.0)]
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for _ in range(max_length):
             new_beams = []
             
@@ -326,7 +328,7 @@ def evaluate_ocr_accuracy(model, char_to_idx, idx_to_char, cfg, device="cuda", n
     else:
         iterator = iter(dataset)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, (image_tensor, text_ids) in enumerate(iterator):
             if i >= num_samples:
                 break
@@ -511,6 +513,9 @@ def main():
     print("=" * 70)
     print("OCR MODEL ACCURACY TEST")
     print("=" * 70)
+
+    if args.device == "cuda" and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     
     # Load model
     try:

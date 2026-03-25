@@ -252,13 +252,7 @@ class AudioEncoderTiny(nn.Module):
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)  # (B, T/downsample_factor, d)
-        
-        # Check for numerical stability (NaN/Inf detection)
-        if torch.isnan(x).any() or torch.isinf(x).any():
-            nan_count = torch.isnan(x).sum().item()
-            inf_count = torch.isinf(x).sum().item()
-            raise RuntimeError(f"Numerical instability in AudioEncoderTiny forward pass: NaN={nan_count}, Inf={inf_count}")
-        
+
         # Apply attention pooling if enabled (for contrastive learning)
         if self.use_attention_pooling:
             # Downsample mask to match frame rate

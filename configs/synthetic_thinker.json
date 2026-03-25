@@ -31,7 +31,7 @@
   "use_flash": true,
   "use_compile": false,
 
-  "num_workers": 1,
+  "num_workers": 2,
   "drop_last": true,
 
   "print_freq": 50,

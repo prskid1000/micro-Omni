@@ -15,6 +15,8 @@ from omni.codec import HiFiGANVocoder
 from omni.utils import VocoderDataset, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
+torch.set_float32_matmul_precision('high')
+
 # Try to import optional audio quality metrics
 try:
     import librosa
@@ -290,7 +292,7 @@ def evaluate_vocoder_quality(model, cfg, device="cuda", num_samples=100, verbose
     else:
         iterator = iter(dataset)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, (mel_real, audio_real) in enumerate(iterator):
             if i >= num_samples:
                 break
@@ -508,7 +510,7 @@ def test_single_mel(model, mel, cfg, device="cuda"):
     
     # Generate audio
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         audio = model(mel_input)
     
     audio = audio.squeeze(0)
@@ -540,6 +542,9 @@ def main():
     print("=" * 70)
     print("VOCODER (HiFi-GAN) ACCURACY TEST")
     print("=" * 70)
+
+    if args.device == "cuda" and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     
     # Load model
     try:

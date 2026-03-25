@@ -1,0 +1,99 @@
+# μOmni — Project Instructions for Claude Code
+
+## Hardware
+- **RTX 5070 Ti** (16GB VRAM, Blackwell, compute capability 12.0)
+- **Windows 11** — use Unix shell syntax (forward slashes, /dev/null not NUL)
+- `torch.compile()` does NOT work (Triton/Inductor lacks Blackwell support) — keep `use_compile: false`
+- BFloat16 is supported and preferred over float16
+
+## Architecture (Thinker-Talker, ~25.65M params)
+
+```
+omni/thinker.py       ThinkerLM       ~20.3M   Decoder-only LLM (RoPE, GQA, SwiGLU, optional MoE/Arthemis)
+omni/audio_encoder.py AudioEncoderTiny ~2.0M   Mel → Conv2D 8x downsample → Transformer → CTC/CLAP
+omni/vision_encoder.py ViTTiny          ~914K   Image patches → Transformer → CLS token (CLIP training)
+omni/talker.py        TalkerTiny       ~2.2M   AR speech code predictor (2 codebooks × 128 codes)
+omni/codec.py         RVQ + Vocoders    ~49K   RVQ codec, HiFi-GAN (generator+discriminators), Griffin-Lim
+omni/ocr_model.py     OCRModel         ~2.1M   ViT encoder + cross-attention decoder → character output
+omni/tokenizer.py     BPETokenizer       —     SentencePiece BPE (32K vocab for production)
+omni/utils.py         Utilities          —     RoPE (cached), RMSNorm, EMA, streaming datasets, collate fns,
+                                                checkpoint mgmt, LR scheduler, LR finder, gradient utilities
+```
+
+## Training Pipeline
+
+```
+Stage A: python train_text.py      --config configs/thinker_tiny.json     # Thinker (cross-entropy)
+Stage B: python train_audio_enc.py --config configs/audio_enc_tiny.json   # Audio Encoder (CTC loss)
+Stage C: python train_vision.py    --config configs/vision_tiny.json      # Vision Encoder (InfoNCE)
+Stage D: python train_talker.py    --config configs/talker_tiny.json      # Talker + RVQ (cross-entropy on codes)
+Stage E: python sft_omni.py        --config configs/omni_sft_tiny.json    # Multimodal SFT (all modalities)
+Stage F: python train_vocoder.py   --config configs/vocoder_tiny.json     # HiFi-GAN vocoder (optional)
+Stage G: python train_ocr.py       --config configs/ocr_tiny.json         # OCR model (optional)
+```
+
+Dependencies: A/B/C can run in parallel. D needs A. E needs A+B+C+D. F and G are independent.
+
+## Inference
+
+```
+python infer_chat.py --ckpt_dir checkpoints/thinker_tiny                                   # Text chat
+python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image photo.jpg "describe"     # Image QA
+python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav            # ASR
+python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr            # OCR
+python export.py --ckpt_dir checkpoints/ --output_dir exported/                            # Export
+python export/infer_standalone.py --model_dir exported/                                    # Standalone
+```
+
+## Performance Rules (MUST follow)
+- `use_amp: true` always — halves VRAM, 2x throughput
+- `opt.zero_grad(set_to_none=True)` not `opt.zero_grad()` — frees gradient memory
+- `pin_memory=True` on all DataLoaders (except vocoder)
+- `torch.backends.cudnn.benchmark = True` in all training scripts
+- `num_workers: 2` minimum — keeps GPU fed
+- **Never** add `torch.isnan()`/`torch.isinf()` checks in model forward passes — they sync the GPU
+- Causal masks: use `self._causal_mask[:, :, :T, :T]` (pre-allocated buffer), never `torch.tril(torch.ones(...))`
+- RoPE: frequencies are cached in `self.inv_freq` buffer with lazy cos/sin rebuild
+- GQA: expand KV heads via `unsqueeze().expand().reshape()` (zero-copy), never `repeat_interleave`
+- MoE: sorted batched dispatch (sort tokens by expert ID, process in one loop), never nested Python loops
+- RVQ: use `torch.cdist` for codebook distance, never broadcasting `(residual[:,None,:] - code[None,:,:])`
+- Gradient clipping: `clip_gradients()` returns the norm — check that directly, don't call `check_gradient_explosion()` separately
+- `use_compile: false` on this machine (RTX 5070 Ti / Blackwell)
+
+## Code Conventions
+- Pre-norm architecture: `x = x + sublayer(norm(x))`
+- RMSNorm everywhere (not LayerNorm), except ViT which uses nn.TransformerEncoderLayer
+- `register_buffer(..., persistent=False)` for non-saveable tensors (masks, RoPE caches)
+- Type hints on all model `__init__` and `forward` methods
+- Checkpoints: `{model_name}.pt` (dict with model + optimizer + scheduler + scaler + ema + lr_spike states)
+- Metadata: `{model_name}_metadata.json` (step, epoch, dataset stats like char_to_idx, max_mel_length)
+- Config truth: JSON configs in `configs/` are authoritative — class defaults in .py files may differ
+- Streaming datasets: all training uses `IterableDataset` with hash-based train/val split and shuffle buffer
+- Two config variants: `*_tiny.json` (production) and `synthetic_*.json` (quick test with small vocab/steps)
+
+## Data Formats
+- **Text** (Thinker): plain `.txt`, one sample per line → `data/text/production_corpus.txt`
+- **ASR Audio**: CSV `wav,text` → `data/audio/production_asr.csv`
+- **TTS Audio**: CSV `text,wav` (REVERSED from ASR!) → `data/audio/production_tts.csv`
+- **Images**: JSON `[{image, caption}]` → `data/images/production_annotations.json`
+- **OCR**: CSV `image,text` → `data/ocr/production_ocr.csv`
+- Download scripts require `--combine` flag to produce production_* files
+
+## Key Config Values (production, RTX 5070 Ti)
+- Thinker: d=384, layers=8, heads=6, ff=1536, ctx=256, vocab=32K, GQA kv_groups=3, batch=32, accum=2
+- Audio Enc: d=384, layers=8, heads=6, downsample=8x (12.5Hz), dropout=0.1, wd=0.01, batch=16, accum=2
+- Vision: d=192, layers=8, heads=3, embed_dim=256, temperature=0.07, batch=32, accum=8
+- Talker: d=384, layers=8, heads=6, codebooks=2×128, GQA kv_groups=3, batch=16, accum=2
+- Vocoder: batch=2, accum=2, max_audio_percentile=50%, shuffle_buffer=1000
+- SFT: batch=2, accum=4, checkpoint_freq=500, lr=5e-5
+
+## Testing
+```
+python test_thinker.py --checkpoint checkpoints/thinker_tiny
+python test_audio_enc.py --checkpoint checkpoints/audio_enc_tiny
+python test_vision.py --checkpoint checkpoints/vision_tiny
+python test_talker.py --checkpoint checkpoints/talker_tiny
+python test_vocoder.py --checkpoint checkpoints/vocoder_tiny
+python test_ocr.py --checkpoint checkpoints/ocr_tiny
+```
+All tests use `torch.inference_mode()` and `torch.set_float32_matmul_precision('high')`.

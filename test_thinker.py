@@ -16,6 +16,8 @@ from omni.tokenizer import BPETokenizer
 from omni.utils import TextDataset, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
+torch.set_float32_matmul_precision('high')
+
 
 def load_model_and_tokenizer(checkpoint_dir, device="cuda"):
     """Load Thinker model and tokenizer from checkpoint."""
@@ -132,7 +134,7 @@ def compute_perplexity_and_accuracy(model, tokenizer, cfg, device="cuda", num_sa
     else:
         iterator = iter(dataset)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, (x, y) in enumerate(iterator):
             if i >= num_samples:
                 break
@@ -230,7 +232,7 @@ def generate_text(model, tokenizer, prompt, device="cuda", max_length=100, tempe
     
     generated_ids = prompt_ids.copy()
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for _ in range(max_length):
             # Get context window (last ctx_len tokens)
             context = generated_ids[-ctx_len:]
@@ -428,6 +430,9 @@ def main():
     print("=" * 70)
     print("THINKER LANGUAGE MODEL ACCURACY TEST")
     print("=" * 70)
+
+    if args.device == "cuda" and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     
     # Load model
     try:

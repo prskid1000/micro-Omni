@@ -6,7 +6,7 @@ import json
 import glob
 import torch
 from torch import nn
-from typing import Tuple
+from typing import Optional, Tuple
 from datetime import datetime
 from torch.utils.data import IterableDataset, Dataset
 import torchaudio
@@ -84,7 +84,7 @@ class RMSNorm(nn.Module):
 
 class RoPE(nn.Module):
     """
-    Rotary Positional Embeddings (RoPE).
+    Rotary Positional Embeddings (RoPE) with cached cos/sin tables.
     TM-RoPE-lite for multimodal: we simply continue positions
     across modalities and allow 2D factorization for vision/audio if desired (kept simple here).
     """
@@ -95,27 +95,41 @@ class RoPE(nn.Module):
             raise ValueError(f"RoPE requires even head dimension, got {d_head}")
         self.d = d_head
         self.theta = theta
+        # Pre-compute inverse frequencies (constant)
+        inv_freq = 1.0 / (theta ** (torch.arange(0, d_head, 2).float() / d_head))
+        self.register_buffer("inv_freq", inv_freq)
+        # Cache for cos/sin tables
+        self._cos_cache: Optional[torch.Tensor] = None
+        self._sin_cache: Optional[torch.Tensor] = None
+        self._cache_len: int = 0
+
+    def _build_cache(self, T: int, device: torch.device) -> None:
+        """Build cos/sin cache up to length T (only rebuilds if needed)."""
+        if T <= self._cache_len and self._cos_cache is not None and self._cos_cache.device == device:
+            return
+        pos = torch.arange(T, device=device).float()
+        freqs = torch.einsum('t,f->tf', pos, self.inv_freq.to(device))  # (T, d/2)
+        emb = torch.cat([freqs, freqs], dim=-1)  # (T, d)
+        self._cos_cache = emb.cos()[None, None, :, :]  # (1, 1, T, d)
+        self._sin_cache = emb.sin()[None, None, :, :]  # (1, 1, T, d)
+        self._cache_len = T
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, pos: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Apply rotary positional embeddings to queries and keys.
-        
+
         Args:
             q: (B, H, T, D) query tensor
             k: (B, H, T, D) key tensor
             pos: (T,) position indices
-        
+
         Returns:
             Tuple of (q_with_rope, k_with_rope)
         """
-        device = q.device
-        d = self.d
         T = pos.shape[0]
-        inv = 1.0 / (self.theta ** (torch.arange(0, d, 2, device=device).float() / d))
-        freqs = torch.einsum('t,f->tf', pos.float(), inv)  # (T, d/2)
-        emb = torch.cat([freqs, freqs], dim=-1)  # (T, d)
-        cos = emb.cos()[None, None, :, :]
-        sin = emb.sin()[None, None, :, :]
+        self._build_cache(T, q.device)
+        cos = self._cos_cache[:, :, :T, :]
+        sin = self._sin_cache[:, :, :T, :]
         q1 = (q * cos) + (rotate_half(q) * sin)
         k1 = (k * cos) + (rotate_half(k) * sin)
         return q1, k1

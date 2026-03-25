@@ -545,7 +545,7 @@ def main(cfg):
             cached_msd_real_feats = None
 
             if run_discriminator:
-                opt_d.zero_grad()
+                opt_d.zero_grad(set_to_none=True)
                 
                 # Generate fake audio with fixed target length for discriminator update
                 with torch.no_grad():
@@ -590,12 +590,12 @@ def main(cfg):
                             grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
                             if is_exploded_mpd or is_exploded_msd:
                                 logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
-                                opt_d.zero_grad()
+                                opt_d.zero_grad(set_to_none=True)
                                 scaler_d.update()
                                 continue
                         except RuntimeError as e:
                             logger.error(f"Step {step}: {e}")
-                            opt_d.zero_grad()
+                            opt_d.zero_grad(set_to_none=True)
                             scaler_d.update()
                             continue
                         
@@ -607,7 +607,7 @@ def main(cfg):
                             last_lrs = scheduler_d.get_last_lr()
                             for group, base_lr in zip(opt_d.param_groups, last_lrs):
                                 group['lr'] = base_lr * warmup_factor
-                        opt_d.zero_grad()
+                        opt_d.zero_grad(set_to_none=True)
                 else:
                     mpd_real_out, cached_mpd_real_feats = mpd(audio_real_d)
                     mpd_fake_out, mpd_fake_feats = mpd(audio_fake_d.detach())
@@ -645,11 +645,11 @@ def main(cfg):
                             grad_norm_msd_after, is_exploded_msd = check_gradient_explosion(msd, max_grad_norm=explosion_threshold, raise_on_error=False)
                             if is_exploded_mpd or is_exploded_msd:
                                 logger.error(f"Step {step}: Discriminator gradient explosion after clipping (mpd: {grad_norm_mpd_before:.2f}->{grad_norm_mpd_after:.2f}, msd: {grad_norm_msd_before:.2f}->{grad_norm_msd_after:.2f}). Skipping this batch.")
-                                opt_d.zero_grad()
+                                opt_d.zero_grad(set_to_none=True)
                                 continue
                         except RuntimeError as e:
                             logger.error(f"Step {step}: {e}")
-                            opt_d.zero_grad()
+                            opt_d.zero_grad(set_to_none=True)
                             continue
                         
                         opt_d.step()
@@ -659,7 +659,7 @@ def main(cfg):
                             last_lrs = scheduler_d.get_last_lr()
                             for group, base_lr in zip(opt_d.param_groups, last_lrs):
                                 group['lr'] = base_lr * warmup_factor
-                        opt_d.zero_grad()
+                        opt_d.zero_grad(set_to_none=True)
                 cached_mpd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_mpd_real_feats]
                 cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
             else:
@@ -670,7 +670,7 @@ def main(cfg):
                 cached_msd_real_feats = [[f.detach() for f in feat_list] for feat_list in cached_msd_real_feats]
             
             # ========== Train Generator ==========
-            opt_g.zero_grad()
+            opt_g.zero_grad(set_to_none=True)
             
             # Generate fake audio with fixed target length
             audio_fake = generator(mel_input, target_length=target_audio_length)  # (B, T_audio)
@@ -771,12 +771,12 @@ def main(cfg):
                         
                         if is_exploded_gen:
                             logger.error(f"Step {step}: Generator gradient explosion after clipping (norm: {grad_norm_gen_before:.2f}->{grad_norm_gen_after:.2f}). Skipping this batch.")
-                            opt_g.zero_grad()
+                            opt_g.zero_grad(set_to_none=True)
                             scaler_g.update()
                             continue
                     except RuntimeError as e:
                         logger.error(f"Step {step}: {e}")
-                        opt_g.zero_grad()
+                        opt_g.zero_grad(set_to_none=True)
                         scaler_g.update()
                         continue
                     scaler_g.step(opt_g)
@@ -788,7 +788,7 @@ def main(cfg):
                     if ema is not None:
                         ema.update()
                     
-                    opt_g.zero_grad()
+                    opt_g.zero_grad(set_to_none=True)
                     step += 1  # This is the "effective" step for logging
             else:
                 # Adversarial losses
@@ -861,17 +861,17 @@ def main(cfg):
                         
                         if is_exploded_gen:
                             logger.error(f"Step {step}: Generator gradient explosion after clipping (norm: {grad_norm_gen_before:.2f}->{grad_norm_gen_after:.2f}). Skipping this batch.")
-                            opt_g.zero_grad()
+                            opt_g.zero_grad(set_to_none=True)
                             continue
                     except RuntimeError as e:
                         logger.error(f"Step {step}: {e}")
-                        opt_g.zero_grad()
+                        opt_g.zero_grad(set_to_none=True)
                         continue
                     
                     opt_g.step()
                     scheduler_g.step()
                     lr_spike.step(opt_g, logger)
-                    opt_g.zero_grad()
+                    opt_g.zero_grad(set_to_none=True)
                     step += 1  # Increment step counter only when optimizer step occurs
             
             # Logging

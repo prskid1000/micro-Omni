@@ -13,7 +13,7 @@ from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
 from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, reload_from_last_checkpoint, MixDataset,
+    reload_from_last_checkpoint, MixDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, load_audio, save_training_metadata, load_training_metadata,
     LRSpike
@@ -53,6 +53,7 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.backends.cudnn.benchmark = True
     save_dir = cfg.get("save_dir", "checkpoints/omni_sft_tiny")
     os.makedirs(save_dir, exist_ok=True)
     
@@ -233,9 +234,9 @@ def main(cfg):
         print(f"Dataset size: unknown")
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn, pin_memory=True)
     val_batch_size = cfg.get("val_batch_size", cfg.get("batch_size", 2))
-    val_dl = DataLoader(val_ds, batch_size=val_batch_size, shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn)
+    val_dl = DataLoader(val_ds, batch_size=val_batch_size, shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=mix_collate_fn, pin_memory=True)
     print(f"DataLoader created, starting training...")
     
     print(f"Starting training: max_epochs={max_epochs}, max_steps={cfg['max_steps']}, batch_size={cfg.get('batch_size', 2)}")
@@ -258,11 +259,10 @@ def main(cfg):
             
             if valid_images:
                 # Load and process all images at once
+                img_transform = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
                 img_tensors = []
                 for img_path in valid_images:
-                    img = Image.open(img_path).convert("RGB")
-                    img = transforms.Resize((224,224))(img)
-                    img = transforms.ToTensor()(img)
+                    img = img_transform(Image.open(img_path).convert("RGB"))
                     img_tensors.append(img)
                 
                 if img_tensors:
@@ -339,27 +339,22 @@ def main(cfg):
         # Combine embeddings for each sample
         batch_embeddings = []
         batch_targets = []
+        img_dict = {idx: emb for idx, emb in img_embeddings}
+        audio_dict = {idx: emb for idx, emb in audio_embeddings}
+        text_dict = {idx: (emb, y) for idx, emb, y in text_embeddings}
         for b in range(B):
             multimodal_emb_list = []
-            
+
             # Add image if present
-            for idx, emb in img_embeddings:
-                if idx == b:
-                    multimodal_emb_list.append(emb)
-            
+            if b in img_dict:
+                multimodal_emb_list.append(img_dict[b])
+
             # Add audio if present
-            for idx, emb in audio_embeddings:
-                if idx == b:
-                    multimodal_emb_list.append(emb)
-            
+            if b in audio_dict:
+                multimodal_emb_list.append(audio_dict[b])
+
             # Get text embedding
-            text_emb = None
-            y_ids = None
-            for idx, emb, y in text_embeddings:
-                if idx == b:
-                    text_emb = emb  # (1, T_text, d_thinker)
-                    y_ids = y  # (T_text,)
-                    break
+            text_emb, y_ids = text_dict[b]
             
             # Calculate remaining context for text
             multimodal_len = sum(emb.shape[1] for emb in multimodal_emb_list)
@@ -498,10 +493,10 @@ def main(cfg):
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
-            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False, 
-                                 num_workers=cfg.get("num_workers", 2), 
-                                 drop_last=cfg.get("drop_last", True), 
-                                 collate_fn=mix_collate_fn)
+            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 2), shuffle=False,
+                                 num_workers=cfg.get("num_workers", 2),
+                                 drop_last=cfg.get("drop_last", True),
+                                 collate_fn=mix_collate_fn, pin_memory=True)
         
         logger.epoch_start(epoch)
         think.train()
@@ -604,7 +599,7 @@ def main(cfg):
                         start_batch_idx = step % steps_per_epoch
                         initial_step = step
                         logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
-                    opt.zero_grad()
+                    opt.zero_grad(set_to_none=True)
                     # Don't call scaler.update() here - no backward pass occurred, so no inf checks were recorded
                     continue
                 else:
@@ -638,40 +633,27 @@ def main(cfg):
                 except RuntimeError as e:
                     logger.error(f"Step {step}: {e}")
                     logger.error("Skipping this batch due to invalid loss")
-                    opt.zero_grad()
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
                         scaler.update()
                     continue
                 
-                # Check for gradient explosion before clipping (after unscaling if AMP)
-                try:
-                    grad_norm_think, is_exploded_think = check_gradient_explosion(think, max_grad_norm=100.0, raise_on_error=False)
-                    grad_norm_proj_a, is_exploded_proj_a = check_gradient_explosion(proj_a, max_grad_norm=100.0, raise_on_error=False)
-                    grad_norm_proj_v, is_exploded_proj_v = check_gradient_explosion(proj_v, max_grad_norm=100.0, raise_on_error=False)
-                    if is_exploded_think or is_exploded_proj_a or is_exploded_proj_v:
-                        logger.error(f"Step {step}: Gradient explosion detected (think={grad_norm_think:.2f}, proj_a={grad_norm_proj_a:.2f}, proj_v={grad_norm_proj_v:.2f}). Skipping this batch.")
-                        opt.zero_grad()  # Clear gradients
-                        if use_amp:
-                            scaler.update()  # Update scaler even though we skipped (unscale was called)
-                        continue
-                except RuntimeError as e:
-                    logger.error(f"Step {step}: {e}")
-                    opt.zero_grad()  # Clear gradients
+                # Gradient clipping + explosion check in one pass
+                grad_norm_think = clip_gradients(think, max_grad_norm)
+                grad_norm_proj_a = clip_gradients(proj_a, max_grad_norm)
+                grad_norm_proj_v = clip_gradients(proj_v, max_grad_norm)
+                explosion_threshold = max(100.0, max_grad_norm * 10)
+                if max(grad_norm_think, grad_norm_proj_a, grad_norm_proj_v) > explosion_threshold:
+                    logger.error(f"Step {step}: Gradient explosion detected (think={grad_norm_think:.2f}, proj_a={grad_norm_proj_a:.2f}, proj_v={grad_norm_proj_v:.2f}). Skipping batch.")
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
-                        scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        scaler.update()
                     continue
-                
-                # Gradient clipping (already unscaled if using AMP)
+
                 if use_amp:
-                    clip_gradients(think, max_grad_norm)
-                    clip_gradients(proj_a, max_grad_norm)
-                    clip_gradients(proj_v, max_grad_norm)
                     scaler.step(opt)
                     scaler.update()
                 else:
-                    clip_gradients(think, max_grad_norm)
-                    clip_gradients(proj_a, max_grad_norm)
-                    clip_gradients(proj_v, max_grad_norm)
                     opt.step()
                 scheduler.step()
                 
@@ -679,7 +661,7 @@ def main(cfg):
                 if lr_spike is not None:
                     lr_spike.step(opt, logger)
                 
-                opt.zero_grad()  # Clear gradients after stepping
+                opt.zero_grad(set_to_none=True)  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
 
             # Use batch_step for all frequency checks

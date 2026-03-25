@@ -10,7 +10,7 @@
   "img_size": 224,
   "patch": 16,
   "d_model": 192,
-  "n_layers": 12,
+  "n_layers": 8,
   "n_heads": 3,
   "d_ff": 768,
   "embed_dim": 256,
@@ -42,15 +42,15 @@
 
   "batch_size": 32,
   "gradient_accumulation_steps": 2,
-  "num_workers": 1,
+  "num_workers": 2,
   "drop_last": true,
 
-  "lr": 0.001,
+  "lr": 0.0005,
   "wd": 0.01,
   "warmup_steps": 200,
   "max_grad_norm": 0.5,
 
-  "temperature": 0.3,
+  "temperature": 0.07,
 
   "use_amp": true,
   "use_compile": false,

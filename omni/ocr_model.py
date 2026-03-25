@@ -147,7 +147,10 @@ class OCRDecoder(nn.Module):
         # Image feature projection (from vision encoder output)
         # vision_dim should match the vision encoder's d_model
         self.img_proj = nn.Linear(vision_dim, d_model)
-        
+
+        # Pre-allocated causal mask (sliced at runtime — no allocation per forward)
+        self.register_buffer("_causal_mask", torch.tril(torch.ones(max_seq_len, max_seq_len)).unsqueeze(0).unsqueeze(0), persistent=False)
+
         # KV cache for autoregressive generation
         self.kv_cache = None
         self.use_kv_cache = False
@@ -205,8 +208,8 @@ class OCRDecoder(nn.Module):
         # Prepare position indices for RoPE
         pos = make_positions(T, x.device)
         
-        # Prepare causal mask for self-attention
-        mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+        # Slice pre-allocated causal mask
+        mask = self._causal_mask[:, :, :T, :T]
         
         # KV caching setup
         use_kv = use_cache and self.use_kv_cache
@@ -233,12 +236,6 @@ class OCRDecoder(nn.Module):
         # Output projection
         x = self.norm(x)
         logits = self.head(x)  # (B, T, vocab_size)
-        
-        # Check for numerical stability
-        if torch.isnan(logits).any() or torch.isinf(logits).any():
-            nan_count = torch.isnan(logits).sum().item()
-            inf_count = torch.isinf(logits).sum().item()
-            raise RuntimeError(f"Numerical instability in OCRDecoder: NaN={nan_count}, Inf={inf_count}")
         
         return logits
 

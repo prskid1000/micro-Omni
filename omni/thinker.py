@@ -220,45 +220,19 @@ class Attention(nn.Module):
             y: (B, h, T, dk) attention output
         """
         B = q.shape[0]
-        
-        # Check for NaN in q, k before attention computation
-        if torch.isnan(q).any() or torch.isnan(k).any():
-            raise RuntimeError("NaN detected in attention queries or keys")
-        
+
         att = torch.einsum("bhtd,bhTd->bhtT", q, k) / math.sqrt(self.dk)
-        
-        # Clamp attention scores to prevent extreme values that could cause NaN in softmax
-        att = torch.clamp(att, min=-50.0, max=50.0)
-        
+
         if mask is not None:
             # att is (B, H, T, T_total), mask should be broadcastable
             if len(mask.shape) == 4:
-                # Expand mask to match attention heads: (B, 1, T, T_total) -> (B, H, T, T_total)
                 mask = mask.expand(B, self.h, -1, -1)
             att = att.masked_fill(mask == 0, float("-inf"))
-        
-        # Check for NaN before softmax
-        if torch.isnan(att).any():
-            raise RuntimeError("NaN detected in attention scores before softmax")
-        
+
         att = att.softmax(dim=-1)
-        
-        # Check for NaN after softmax
-        if torch.isnan(att).any():
-            raise RuntimeError("NaN detected in attention probabilities after softmax")
-        
         att = self.drop(att)
-        
-        # Check for NaN in values
-        if torch.isnan(v).any():
-            raise RuntimeError("NaN detected in attention values")
-        
         y = torch.einsum("bhtT,bhTd->bhtd", att, v)
-        
-        # Check for NaN in attention output
-        if torch.isnan(y).any():
-            raise RuntimeError("NaN detected in attention output")
-        
+
         return y
 
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None, 
@@ -311,10 +285,11 @@ class Attention(nn.Module):
                 k_combined = k_new
                 v_combined = v_new
             
-            # Repeat k and v to match query heads (each kv head serves multiple q heads)
+            # Expand k/v to match query heads (zero-copy via expand+reshape)
             repeat_factor = self.h // self.kv_groups
-            k = k_combined.repeat_interleave(repeat_factor, dim=1)  # (B, h, T_total, dk)
-            v = v_combined.repeat_interleave(repeat_factor, dim=1)  # (B, h, T_total, dk)
+            B_kv, G, T_kv, dk_kv = k_combined.shape
+            k = k_combined.unsqueeze(2).expand(B_kv, G, repeat_factor, T_kv, dk_kv).reshape(B_kv, -1, T_kv, dk_kv)
+            v = v_combined.unsqueeze(2).expand(B_kv, G, repeat_factor, T_kv, dk_kv).reshape(B_kv, -1, T_kv, dk_kv)
             
             next_cache = None
             if store_cache:
@@ -437,31 +412,38 @@ class MoE(nn.Module):
         B, T, D = x.shape
         router_logits = self.router(x)  # (B, T, num_experts)
         router_probs = torch.softmax(router_logits, dim=-1)  # (B, T, num_experts)
-        
+
         # Top-k expert selection
         topk_probs, topk_indices = torch.topk(router_probs, self.num_experts_per_tok, dim=-1)  # (B, T, k)
         topk_probs = topk_probs / (topk_probs.sum(dim=-1, keepdim=True) + 1e-8)  # Normalize
-        
-        # Efficient expert computation using einsum
-        # Flatten batch and time dimensions for processing
-        x_flat = x.view(B * T, D)  # (B*T, D)
-        topk_indices_flat = topk_indices.view(B * T, self.num_experts_per_tok)  # (B*T, k)
-        topk_probs_flat = topk_probs.view(B * T, self.num_experts_per_tok)  # (B*T, k)
-        
-        # Process through experts (more efficient batch processing)
-        output = torch.zeros_like(x_flat)  # (B*T, D)
-        for k in range(self.num_experts_per_tok):
-            # Get expert indices for this k
-            expert_indices = topk_indices_flat[:, k]  # (B*T,)
-            weights = topk_probs_flat[:, k:k+1]  # (B*T, 1)
-            
-            # Process each unique expert
-            for expert_idx in range(self.num_experts):
-                mask = (expert_indices == expert_idx)  # (B*T,)
-                if mask.any():
-                    expert_out = self.experts[expert_idx](x_flat[mask])  # (N, D)
-                    output[mask] = output[mask] + weights[mask] * expert_out
-        
+
+        # Flatten batch and time dimensions for sorted expert dispatch
+        x_flat = x.view(B * T, D)  # (N, D) where N = B*T
+        flat_indices = topk_indices.view(-1)  # (N*k,)
+        flat_probs = topk_probs.view(-1, 1)  # (N*k, 1)
+        token_ids = torch.arange(B * T, device=x.device).unsqueeze(1).expand(-1, self.num_experts_per_tok).reshape(-1)  # (N*k,)
+
+        # Sort by expert id for batched processing (single loop over experts)
+        sort_order = flat_indices.argsort(stable=True)
+        sorted_expert_ids = flat_indices[sort_order]
+        sorted_token_ids = token_ids[sort_order]
+        sorted_probs = flat_probs[sort_order]
+
+        # Count tokens per expert
+        counts = torch.bincount(sorted_expert_ids, minlength=self.num_experts)
+
+        output = torch.zeros_like(x_flat)  # (N, D)
+        offset = 0
+        for i, expert in enumerate(self.experts):
+            n = counts[i].item()
+            if n == 0:
+                offset += n
+                continue
+            idx = sorted_token_ids[offset:offset + n]
+            w = sorted_probs[offset:offset + n]
+            output.index_add_(0, idx, w * expert(x_flat[idx]))
+            offset += n
+
         return output.view(B, T, D)
 
 class Block(nn.Module):
@@ -550,7 +532,10 @@ class ThinkerLM(nn.Module):
         self.norm = RMSNorm(d)
         self.lm_head = nn.Linear(d, vocab, bias=False)
         self.ctx = ctx
-        
+
+        # Pre-allocated causal mask (sliced at runtime — no allocation per forward)
+        self.register_buffer("_causal_mask", torch.tril(torch.ones(ctx, ctx)).unsqueeze(0).unsqueeze(0), persistent=False)
+
         # KV cache for autoregressive generation
         self.kv_cache = None
         self.use_kv_cache = False
@@ -646,12 +631,6 @@ class ThinkerLM(nn.Module):
         else:
             raise ValueError("Either idx or embeddings must be provided")
         
-        # Early NaN detection after embedding
-        if torch.isnan(x).any() or torch.isinf(x).any():
-            nan_count = torch.isnan(x).sum().item()
-            inf_count = torch.isinf(x).sum().item()
-            raise RuntimeError(f"Numerical instability detected after embedding: NaN={nan_count}, Inf={inf_count}")
-        
         using_cache = self.use_kv_cache
         if using_cache and self.kv_cache is None:
             self.kv_cache = [None] * len(self.blocks)
@@ -672,15 +651,11 @@ class ThinkerLM(nn.Module):
                 for i, blk in enumerate(self.blocks):
                     x, new_cache = blk(x, mask=mask, pos=pos, cache=self.kv_cache[i], return_cache=True)
                     self.kv_cache[i] = new_cache
-                    if torch.isnan(x).any() or torch.isinf(x).any():
-                        nan_count = torch.isnan(x).sum().item()
-                        inf_count = torch.isinf(x).sum().item()
-                        raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
             else:
                 # Prefill step: build caches from full sequence
                 if pos is None:
                     pos = make_positions(T, x.device)
-                mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)
+                mask = self._causal_mask[:, :, :T, :T]
                 if attn_mask is not None:
                     if len(attn_mask.shape) == 3:
                         attn_mask = attn_mask.unsqueeze(1)
@@ -688,47 +663,25 @@ class ThinkerLM(nn.Module):
                 for i, blk in enumerate(self.blocks):
                     x, new_cache = blk(x, mask=mask, pos=pos, cache=None, return_cache=True)
                     self.kv_cache[i] = new_cache
-                    if torch.isnan(x).any() or torch.isinf(x).any():
-                        nan_count = torch.isnan(x).sum().item()
-                        inf_count = torch.isinf(x).sum().item()
-                        raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
         else:
             # No caching - standard forward
             if pos is None:
                 pos = make_positions(T, x.device)
             
-            # Create causal mask
-            mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+            # Slice pre-allocated causal mask
+            mask = self._causal_mask[:, :, :T, :T]
             if attn_mask is not None:
                 if len(attn_mask.shape) == 3:
                     attn_mask = attn_mask.unsqueeze(1)  # (B, 1, T, T)
                 mask = mask * attn_mask
             
             # Standard forward pass
-            for i, blk in enumerate(self.blocks):
+            for blk in self.blocks:
                 x, _ = blk(x, mask=mask, pos=pos, cache=None, return_cache=False)
-                # Check for NaN after each block
-                if torch.isnan(x).any() or torch.isinf(x).any():
-                    nan_count = torch.isnan(x).sum().item()
-                    inf_count = torch.isinf(x).sum().item()
-                    raise RuntimeError(f"Numerical instability detected after block {i}: NaN={nan_count}, Inf={inf_count}")
-        
+
         x = self.norm(x)
-        # Check after final norm
-        if torch.isnan(x).any() or torch.isinf(x).any():
-            nan_count = torch.isnan(x).sum().item()
-            inf_count = torch.isinf(x).sum().item()
-            raise RuntimeError(f"Numerical instability detected after final norm: NaN={nan_count}, Inf={inf_count}")
-        
-        # Optionally return the final hidden embeddings (pre-lm_head) for use as contextual
-        # text representations (useful for multimodal encoders). This avoids re-running an
-        # additional projection when the caller wants embeddings instead of logits.
+
         if return_embeddings:
-            # x is (B, T, D) after final normalization
-            if torch.isnan(x).any() or torch.isinf(x).any():
-                nan_count = torch.isnan(x).sum().item()
-                inf_count = torch.isinf(x).sum().item()
-                raise RuntimeError(f"Numerical instability detected in ThinkerLM embeddings: NaN={nan_count}, Inf={inf_count}")
             return x
 
         logits = self.lm_head(x)

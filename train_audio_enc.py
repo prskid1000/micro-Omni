@@ -5,7 +5,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, check_gradient_explosion, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata, LRSpike
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata, LRSpike
 from tqdm import tqdm
 
 def main(cfg):
@@ -14,6 +14,7 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.backends.cudnn.benchmark = True
     save_dir = cfg.get("save_dir", "checkpoints/audio_enc_tiny")
     os.makedirs(save_dir, exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
@@ -259,8 +260,8 @@ def main(cfg):
         train_size = val_size = None  # Unknown size
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn_with_max)
-    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn_with_max)
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn_with_max, pin_memory=True)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), collate_fn=collate_fn_with_max, pin_memory=True)
     
     # Initialize logger
     logger = SimpleLogger("AudioEncoder")
@@ -346,10 +347,10 @@ def main(cfg):
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
-            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False, 
-                                 num_workers=cfg.get("num_workers", 2), 
-                                 drop_last=cfg.get("drop_last", True), 
-                                 collate_fn=collate_fn_with_max)
+            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 4), shuffle=False,
+                                 num_workers=cfg.get("num_workers", 2),
+                                 drop_last=cfg.get("drop_last", True),
+                                 collate_fn=collate_fn_with_max, pin_memory=True)
         
         # Create progress bar with correct starting position when resuming mid-epoch
         remaining_epochs = max_epochs - epoch - 1
@@ -446,35 +447,20 @@ def main(cfg):
                 except RuntimeError as e:
                     logger.error(f"Step {step}: {e}")
                     logger.error("Skipping this batch due to invalid loss")
-                    opt.zero_grad()
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
                         scaler.update()
                     continue
                 
-                # Gradient clipping first (already unscaled if using AMP)
-                # Clip gradients to prevent explosion, then check if still too high
-                try:
-                    grad_norm_model_before = clip_gradients(model, max_grad_norm)
-                    grad_norm_head_before = clip_gradients(head, max_grad_norm)
-                    
-                    # Check for gradient explosion AFTER clipping
-                    # Use a higher threshold (10x max_grad_norm) since we've already clipped
-                    # This allows clipping to fix most cases, only skip if truly exploded
-                    explosion_threshold = max(100.0, max_grad_norm * 10)
-                    grad_norm_model_after, is_exploded_model = check_gradient_explosion(model, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    grad_norm_head_after, is_exploded_head = check_gradient_explosion(head, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    
-                    if is_exploded_model or is_exploded_head:
-                        logger.error(f"Step {step}: Gradient explosion detected after clipping (model: {grad_norm_model_before:.2f}->{grad_norm_model_after:.2f}, head: {grad_norm_head_before:.2f}->{grad_norm_head_after:.2f}). Skipping this batch.")
-                        opt.zero_grad()  # Clear gradients
-                        if use_amp:
-                            scaler.update()  # Update scaler even though we skipped (unscale was called)
-                        continue
-                except RuntimeError as e:
-                    logger.error(f"Step {step}: {e}")
-                    opt.zero_grad()  # Clear gradients
+                # Clip gradients and check for explosion using returned norms
+                grad_norm_model = clip_gradients(model, max_grad_norm)
+                grad_norm_head = clip_gradients(head, max_grad_norm)
+                explosion_threshold = max(100.0, max_grad_norm * 10)
+                if grad_norm_model > explosion_threshold or grad_norm_head > explosion_threshold:
+                    logger.error(f"Step {step}: Gradient explosion detected (model: {grad_norm_model:.2f}, head: {grad_norm_head:.2f}). Skipping batch.")
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
-                        scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        scaler.update()
                     continue
                 
                 # Optimizer step (gradients already clipped)
@@ -493,7 +479,7 @@ def main(cfg):
                 if lr_spike is not None:
                     lr_spike.step(opt, logger)
                 
-                opt.zero_grad()  # Clear gradients after stepping
+                opt.zero_grad(set_to_none=True)  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
 
             # Use batch_step for all frequency checks

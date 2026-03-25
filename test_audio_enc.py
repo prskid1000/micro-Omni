@@ -14,6 +14,8 @@ from omni.audio_encoder import AudioEncoderTiny
 from omni.utils import ASRDataset, load_audio, find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
+torch.set_float32_matmul_precision('high')
+
 try:
     import Levenshtein
     HAS_LEVENSHTEIN = True
@@ -363,7 +365,7 @@ def evaluate_accuracy(model, head, idx_to_char, cfg, device="cuda", num_samples=
     else:
         iterator = iter(dataset)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, (mel, text) in enumerate(iterator):
             if i >= num_samples:
                 break
@@ -561,7 +563,7 @@ def test_single_audio(model, head, idx_to_char, audio_path, cfg, device="cuda", 
     model.eval()
     head.eval()
     
-    with torch.no_grad():
+    with torch.inference_mode():
         x = model(mel)
         logits = head(x)
         
@@ -600,6 +602,9 @@ def main():
     print("=" * 70)
     print("AUDIO ENCODER (ASR) ACCURACY TEST")
     print("=" * 70)
+
+    if args.device == "cuda" and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     
     # Load model
     try:

@@ -107,11 +107,8 @@ class RVQ(nn.Module):
         
         # Greedy residual quantization: each codebook quantizes the residual
         for cb in self.codebooks:
-            # Nearest neighbor search in embedding space
-            code = cb.weight  # (K, d) where K=codebook_size
-            # Compute squared Euclidean distances: (B, 1, d) - (1, K, d) -> (B, K, d)
-            dist = (residual[:,None,:] - code[None,:,:]).pow(2).sum(-1)  # (B, K)
-            # Find nearest codebook entry
+            # Nearest neighbor search via cdist (fused, memory-efficient)
+            dist = torch.cdist(residual.unsqueeze(1), cb.weight.unsqueeze(0)).squeeze(1)  # (B, K)
             ind = dist.argmin(dim=-1)  # (B,)
             idxs.append(ind)
             # Update residual: subtract quantized value

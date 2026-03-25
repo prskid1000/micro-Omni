@@ -6,8 +6,8 @@ from torch.utils.data import DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.utils import (
-    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    check_gradient_explosion, reload_from_last_checkpoint, TextDataset, EMA,
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss,
+    reload_from_last_checkpoint, TextDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, save_training_metadata, load_training_metadata,
     analyze_text_dataset, LRSpike
@@ -20,6 +20,7 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.backends.cudnn.benchmark = True
     save_dir = cfg.get("save_dir", "checkpoints/thinker_tiny")
     os.makedirs(save_dir, exist_ok=True)
     train_text = cfg.get("train_text", "data/text/production_corpus.txt")
@@ -194,8 +195,8 @@ def main(cfg):
         train_size = val_size = None  # Unknown size
     
     # Note: shuffle=False for IterableDataset (shuffling handled internally)
-    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
-    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True))
+    train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), pin_memory=True)
+    val_dl = DataLoader(val_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, num_workers=cfg.get("num_workers", 2), drop_last=cfg.get("drop_last", True), pin_memory=True)
     
     # Logger already initialized above (needed during setup)
     
@@ -277,9 +278,9 @@ def main(cfg):
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
-            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False, 
-                                 num_workers=cfg.get("num_workers", 2), 
-                                 drop_last=cfg.get("drop_last", True))
+            train_dl = DataLoader(train_ds, batch_size=cfg.get("batch_size", 8), shuffle=False,
+                                 num_workers=cfg.get("num_workers", 2),
+                                 drop_last=cfg.get("drop_last", True), pin_memory=True)
         
         logger.epoch_start(epoch)
         # Create progress bar with step info
@@ -344,7 +345,7 @@ def main(cfg):
                         step = reloaded_step
                         initial_step = step
                         logger.info(f"Resuming from step {step}")
-                    opt.zero_grad()
+                    opt.zero_grad(set_to_none=True)
                     # Don't call scaler.update() here - no backward pass occurred, so no inf checks were recorded
                     continue
                 else:
@@ -379,27 +380,18 @@ def main(cfg):
                 except RuntimeError as e:
                     logger.error(f"Step {step}: {e}")
                     logger.error("Skipping this batch due to invalid loss")
-                    opt.zero_grad()
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
                         scaler.update()
                     continue
 
                 # Gradient clipping first (already unscaled if using AMP)
-                try:
-                    grad_norm_before = clip_gradients(model, max_grad_norm)
-                    explosion_threshold = max(100.0, max_grad_norm * 10)
-                    grad_norm_after, is_exploded = check_gradient_explosion(model, max_grad_norm=explosion_threshold, raise_on_error=False)
-                    if is_exploded:
-                        logger.error(f"Step {step}: Gradient explosion detected after clipping (norm: {grad_norm_before:.2f}->{grad_norm_after:.2f}). Skipping this batch.")
-                        opt.zero_grad()  # Clear gradients
-                        if use_amp:
-                            scaler.update()  # Update scaler even though we skipped (unscale was called)
-                        continue
-                except RuntimeError as e:
-                    logger.error(f"Step {step}: {e}")
-                    opt.zero_grad()  # Clear gradients
+                grad_norm = clip_gradients(model, max_grad_norm)
+                if grad_norm > max(100.0, max_grad_norm * 10):
+                    logger.error(f"Step {step}: Gradient explosion detected (norm: {grad_norm:.2f}). Skipping batch.")
+                    opt.zero_grad(set_to_none=True)
                     if use_amp:
-                        scaler.update()  # Update scaler even though we skipped (unscale was called)
+                        scaler.update()
                     continue
 
                 # Optimizer step (gradients already clipped)
@@ -418,45 +410,7 @@ def main(cfg):
                 if lr_spike is not None:
                     lr_spike.step(opt, logger)
 
-                # Check if weights became NaN after optimizer step
-                has_nan, has_inf, nan_count, inf_count = model.check_weights_stability()
-                if has_nan or has_inf:
-                    logger.error(f"Step {step}: Model weights corrupted after optimizer step (NaN={nan_count}, Inf={inf_count})")
-                    logger.error("This indicates numerical instability. Consider:")
-                    logger.error("  - Reducing learning rate")
-                    logger.error("  - Using gradient clipping")
-                    logger.error("  - Disabling mixed precision training")
-                    logger.error("  - Checking for gradient explosion")
-                    checkpoint_files = [f for f in os.listdir(save_dir) if f.startswith("thinker_step_") and f.endswith(".pt")]
-                    if checkpoint_files:
-                        step_numbers = []
-                        for f in checkpoint_files:
-                            try:
-                                step_num = int(f.replace("thinker_step_", "").replace(".pt", ""))
-                                step_numbers.append((step_num, f))
-                            except:
-                                continue
-                        if step_numbers:
-                            step_numbers.sort(key=lambda x: x[0], reverse=True)
-                            last_checkpoint = os.path.join(save_dir, step_numbers[0][1])
-                            logger.error(f"Attempting to recover from checkpoint: {last_checkpoint}")
-                            checkpoint = torch.load(last_checkpoint, map_location=device)
-                            if isinstance(checkpoint, dict) and "model" in checkpoint:
-                                model.load_state_dict(checkpoint["model"])
-                                if "optimizer" in checkpoint:
-                                    opt.load_state_dict(checkpoint["optimizer"])
-                                if "scheduler" in checkpoint:
-                                    scheduler.load_state_dict(checkpoint["scheduler"])
-                                if "scaler" in checkpoint and scaler is not None:
-                                    scaler.load_state_dict(checkpoint["scaler"])
-                                logger.info("Recovered from checkpoint. Continuing training...")
-                            else:
-                                model.load_state_dict(checkpoint)
-                                logger.info("Recovered model weights from checkpoint. Continuing training...")
-                    opt.zero_grad()
-                    continue
-
-                opt.zero_grad()  # Clear gradients after stepping
+                opt.zero_grad(set_to_none=True)  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
 
             # Use batch_step for all frequency checks
@@ -501,19 +455,6 @@ def main(cfg):
             
             # Validation
             if step % val_freq == 0 and step > 0:
-                # Check model weights for NaN/Inf before validation
-                has_nan, has_inf, nan_count, inf_count = model.check_weights_stability()
-                if has_nan or has_inf:
-                    logger.error(f"Step {step}: Model weights corrupted (NaN={nan_count}, Inf={inf_count}). Skipping validation.")
-                    logger.error("This indicates numerical instability during training. Consider:")
-                    logger.error("  - Reducing learning rate")
-                    logger.error("  - Using gradient clipping")
-                    logger.error("  - Disabling mixed precision training")
-                    logger.error("  - Checking for gradient explosion")
-                    # Continue training but skip validation
-                    model.train()
-                    continue
-                
                 # Apply EMA weights for validation if enabled
                 if ema is not None:
                     ema.apply_shadow()
@@ -636,64 +577,46 @@ def main(cfg):
             continue
         
         # Final validation at end of epoch
-        # Check model weights for NaN/Inf before validation
-        has_nan, has_inf, nan_count, inf_count = model.check_weights_stability()
-        if has_nan or has_inf:
-            logger.error(f"Epoch {epoch}: Model weights corrupted (NaN={nan_count}, Inf={inf_count}). Skipping validation.")
-            logger.error("This indicates numerical instability during training. Consider:")
-            logger.error("  - Reducing learning rate")
-            logger.error("  - Using gradient clipping")
-            logger.error("  - Disabling mixed precision training")
-            logger.error("  - Checking for gradient explosion")
-            model.train()
-            avg_val_loss = float('inf')
-        else:
-            model.eval()
-            val_loss_sum = 0.0
-            val_count = 0
-            val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
-            with torch.no_grad():
-                for val_x, val_y in val_dl:
-                    val_x, val_y = val_x.to(device), val_y.to(device)
-                    try:
-                        if use_amp:
-                            with autocast(device_type='cuda'):
-                                val_logits = model(val_x)
-                                val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                        else:
+        model.eval()
+        val_loss_sum = 0.0
+        val_count = 0
+        val_batches = cfg.get("val_batches_epoch_end", None)  # None = full validation at epoch end
+        with torch.no_grad():
+            for val_x, val_y in val_dl:
+                val_x, val_y = val_x.to(device), val_y.to(device)
+                try:
+                    if use_amp:
+                        with autocast(device_type='cuda'):
                             val_logits = model(val_x)
                             val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
-                        
-                        # Validate validation loss
-                        validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
-                        val_loss_sum += float(val_loss.detach())
-                        val_count += 1
-                        # Free validation tensors
-                        del val_logits, val_loss
-                    except RuntimeError as e:
-                        error_msg = str(e)
-                        if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
-                            logger.error(f"Epoch {epoch}: {e}")
-                            logger.error("Reloading from last checkpoint...")
-                            # Reload from last checkpoint
-                            reloaded_step = reload_from_last_checkpoint(
-                                save_dir, "thinker_step_", device, logger, model, opt, scheduler, scaler
-                            )
-                            if reloaded_step > 0:
-                                step = reloaded_step
-                                initial_step = step
-                                logger.info(f"Resuming from step {step}")
-                            model.train()
-                            break
-                        else:
-                            logger.warning(f"Epoch {epoch}: Validation error: {e}")
-                            # Break on NaN/Inf to avoid repeated errors
-                            break
-                    
-                    if val_batches is not None and val_count >= val_batches:
+                    else:
+                        val_logits = model(val_x)
+                        val_loss = loss_fn(val_logits.view(-1, val_logits.size(-1)), val_y.view(-1))
+
+                    validate_loss(val_loss, min_loss=-1e6, max_loss=1e6)
+                    val_loss_sum += float(val_loss.detach())
+                    val_count += 1
+                    del val_logits, val_loss
+                except RuntimeError as e:
+                    error_msg = str(e)
+                    if "NaN detected in attention probabilities after softmax" in error_msg or "Numerical instability" in error_msg:
+                        logger.error(f"Epoch {epoch}: {e}")
+                        reloaded_step = reload_from_last_checkpoint(
+                            save_dir, "thinker_step_", device, logger, model, opt, scheduler, scaler
+                        )
+                        if reloaded_step > 0:
+                            step = reloaded_step
+                            initial_step = step
+                        model.train()
                         break
-            
-            avg_val_loss = val_loss_sum / max(val_count, 1)
+                    else:
+                        logger.warning(f"Epoch {epoch}: Validation error: {e}")
+                        break
+
+                if val_batches is not None and val_count >= val_batches:
+                    break
+
+        avg_val_loss = val_loss_sum / max(val_count, 1)
         
         logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
         
