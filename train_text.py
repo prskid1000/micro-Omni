@@ -107,7 +107,10 @@ def main(cfg):
         ema = EMA(model, decay=ema_decay, device=device)
         print(f"✓ EMA enabled with decay={ema_decay}")
     
-    loss_fn = nn.CrossEntropyLoss(ignore_index=0)
+    label_smoothing = cfg.get("label_smoothing", 0.0)
+    loss_fn = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=label_smoothing)
+    if label_smoothing > 0:
+        print(f"Label smoothing: {label_smoothing}")
     
     # Learning rate scheduler with warmup
     warmup_steps = cfg.get("warmup_steps", 500)
