@@ -5,21 +5,21 @@
 
   "seed": 42,
   "max_epochs": 50,
-  "max_steps": 5000,
+  "max_steps": 50000,
 
   "img_size": 224,
   "patch": 16,
-  "d_model": 192,
-  "n_layers": 8,
-  "n_heads": 3,
-  "d_ff": 768,
-  "embed_dim": 256,
+  "d_model": 128,
+  "n_layers": 4,
+  "n_heads": 4,
+  "d_ff": 512,
+  "embed_dim": 128,
   "dropout": 0.1,
 
-  "text_d_model": 192,
-  "text_n_heads": 3,
-  "text_n_layers": 6,
-  "text_d_ff": 768,
+  "text_d_model": 128,
+  "text_n_heads": 4,
+  "text_n_layers": 4,
+  "text_d_ff": 512,
   "text_max_len": 77,
 
   "use_thinker_for_text": false,
@@ -27,10 +27,10 @@
   "thinker": {
     "vocab_size": 1024,
     "n_layers": 4,
-    "d_model": 256,
+    "d_model": 128,
     "n_heads": 4,
-    "d_ff": 1024,
-    "dropout": 0.1,
+    "d_ff": 512,
+    "dropout": 0.05,
     "rope_theta": 10000,
     "use_gqa": false,
     "use_swiglu": true,
@@ -47,8 +47,8 @@
 
   "lr": 0.0005,
   "wd": 0.01,
-  "warmup_steps": 200,
-  "max_grad_norm": 0.5,
+  "warmup_steps": 100,
+  "max_grad_norm": 1.0,
 
   "temperature": 0.07,
 
@@ -57,7 +57,7 @@
   "use_ema": true,
   "ema_decay": 0.999,
 
-  "use_augmentation": true,
+  "use_augmentation": false,
   "shuffle_buffer_size": 10000,
 
   "print_freq": 50,
@@ -68,6 +68,5 @@
   "val_split": 0.1,
 
   "val_loss_threshold": 0.5,
-
-  "use_lr_spike": true
+  "use_lr_spike": false
 }
