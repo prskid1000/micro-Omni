@@ -40,12 +40,16 @@ micro-Omni/
 ├── test_talker.py
 ├── test_vocoder.py
 ├── test_ocr.py
+├── test_sft.py                    # Multimodal SFT test
 │
 ├── infer_chat.py                  # Interactive multimodal chat
 ├── export.py                      # Merge checkpoints for deployment
 │
 ├── export/
-│   └── infer_standalone.py        # Inference from exported model
+│   ├── infer_standalone.py        # Inference from exported model
+│   ├── modeling_muomni.py         # HuggingFace-compatible model classes
+│   ├── test_hf_text.py            # Test HF text-only export
+│   └── test_hf_multimodal.py      # Test HF multimodal export
 │
 ├── data/                          # Training data (user-provided)
 │   ├── text/
@@ -276,6 +280,49 @@ All training scripts follow the same pattern:
 2. Build model and datasets
 3. Training loop with AMP, gradient clipping, cosine LR
 4. Periodic validation and checkpoint saving
+
+---
+
+## export/modeling_muomni.py
+
+HuggingFace-compatible model definitions for loading exported models with
+`from_pretrained`.
+
+| Class / Function              | Description                                    |
+|-------------------------------|------------------------------------------------|
+| `MuOmniConfig`               | Extends `PretrainedConfig`, reads config.json   |
+| `MuOmniForCausalLM`          | Text-only model, loads flat-key safetensors     |
+| `MuOmniMultimodalModel`      | Full multimodal model, loads prefixed-key safetensors |
+
+`MuOmniForCausalLM` rebuilds the Thinker from config and implements
+`forward()` and `generate()` for standard HuggingFace text generation.
+`MuOmniMultimodalModel` extends it with audio encoder, vision encoder,
+talker, vocoder, and projection layers for full multimodal inference.
+
+---
+
+## export/test_hf_text.py
+
+Validates the HuggingFace text-only export. Loads the model via
+`AutoModelForCausalLM.from_pretrained`, runs text prompts, and checks
+perplexity, generation quality, and weight consistency. Returns scored
+pass/fail.
+
+---
+
+## export/test_hf_multimodal.py
+
+Validates the HuggingFace multimodal export. Loads `MuOmniMultimodalModel`
+from `model_full.safetensors`, tests image, audio, and text inputs, and
+checks cross-modal output consistency. Returns scored pass/fail.
+
+---
+
+## test_sft.py
+
+Validates the multimodal supervised fine-tuning pipeline. Loads all component
+checkpoints together and runs end-to-end inference on multimodal samples
+(text + image + audio). Tests the connected system trained by `sft_omni.py`.
 
 ---
 

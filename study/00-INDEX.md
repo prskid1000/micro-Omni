@@ -56,7 +56,7 @@ A self-contained guide to understanding and building a multimodal AI system. No 
 |---|---------|-------------------|
 | 22 | [Setup & Environment](22-setup-environment.md) | Installation, dependencies, GPU setup, verification |
 | 23 | [Inference & Chat](23-inference-chat.md) | Text chat, image QA, audio transcription, TTS |
-| 24 | [Export & Deployment](24-export-deployment.md) | Merging to safetensors, standalone inference, HuggingFace |
+| 24 | [Export & Deployment](24-export-deployment.md) | Merging to safetensors, HuggingFace integration, from_pretrained, standalone inference |
 | 25 | [Testing & Validation](25-testing-validation.md) | Test scripts, metrics, quality checks |
 
 ## Appendices

@@ -6,6 +6,9 @@
 |------|---------|
 | `infer_standalone.py` | Run inference from a merged `model.safetensors` file (no separate checkpoints needed) |
 | `test_safetensor.py` | Validate exported safetensors — checks all component prefixes, parameter counts, dtype |
+| `modeling_muomni.py` | HuggingFace-compatible model definition (954 lines) — `MuOmniForCausalLM` + `MuOmniMultimodalModel` for `from_pretrained` loading |
+| `test_hf_text.py` | Test HF text-only inference via `MuOmniForCausalLM` |
+| `test_hf_multimodal.py` | Test HF multimodal inference (text + audio/vision) via `MuOmniMultimodalModel` |
 
 ## Export Workflow
 ```bash
@@ -36,10 +39,16 @@ ocr.*          — OCR model (optional)
 ## Required Output Files
 ```
 exported/
-├── model.safetensors   ← All weights merged
-├── tokenizer.model     ← SentencePiece BPE model
-└── config.json         ← Architecture config for reconstruction
+├── model.safetensors       ← HF-compatible flat keys (for from_pretrained)
+├── model_full.safetensors  ← All components with prefixed keys (thinker.*, audio_enc.*, etc.)
+├── tokenizer.model         ← SentencePiece BPE model
+└── config.json             ← Architecture config for reconstruction
 ```
+
+## HuggingFace Integration
+- `model.safetensors` uses HF flat keys (no component prefixes) — loadable via `MuOmniForCausalLM.from_pretrained("exported/")`
+- `model_full.safetensors` keeps all component prefixes — used by `infer_standalone.py` and `MuOmniMultimodalModel`
+- `modeling_muomni.py` (954 lines) defines both `MuOmniForCausalLM` (text-only) and `MuOmniMultimodalModel` (full multimodal)
 
 ## Notes
 - `export.py` lives in the project root, not in this folder

@@ -34,3 +34,6 @@ Appendices A-E                  — math, papers, config reference, code structu
 - All training stages: Chapter 19 ONLY (not split across files)
 - All math formulas: Appendix A ONLY
 - All config parameters: Appendix C ONLY
+
+## Pending Additions
+- **HuggingFace Integration chapter needed**: Cover `from_pretrained` workflow, `MuOmniForCausalLM` / `MuOmniMultimodalModel` classes, export format (flat keys vs prefixed keys), and testing with `test_hf_text.py` / `test_hf_multimodal.py`

@@ -6,7 +6,7 @@ All neural network modules for μOmni. Imported by training scripts, inference, 
 
 | File | Classes | Purpose |
 |------|---------|---------|
-| `thinker.py` | ThinkerLM, Block, Attention, MLP, MoE, SwiGLU, SpikingNeuron, LiquidTimeConstant | Core LLM — decoder-only transformer with RoPE, optional GQA/MoE/Arthemis |
+| `thinker.py` | ThinkerLM, Block, Attention, MLP, MoE, SwiGLU, SpikingNeuron, LiquidTimeConstant | Core LLM — decoder-only transformer with RoPE, optional GQA/MoE/Arthemis. `ThinkerLM.generate()` for autoregressive generation. MTP heads (`num_mtp_heads=2`) for multi-token prediction. `window_size` param in Attention/Block for sliding window attention. `rope_scaling_factor` in RoPE for context extension. |
 | `audio_encoder.py` | AudioEncoderTiny, ConvDown, EncoderBlock, AttentionPooling | Mel → 8x Conv downsample → Transformer encoder (CTC or CLAP mode) |
 | `vision_encoder.py` | ViTTiny, TransformerTextEncoder, AttentionPooling | ViT image encoder + CLIP text encoder for contrastive training |
 | `talker.py` | TalkerTiny | AR speech code predictor — predicts RVQ base+residual codes per frame |
@@ -14,6 +14,12 @@ All neural network modules for μOmni. Imported by training scripts, inference, 
 | `ocr_model.py` | OCRModel, OCRDecoder, OCRDecoderBlock | ViT encoder + cross-attention decoder for text extraction from images |
 | `tokenizer.py` | BPETokenizer | SentencePiece BPE wrapper (train_new, encode, decode) |
 | `utils.py` | RoPE, RMSNorm, EMA, LRFinder, LRSpike, ProjectionHead, LearnableTemperature, TextDataset, ASRDataset, TTSDataset, VocoderDataset, ImgCapDataset, MixDataset, OCRDataset | Shared utilities — positional encoding, normalization, training helpers, all streaming datasets, checkpoint management, collate functions |
+
+## Key Additions
+- **ThinkerLM.generate()**: Autoregressive text generation with temperature, top-k, top-p, repetition penalty support
+- **MTP Heads**: Multi-token prediction (`num_mtp_heads=2`) — predicts multiple future tokens simultaneously for faster training
+- **Sliding Window Attention**: `window_size` parameter in Attention and Block controls local attention window (None = full attention)
+- **RoPE Scaling**: `rope_scaling_factor` in RoPE enables context length extension via frequency scaling
 
 ## Performance Rules
 - **RoPE** (`utils.py`): `inv_freq` is a registered buffer; cos/sin tables cached lazily in `_build_cache()`. Never recompute per forward.

@@ -29,13 +29,20 @@ JSON configs that control all training hyperparameters. **These are the source o
 |-----------|-------------|----------------|
 | `use_amp` | Mixed precision (float16/bfloat16) | `true` always |
 | `use_compile` | torch.compile Inductor | `false` (broken on Blackwell GPUs) |
-| `use_gqa` / `kv_groups` | Grouped Query Attention | `true` / `3` (Thinker, Talker) |
+| `use_gqa` / `kv_groups` | Grouped Query Attention | `true` / `2` (Thinker, Talker) |
 | `use_swiglu` | SwiGLU activation in FFN | `true` |
 | `use_moe` | Mixture of Experts | `false` (optional) |
 | `use_spiking` / `use_ltc` | Arthemis neuromorphic extensions | `false` (experimental) |
+| `use_mtp` / `num_mtp_heads` | Multi-token prediction | `true` / `2` |
+| `window_size` | Sliding window attention size | `null` (full) or integer |
+| `rope_scaling_factor` | RoPE frequency scaling for context extension | `1.0` (default) |
+| `label_smoothing` | Label smoothing in cross-entropy loss | `0.1` |
 | `gradient_accumulation_steps` | Effective batch multiplier | 2-8 depending on stage |
 | `num_workers` | DataLoader parallelism | `2` |
 | `temperature` | CLIP contrastive temperature | `0.07` (vision only) |
+
+## FFN Dimension
+The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=128`, this gives `d_ff=344` (rounded to nearest even). This follows the SwiGLU convention from LLaMA.
 
 ## Common Gotchas
 - Audio encoder `dropout` should be `0.1` not `0.3` (kills learning)

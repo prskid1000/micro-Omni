@@ -43,7 +43,14 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav 
 python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr            # OCR
 python export.py --ckpt_dir checkpoints/ --output_dir exported/                            # Export
 python export/infer_standalone.py --model_dir exported/                                    # Standalone
+python export/test_hf_text.py                                                              # Test HF text model
+python export/test_hf_multimodal.py                                                        # Test HF multimodal model
 ```
+
+## HuggingFace Integration
+- Export produces HF-compatible format — `from_pretrained("exported/")` works out of the box
+- `MuOmniForCausalLM` for text-only, `MuOmniMultimodalModel` for full multimodal
+- `model.safetensors` uses HF flat keys; `model_full.safetensors` has all components prefixed
 
 ## Performance Rules (MUST follow)
 - `use_amp: true` always — halves VRAM, 2x throughput
@@ -80,8 +87,8 @@ python export/infer_standalone.py --model_dir exported/                         
 - Download scripts require `--combine` flag to produce production_* files
 
 ## Key Config Values (production, RTX 5070 Ti)
-- Thinker: d=384, layers=8, heads=6, ff=1536, ctx=256, vocab=32K, GQA kv_groups=3, batch=32, accum=2, label_smoothing=0.1
-- Audio Enc: d=384, layers=8, heads=6, downsample=8x (12.5Hz), dropout=0.1, wd=0.01, batch=16, accum=2
+- Thinker: d=128, layers=8, heads=6, d_ff=344 (8/3 x d_model), ctx=256, vocab=32K, use_gqa=true kv_groups=2, use_mtp=true num_mtp_heads=2, batch=32, accum=2, label_smoothing=0.1
+- Audio Enc: d=384, layers=8, heads=6, downsample=8x (audio 8x), dropout=0.1, wd=0.01, batch=16, accum=2
 - Vision: d=192, layers=8, heads=3, embed_dim=256, temperature=0.07, batch=32, accum=8
 - Talker: d=384, layers=8, heads=6, codebooks=2×128, GQA kv_groups=3, batch=16, accum=2
 - Vocoder: batch=2, accum=2, max_audio_percentile=50%, shuffle_buffer=1000
@@ -95,5 +102,7 @@ python test_vision.py --checkpoint checkpoints/vision_tiny
 python test_talker.py --checkpoint checkpoints/talker_tiny
 python test_vocoder.py --checkpoint checkpoints/vocoder_tiny
 python test_ocr.py --checkpoint checkpoints/ocr_tiny
+python export/test_hf_text.py                                    # HF text model test
+python export/test_hf_multimodal.py                              # HF multimodal model test
 ```
 All tests use `torch.inference_mode()` and `torch.set_float32_matmul_precision('high')`.

@@ -113,9 +113,11 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 |------|---------|
 | `infer_chat.py` | Interactive multimodal inference — text chat, image QA, audio transcription, TTS, OCR, video |
 | `export.py` | Merge all component checkpoints into HuggingFace-compatible safetensors |
-| `export/modeling_muomni.py` | HuggingFace `PreTrainedModel` wrapper — enables `from_pretrained()` |
+| `export/modeling_muomni.py` | HuggingFace `PreTrainedModel` (`MuOmniForCausalLM` + `MuOmniMultimodalModel`) |
 | `export/infer_standalone.py` | Inference from merged safetensors (no separate checkpoints needed) |
 | `export/test_safetensor.py` | Validate exported safetensors file |
+| `export/test_hf_text.py` | Scored test for HF text model |
+| `export/test_hf_multimodal.py` | Scored test for HF multimodal model |
 
 ### Test Scripts
 
@@ -127,6 +129,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 | `test_talker.py` | Talker + RVQ | Reconstruction quality |
 | `test_vocoder.py` | HiFi-GAN vocoder | Mel loss, audio quality |
 | `test_ocr.py` | OCR model | Character accuracy, edit distance |
+| `test_sft.py` | Multimodal SFT | Val loss, generation quality |
 
 ### Utility Scripts (`scripts/`)
 
@@ -271,6 +274,13 @@ print(tok.decode(out[0].tolist()))
 # Output: "The red cat sits in the park."
 ```
 
+### Full multimodal inference
+```python
+from modeling_muomni import MuOmniMultimodalModel
+model = MuOmniMultimodalModel.from_pretrained_safetensors("./export")
+out = model(input_ids=text_ids, pixel_values=image, mel_spectrogram=audio)
+```
+
 ### Upload to HuggingFace Hub (optional)
 ```bash
 huggingface-cli login
@@ -293,6 +303,10 @@ Get-ChildItem -Filter 'test_*.py' -Recurse | ForEach-Object { python $_.FullName
 
 # Export validation
 python export/test_safetensor.py
+
+# HF model tests
+python export/test_hf_text.py           # HF text model scored test
+python export/test_hf_multimodal.py     # HF multimodal scored test
 ```
 
 Flags: `--device cpu` (no GPU), `--num_samples N` (limit test size), `--config path/to/config.json`
