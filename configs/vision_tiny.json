@@ -12,7 +12,7 @@
   "d_model": 128,
   "n_layers": 4,
   "n_heads": 4,
-  "d_ff": 512,
+  "d_ff": 344,
   "embed_dim": 128,
   "dropout": 0.1,
 
@@ -29,7 +29,7 @@
     "n_layers": 4,
     "d_model": 128,
     "n_heads": 4,
-    "d_ff": 512,
+    "d_ff": 344,
     "dropout": 0.05,
     "rope_theta": 10000,
     "use_gqa": false,
