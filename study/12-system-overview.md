@@ -248,6 +248,12 @@ User sends: image.jpg + "What is this?"
 
 4. **Separate OCR model**: Rather than routing OCR through the Thinker, a dedicated encoder-decoder model handles OCR. This gives better accuracy for text extraction because it uses all patch features with cross-attention.
 
+5. **Sliding Window Attention (SWA)**: Even-numbered Thinker layers use sliding window attention (attending only to the last `window_size` tokens), while odd-numbered layers use full attention. This reduces memory from O(T^2) to O(T*W) on half the layers while preserving long-range reasoning on the other half. Controlled via `window_size` in config (0 = disabled).
+
+6. **YaRN RoPE Extension**: The RoPE module supports `scaling_factor` for extending context length beyond training length using NTK-by-parts interpolation with mscale correction. This allows the model to generalize to longer sequences at inference time without retraining.
+
+7. **Multi-Token Prediction (MTP)**: The Thinker includes 2 auxiliary prediction heads that predict tokens t+2 and t+3 in addition to the main next-token (t+1) prediction. Enabled via `use_mtp: true`. During training, the MTP loss is averaged with the main LM loss, providing richer gradient signal and improving sample efficiency.
+
 ---
 
 *Next: Chapter 13 dives deep into the Thinker -- the "brain" that makes sense of all these modalities.*

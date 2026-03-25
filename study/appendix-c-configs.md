@@ -28,6 +28,8 @@ micro-Omni training scripts.
 | `kv_groups`    | int   | 4       | Number of KV head groups (when GQA on)    |
 | `use_flash`    | bool  | true    | Use FlashAttention when available         |
 | `rope_base`    | float | 10000   | RoPE base frequency                       |
+| `window_size`  | int   | 0       | Sliding window attention size (0=disabled, >0=even layers use SWA) |
+| `scaling_factor`| float | 1.0    | YaRN RoPE scaling factor for context extension (1.0=off) |
 
 ---
 
@@ -39,6 +41,7 @@ micro-Omni training scripts.
 | `use_moe`      | bool  | false   | Enable Mixture of Experts in FFN          |
 | `moe_experts`  | int   | 4       | Number of experts (when MoE on)           |
 | `moe_top_k`    | int   | 2       | Number of active experts per token        |
+| `use_mtp`      | bool  | false   | Enable Multi-Token Prediction (2 aux heads for t+2, t+3) |
 
 ---
 

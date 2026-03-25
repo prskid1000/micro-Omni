@@ -10,19 +10,21 @@ Text  ──→ Token Embeddings ───────────┤
                                        └──→ Talker ──→ RVQ ──→ Vocoder ──→ Speech
 ```
 
-> **~13.9M parameters** | **16GB VRAM** (RTX 5070 Ti) | Reference learning repo — compact and readable
+> **~13.9M parameters** (synthetic config) | **16GB VRAM** (RTX 5070 Ti) | Reference learning repo — compact and readable | Production configs available in `.bak` files
 
 ## Benchmark Results (Synthetic Data, 2000 samples)
 
 | Component | Metric | Score | Rating |
 |-----------|--------|-------|--------|
-| **Thinker** (LLM) | Perplexity | 2.34 | EXCELLENT |
-| | Next-token patterns | ~90%+ | Learns counting, arithmetic, grammar |
+| **Thinker** (LLM) | Top-1 Accuracy | 65.25% | GOOD |
+| | Top-5 Accuracy | 92.61% | EXCELLENT |
+| | Top-10 Accuracy | 97.80% | EXCELLENT |
+| | Perplexity | 2.70 | EXCELLENT |
 | **Audio Encoder** (ASR) | Beam CER | **0.0%** | PERFECT |
 | | Beam WER | **0.0%** | PERFECT |
 | **Vision Encoder** (CLIP) | Embedding Diversity | 0.88 | EXCELLENT |
 | **Talker** (TTS) | Top-5 Accuracy | **90.0%** | EXCELLENT |
-| **SFT** (Multimodal) | Val Loss | 0.220 | GOOD |
+| **SFT** (Multimodal) | Val Loss | 1.08 | GOOD |
 
 **Training time** (RTX 5070 Ti Laptop GPU, synthetic 2000 samples):
 | Stage | Clean Run | Epochs |
@@ -72,7 +74,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 
 | File | Component | Params | Purpose |
 |------|-----------|--------|---------|
-| `thinker.py` | ThinkerLM | ~20.3M | Decoder-only LLM — processes all modalities, generates text. Includes Block, Attention (RoPE, GQA), MLP (SwiGLU), MoE, Arthemis extensions |
+| `thinker.py` | ThinkerLM | ~13.9M* | Decoder-only LLM — processes all modalities, generates text. Includes Block, Attention (RoPE, GQA, Sliding Window), MLP (SwiGLU), MoE, MTP, YaRN RoPE, Arthemis extensions. *13.9M for synthetic config; production configs in `.bak` files |
 | `audio_encoder.py` | AudioEncoderTiny | ~2.0M | Mel spectrogram → transformer encoder. CTC mode (ASR) or contrastive mode (CLAP) |
 | `vision_encoder.py` | ViTTiny | ~914K | Image patches → transformer encoder → CLS token. Also contains TransformerTextEncoder for CLIP training |
 | `talker.py` | TalkerTiny | ~2.2M | Autoregressive speech code predictor — predicts RVQ codebook indices frame by frame |
@@ -150,6 +152,10 @@ Key settings across all configs:
 | `use_gqa` | `true` | Grouped Query Attention — faster KV cache |
 | `use_swiglu` | `true` | SwiGLU activation — better quality than GELU |
 | `use_moe` | `false` | Mixture of Experts — more capacity, same compute |
+| `use_mtp` | `false` | Multi-Token Prediction — predict t+2, t+3 during training |
+| `window_size` | `128` | Sliding Window Attention — O(n*w) for alternating layers |
+| `rope_scaling_factor` | `1.0` | YaRN RoPE — context extension beyond training length |
+| `label_smoothing` | `0.1` | Label smoothing across all training for better calibration |
 | `use_spiking` | `false` | Arthemis spiking attention (experimental) |
 | `use_ltc` | `false` | Arthemis liquid time constants (experimental) |
 
@@ -184,6 +190,9 @@ Data formats:
 ## Performance Optimizations
 
 ### Model-Level
+- **Multi-Token Prediction (MTP)** — predict t+2, t+3 during training for richer gradients
+- **Sliding Window Attention** — O(n*w) complexity for alternating layers, enabling longer sequences
+- **YaRN RoPE** — context extension beyond training length via rope_scaling_factor
 - Cached RoPE cos/sin tables (not recomputed every forward pass)
 - Pre-allocated causal masks (sliced, not recreated)
 - Zero-copy GQA expansion (expand+reshape instead of repeat_interleave)
@@ -203,6 +212,7 @@ Data formats:
 - Streaming IterableDataset (90%+ RAM reduction)
 
 ### Generation-Level
+- **ThinkerLM.generate()** with temperature, top-k, top-p (nucleus), and repetition penalty
 - Repetition penalty for preventing degenerate loops and improving output quality
 - Top-k / top-p (nucleus) sampling for controlled diversity during text generation
 

@@ -21,6 +21,7 @@ for your specific issue.
 | Loss spikes during SFT | Modality transitions in batch | Normal — LR spike mechanism handles it |
 | Training hangs on Windows | DataLoader multiprocessing | Add `if __name__ == '__main__':` guard |
 | File not found on Windows | Backslash paths | Use forward slashes in all configs |
+| Beam search CTC duplicates | Duplicate chars in output | Fixed in beam search decoder -- was a known bug |
 
 ---
 

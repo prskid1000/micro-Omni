@@ -33,6 +33,9 @@ This dual-input design is what makes the system multimodal. The Thinker does not
 | `kv_groups` | 3 | 3 KV groups shared across 6 query heads |
 | `use_swiglu` | true | SwiGLU activation in FFN |
 | `use_moe` | false | Mixture of Experts (optional, off by default) |
+| `use_mtp` | false | Multi-Token Prediction (2 auxiliary heads) |
+| `window_size` | 0 | Sliding window attention size (0 = disabled) |
+| `scaling_factor` | 1.0 | YaRN RoPE scaling factor (1.0 = no extension) |
 
 **Parameters**: ~20.32M
 
@@ -223,6 +226,46 @@ Two experimental features inspired by neuromorphic computing:
 
 Both are disabled by default (`use_spiking=false`, `use_ltc=false`).
 
+### Multi-Token Prediction (MTP)
+
+When `use_mtp=true`, the Thinker adds 2 auxiliary linear heads alongside the main `lm_head`. These predict tokens at positions t+2 and t+3, in addition to the standard next-token (t+1) prediction from `lm_head`.
+
+```
+Hidden state x (B, T, 384)
+    |
+    +---> lm_head     -> logits for t+1  (standard)
+    +---> mtp_head_0  -> logits for t+2  (auxiliary)
+    +---> mtp_head_1  -> logits for t+3  (auxiliary)
+```
+
+During training (`train_text.py`), the MTP loss is averaged with the main loss, providing richer gradient signal per training example. At inference, only the main `lm_head` is used -- MTP heads are training-only.
+
+Think of it like a weather forecaster who is asked to predict not just tomorrow's weather, but also the day after and the day after that. Predicting further ahead forces the model to build deeper internal representations of the underlying patterns, even though at deployment you only need the one-day forecast.
+
+### Sliding Window Attention (SWA)
+
+When `window_size > 0`, even-numbered layers (0, 2, 4, 6) use sliding window attention where each token only attends to the most recent `window_size` tokens. Odd-numbered layers (1, 3, 5, 7) continue to use full causal attention.
+
+```
+Layer 0 (SWA):  token at position 100 attends to positions [100-W+1, 100]
+Layer 1 (full): token at position 100 attends to positions [0, 100]
+Layer 2 (SWA):  sliding window again
+Layer 3 (full): full attention again
+...
+```
+
+This alternating pattern gives the best of both worlds: SWA layers handle local patterns efficiently (O(T*W) instead of O(T^2)), while full attention layers maintain long-range dependencies. This is the same strategy used by Mistral and other production models.
+
+### YaRN RoPE Extension
+
+The RoPE module (in `omni/utils.py`) supports a `scaling_factor` parameter for extending the effective context length beyond what was used during training. When `scaling_factor > 1.0`, it uses NTK-by-parts interpolation:
+
+- High-frequency components (local patterns) are left unmodified
+- Low-frequency components (long-range dependencies) are interpolated
+- An `mscale` correction factor (`0.1 * log(scaling_factor) + 1.0`) is applied to Q and K to maintain attention magnitude
+
+For example, with `scaling_factor=4.0`, a model trained on 256-token context can generalize to ~1024 tokens at inference time without retraining.
+
 ---
 
 ## Performance Optimizations
@@ -322,7 +365,7 @@ prompt tokens ──→ forward pass ──→ logits (32000)
 
 - **Source**: `omni/thinker.py`
 - **Config**: `configs/thinker_tiny.json`
-- **Classes**: `ThinkerLM`, `Block`, `Attention`, `MLP`, `MoE`, `SwiGLU`, `SpikingNeuron`, `LiquidTimeConstant`
+- **Classes**: `ThinkerLM`, `Block`, `Attention`, `MLP`, `MoE`, `SwiGLU`, `SpikingNeuron`, `LiquidTimeConstant`, `RoPE` (in utils.py)
 - **Parameters**: ~20.32M
 
 ---

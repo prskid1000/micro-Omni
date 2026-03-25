@@ -82,11 +82,13 @@ max_steps         = 100000
 use_amp           = True
 ```
 
-**Loss function:** Next-token cross-entropy (standard autoregressive LM loss).
+**Loss function:** Next-token cross-entropy with optional label smoothing (`label_smoothing` config parameter, default 0.1) and optional Multi-Token Prediction.
 
 ```
 Loss = -1/T * sum( log P(token_t | token_1..t-1) )
 ```
+
+When `use_mtp: true`, two auxiliary heads predict t+2 and t+3 tokens. The MTP loss is averaged with the main next-token loss, providing richer gradient signal per training example. Label smoothing is applied to all cross-entropy losses (see Chapter 20 for details).
 
 **What "good" loss looks like:**
 
@@ -445,6 +447,37 @@ Day 3:  Start Stage E (needs all)
 
 On a single 16GB GPU, expect about 3 days total. With parallel execution of
 A/B/C on separate GPUs, you can finish in under 2 days.
+
+---
+
+## 19.11 Label Smoothing Across Stages
+
+Label smoothing is supported in all training scripts that use cross-entropy loss, controlled by the `label_smoothing` config parameter (default 0.1):
+
+| Stage | Script | Label Smoothing |
+|-------|--------|----------------|
+| A (Thinker) | `train_text.py` | Yes |
+| B (Audio) | CTC loss | N/A (CTC has its own alignment mechanism) |
+| C (Vision) | `train_vision.py` | Yes (applied to InfoNCE) |
+| D (Talker) | `train_talker.py` | No |
+| E (SFT) | `sft_omni.py` | Yes |
+| OCR | `train_ocr.py` | Yes |
+
+See Chapter 20, Section 20.12 for a detailed explanation of how label smoothing works.
+
+---
+
+## 19.12 Deterministic Synthetic Data
+
+For reproducible experiments and testing, use the deterministic data generation script:
+
+```bash
+python scripts/make_deterministic_data.py
+```
+
+This generates synthetic training data with fixed random seeds, ensuring identical data across runs. Useful for debugging training pipelines and verifying that code changes do not affect model behavior.
+
+**Note:** Synthetic configs use smaller model dimensions (d=128, 4 layers) rather than the full production sizes (d=384, 8 layers). Production configs are backed up as `.bak` files.
 
 **Next:** Chapter 20 covers the optimization techniques that make all of this
 fit in 16GB of VRAM.

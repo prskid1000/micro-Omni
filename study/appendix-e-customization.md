@@ -233,8 +233,29 @@ components to prevent catastrophic forgetting.
 | MoE               | Implemented | thinker.py          |
 | SwiGLU            | Implemented | thinker.py, utils.py|
 | RoPE              | Implemented | utils.py            |
+| YaRN RoPE scaling | Implemented | utils.py            |
 | FlashAttention    | Implemented | thinker.py          |
+| Sliding Window Attn| Implemented | thinker.py         |
+| Multi-Token Pred  | Implemented | thinker.py          |
 | Export/Deploy     | Implemented | export.py           |
+
+---
+
+## Research Findings: Qwen3.5 Architecture Analysis
+
+Analysis of the Qwen3.5 family reveals several architectural patterns relevant to scaling micro-Omni:
+
+| Feature | Qwen3.5 Approach | micro-Omni Status |
+|---------|------------------|-------------------|
+| **GQA ratios** | Aggressive KV sharing (e.g., 32 query heads / 8 KV groups) | Implemented (configurable `kv_groups`) |
+| **Talker-Thinker connection** | Thinker hidden states directly condition the Talker | Implemented (Stage D) |
+| **Audio frame rate** | 12.5Hz (same as our target_hz) | Implemented (8x downsample from 100Hz) |
+| **Gated DeltaNet** | Linear attention variant for efficient long-context | Not implemented (future extension) |
+
+Key takeaways for scaling:
+- **GQA is essential** at Base size and above. Qwen3.5 uses 4:1 query-to-KV ratios.
+- **12.5Hz audio** is validated as the sweet spot for speech -- matches our existing design.
+- **Gated DeltaNet** is a promising alternative to standard attention for very long contexts, offering O(T) complexity instead of O(T^2). Could replace sliding window attention on even layers.
 
 ---
 
