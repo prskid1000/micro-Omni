@@ -95,7 +95,9 @@ def main(cfg):
         num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
         use_spiking=cfg.get("use_spiking", False),
         use_ltc=cfg.get("use_ltc", False),
-        compile_model=use_compile
+        compile_model=use_compile,
+        window_size=cfg.get("window_size", 0),
+        rope_scaling_factor=cfg.get("rope_scaling_factor", 1.0)
     ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
     
@@ -313,15 +315,42 @@ def main(cfg):
             x,y = x.to(device), y.to(device)
             
             # Forward pass with mixed precision
+            use_mtp = cfg.get("use_mtp", False)
             try:
                 if use_amp:
                     with autocast(device_type='cuda'):
-                        logits = model(x)  # (B,T,V)
+                        if use_mtp:
+                            logits, mtp_logits_list = model(x, return_mtp=True)  # (B,T,V)
+                        else:
+                            logits = model(x)  # (B,T,V)
                         loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+                        # MTP auxiliary loss (predict t+2, t+3)
+                        if use_mtp and isinstance(logits, torch.Tensor):
+                            mtp_loss = 0.0
+                            for k, mtp_logits in enumerate(mtp_logits_list):
+                                shift = k + 2
+                                if y.shape[1] > shift:
+                                    mtp_target = y[:, shift:]
+                                    mtp_pred = mtp_logits[:, :-shift, :]
+                                    mtp_loss += loss_fn(mtp_pred.reshape(-1, mtp_pred.size(-1)), mtp_target.reshape(-1))
+                            loss = loss + 0.3 * mtp_loss / max(len(mtp_logits_list), 1)
                 else:
-                    logits = model(x)  # (B,T,V)
+                    if use_mtp:
+                        logits, mtp_logits_list = model(x, return_mtp=True)  # (B,T,V)
+                    else:
+                        logits = model(x)  # (B,T,V)
                     loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
-                
+                    # MTP auxiliary loss (predict t+2, t+3)
+                    if use_mtp:
+                        mtp_loss = 0.0
+                        for k, mtp_logits in enumerate(mtp_logits_list):
+                            shift = k + 2
+                            if y.shape[1] > shift:
+                                mtp_target = y[:, shift:]
+                                mtp_pred = mtp_logits[:, :-shift, :]
+                                mtp_loss += loss_fn(mtp_pred.reshape(-1, mtp_pred.size(-1)), mtp_target.reshape(-1))
+                        loss = loss + 0.3 * mtp_loss / max(len(mtp_logits_list), 1)
+
                 # Free logits after loss computation (loss keeps its own graph)
                 del logits
             except (RuntimeError, Exception) as e:

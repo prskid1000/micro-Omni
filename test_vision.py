@@ -151,7 +151,8 @@ def load_model_and_head(checkpoint_dir, device="cuda", config_path=None):
                 num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2),
                 compile_model=False,
                 use_spiking=thinker_cfg.get("use_spiking", False),
-                use_ltc=thinker_cfg.get("use_ltc", False)
+                use_ltc=thinker_cfg.get("use_ltc", False),
+                window_size=thinker_cfg.get("window_size", 0)
             ).to(device)
             
             # Load Thinker weights

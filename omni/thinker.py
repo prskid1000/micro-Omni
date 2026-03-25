@@ -124,12 +124,12 @@ class MLP(nn.Module):
                 return self.fc2(self.act(self.fc1(x)))
 
 class Attention(nn.Module):
-    def __init__(self, d: int, heads: int, rope_theta: float = 10000.0, dropout: float = 0.0, 
+    def __init__(self, d: int, heads: int, rope_theta: float = 10000.0, dropout: float = 0.0,
                  use_gqa: bool = False, kv_groups: Optional[int] = None, use_flash: bool = True,
-                 use_spiking: bool = False) -> None:
+                 use_spiking: bool = False, window_size: int = 0, rope_scaling_factor: float = 1.0) -> None:
         """
         Attention with optional GQA (Grouped Query Attention) and Flash Attention.
-        
+
         Args:
             d: model dimension
             heads: number of query heads
@@ -139,6 +139,8 @@ class Attention(nn.Module):
             kv_groups: number of key/value groups (if None and use_gqa=True, uses heads//2)
             use_flash: whether to use Flash Attention (PyTorch 2.0+ scaled_dot_product_attention)
             use_spiking: whether to use SpikingAttention (Arthemis)
+            window_size: sliding window size (0 = full attention, >0 = attend only to last window_size tokens)
+            rope_scaling_factor: YaRN scaling factor (1.0 = disabled, >1.0 = extend context)
         """
         super().__init__()
         self.h = heads  # query heads
@@ -147,16 +149,17 @@ class Attention(nn.Module):
         self.use_gqa = use_gqa
         self.use_flash = use_flash and HAS_FLASH_ATTENTION
         self.use_spiking = use_spiking
-        
+        self.window_size = window_size
+
         if use_flash and not HAS_FLASH_ATTENTION:
             warnings.warn("Flash Attention requested but not available. Falling back to standard attention.")
             self.use_flash = False
-        
+
         if use_spiking:
             self.spike_q = SpikingNeuron(self.dk * heads)
             self.spike_k = SpikingNeuron(self.dk * heads)
             self.spike_v = SpikingNeuron(self.dk * heads)
-        
+
         if use_gqa:
             # GQA: multiple query heads share key/value heads
             self.kv_groups = kv_groups if kv_groups is not None else max(1, heads // 2)
@@ -164,12 +167,12 @@ class Attention(nn.Module):
             self.k = nn.Linear(d, self.kv_groups * self.dk, bias=False)
             self.v = nn.Linear(d, self.kv_groups * self.dk, bias=False)
             # RoPE for queries and keys (both use dk)
-            self.rope_q = RoPE(self.dk, theta=rope_theta)
-            self.rope_k = RoPE(self.dk, theta=rope_theta)
+            self.rope_q = RoPE(self.dk, theta=rope_theta, scaling_factor=rope_scaling_factor)
+            self.rope_k = RoPE(self.dk, theta=rope_theta, scaling_factor=rope_scaling_factor)
         else:
             # Standard MHA
             self.qkv = nn.Linear(d, 3*d, bias=False)
-            self.rope = RoPE(self.dk, theta=rope_theta)
+            self.rope = RoPE(self.dk, theta=rope_theta, scaling_factor=rope_scaling_factor)
         
         self.o = nn.Linear(d, d, bias=False)
         self.drop = nn.Dropout(dropout)
@@ -382,6 +385,21 @@ class Attention(nn.Module):
                             col_pad = torch.ones(mask.shape[0], mask.shape[1], mask.shape[2], pad_cols, device=mask.device)
                             mask = torch.cat([col_pad, mask], dim=3)
         
+        # Apply sliding window mask if configured
+        if self.window_size > 0 and mask is not None:
+            T_q = q.shape[2]
+            T_kv = k.shape[2]
+            # Build banded mask: each query at position i attends to keys in [i - window_size + 1, i]
+            kv_pos = torch.arange(T_kv, device=q.device)
+            q_pos = torch.arange(T_kv - T_q, T_kv, device=q.device)  # align query positions to end of kv range
+            # window_mask[i, j] = True if key j is within window of query i
+            window_mask = (kv_pos.unsqueeze(0) >= (q_pos.unsqueeze(1) - self.window_size + 1))
+            window_mask = window_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, T_q, T_kv)
+            if mask.dtype == torch.bool:
+                mask = mask & window_mask
+            else:
+                mask = mask * window_mask.to(mask.dtype)
+
         # Compute attention using Flash Attention or manual implementation
         if self.use_flash:
             y = self._compute_attention_flash(q, k, v, mask)
@@ -447,13 +465,14 @@ class MoE(nn.Module):
         return output.view(B, T, D)
 
 class Block(nn.Module):
-    def __init__(self, d: int, heads: int, ff: int, rope_theta: float, dropout: float, 
-                 use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False, 
+    def __init__(self, d: int, heads: int, ff: int, rope_theta: float, dropout: float,
+                 use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False,
                  num_experts: int = 8, num_experts_per_tok: int = 2, use_flash: bool = True,
-                 use_spiking: bool = False, use_ltc: bool = False) -> None:
+                 use_spiking: bool = False, use_ltc: bool = False, window_size: int = 0,
+                 rope_scaling_factor: float = 1.0) -> None:
         super().__init__()
         self.norm1 = RMSNorm(d)
-        self.attn = Attention(d, heads, rope_theta=rope_theta, dropout=dropout, use_gqa=use_gqa, use_flash=use_flash, use_spiking=use_spiking)
+        self.attn = Attention(d, heads, rope_theta=rope_theta, dropout=dropout, use_gqa=use_gqa, use_flash=use_flash, use_spiking=use_spiking, window_size=window_size, rope_scaling_factor=rope_scaling_factor)
         self.norm2 = RMSNorm(d)
         self.use_moe = use_moe
         if use_moe:
@@ -487,15 +506,16 @@ class Block(nn.Module):
         return x, cache
 
 class ThinkerLM(nn.Module):
-    def __init__(self, vocab: int, n_layers: int = 16, d: int = 512, heads: int = 8, ff: int = 2048, 
-                 dropout: float = 0.1, rope_theta: float = 10000, ctx: int = 1024, 
-                 use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False, 
+    def __init__(self, vocab: int, n_layers: int = 16, d: int = 512, heads: int = 8, ff: int = 2048,
+                 dropout: float = 0.1, rope_theta: float = 10000, ctx: int = 1024,
+                 use_gqa: bool = False, use_swiglu: bool = True, use_moe: bool = False,
                  num_experts: int = 8, num_experts_per_tok: int = 2, use_flash: bool = True,
                  use_spiking: bool = False, use_ltc: bool = False,
-                 compile_model: bool = False) -> None:
+                 compile_model: bool = False, window_size: int = 0,
+                 rope_scaling_factor: float = 1.0) -> None:
         """
         ThinkerLM with optional Qwen3 Omni features and performance optimizations.
-        
+
         Args:
             vocab: vocabulary size
             n_layers: number of transformer layers
@@ -514,23 +534,32 @@ class ThinkerLM(nn.Module):
             use_spiking: use SpikingAttention (Arthemis) (default: False)
             use_ltc: use Liquid Time Constants in MLP (Arthemis) (default: False)
             compile_model: use torch.compile() for 30-50% speedup (default: False, requires PyTorch 2.0+)
+            window_size: sliding window attention size (0 = disabled, >0 = even layers use SWA, odd layers use full attention)
+            rope_scaling_factor: YaRN RoPE scaling factor (1.0 = disabled, >1.0 = extend context via NTK-by-parts)
         """
         super().__init__()
-        
+
         # Structural check
         if d % heads != 0:
             raise ValueError(f"Model dimension d ({d}) must be divisible by number of heads ({heads}).")
-            
+
         self.tok_emb = nn.Embedding(vocab, d)
         self.pos_cache = None
         self.blocks = nn.ModuleList([
             Block(d, heads, ff, rope_theta, dropout, use_gqa=use_gqa, use_swiglu=use_swiglu,
                   use_moe=use_moe, num_experts=num_experts, num_experts_per_tok=num_experts_per_tok,
-                  use_flash=use_flash, use_spiking=use_spiking, use_ltc=use_ltc) 
-            for _ in range(n_layers)
+                  use_flash=use_flash, use_spiking=use_spiking, use_ltc=use_ltc,
+                  window_size=window_size if (i % 2 == 0 and window_size > 0) else 0,
+                  rope_scaling_factor=rope_scaling_factor)
+            for i in range(n_layers)
         ])
         self.norm = RMSNorm(d)
         self.lm_head = nn.Linear(d, vocab, bias=False)
+
+        # Multi-Token Prediction (MTP) auxiliary heads
+        self.num_mtp_heads = 2  # predict t+2 and t+3 in addition to t+1
+        self.mtp_heads = nn.ModuleList([nn.Linear(d, vocab, bias=False) for _ in range(self.num_mtp_heads)])
+
         self.ctx = ctx
 
         # Pre-allocated causal mask (sliced at runtime — no allocation per forward)
@@ -606,9 +635,9 @@ class ThinkerLM(nn.Module):
         
         return has_nan, has_inf, nan_count, inf_count
 
-    def forward(self, idx: Optional[torch.Tensor] = None, embeddings: Optional[torch.Tensor] = None, 
+    def forward(self, idx: Optional[torch.Tensor] = None, embeddings: Optional[torch.Tensor] = None,
                 attn_mask: Optional[torch.Tensor] = None, pos: Optional[torch.Tensor] = None,
-                return_embeddings: bool = False) -> torch.Tensor:
+                return_embeddings: bool = False, return_mtp: bool = False) -> torch.Tensor:
         """
         Forward pass supporting both token IDs and raw embeddings for multimodal input.
         
@@ -685,12 +714,16 @@ class ThinkerLM(nn.Module):
             return x
 
         logits = self.lm_head(x)
-        
+
         # Check for numerical stability (NaN/Inf detection)
         if torch.isnan(logits).any() or torch.isinf(logits).any():
             nan_count = torch.isnan(logits).sum().item()
             inf_count = torch.isinf(logits).sum().item()
             raise RuntimeError(f"Numerical instability in ThinkerLM forward pass: NaN={nan_count}, Inf={inf_count}")
+
+        if return_mtp and self.training:
+            mtp_logits = [head(x) for head in self.mtp_heads]
+            return logits, mtp_logits
 
         return logits
 

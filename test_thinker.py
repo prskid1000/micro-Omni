@@ -70,7 +70,8 @@ def load_model_and_tokenizer(checkpoint_dir, device="cuda"):
         num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
         compile_model=False,
         use_spiking=cfg.get("use_spiking", False),
-        use_ltc=cfg.get("use_ltc", False)
+        use_ltc=cfg.get("use_ltc", False),
+        window_size=cfg.get("window_size", 0)
     ).to(device)
     
     # Load weights

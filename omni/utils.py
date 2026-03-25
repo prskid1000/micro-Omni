@@ -88,15 +88,36 @@ class RoPE(nn.Module):
     TM-RoPE-lite for multimodal: we simply continue positions
     across modalities and allow 2D factorization for vision/audio if desired (kept simple here).
     """
-    def __init__(self, d_head: int, theta: float = 10000.0) -> None:
+    def __init__(self, d_head: int, theta: float = 10000.0, scaling_factor: float = 1.0,
+                 yarn_beta_fast: float = 32.0, yarn_beta_slow: float = 1.0) -> None:
         super().__init__()
         # RoPE requires even dimension for pairing
         if d_head % 2 != 0:
             raise ValueError(f"RoPE requires even head dimension, got {d_head}")
         self.d = d_head
         self.theta = theta
+        self.scaling_factor = scaling_factor
         # Pre-compute inverse frequencies (constant)
-        inv_freq = 1.0 / (theta ** (torch.arange(0, d_head, 2).float() / d_head))
+        if scaling_factor > 1.0:
+            # YaRN: NTK-by-parts interpolation — scale lower frequencies more than higher ones
+            freq = 1.0 / (theta ** (torch.arange(0, d_head, 2).float() / d_head))
+            # Find wavelengths
+            wavelengths = 2 * math.pi / freq
+            # Ramp function: linear interpolation between low and high frequency behavior
+            low = max(math.floor(yarn_beta_fast * d_head / (2 * math.pi * yarn_beta_slow)), 1)
+            high = min(math.ceil(yarn_beta_slow * d_head / (2 * math.pi * yarn_beta_fast)), d_head // 2 - 1)
+            # Create ramp: 0 for low freq (interpolate), 1 for high freq (keep original)
+            dims = torch.arange(0, d_head // 2).float()
+            ramp = (dims - low) / max(high - low, 1)
+            ramp = ramp.clamp(0, 1)
+            # Interpolated inv_freq
+            inv_freq_interpolated = freq / scaling_factor
+            inv_freq = inv_freq_interpolated * (1 - ramp) + freq * ramp
+            # Attention temperature compensation
+            self.mscale = 0.1 * math.log(scaling_factor) + 1.0
+        else:
+            inv_freq = 1.0 / (theta ** (torch.arange(0, d_head, 2).float() / d_head))
+            self.mscale = 1.0
         self.register_buffer("inv_freq", inv_freq)
         # Cache for cos/sin tables
         self._cos_cache: Optional[torch.Tensor] = None
@@ -132,6 +153,9 @@ class RoPE(nn.Module):
         sin = self._sin_cache[:, :, :T, :]
         q1 = (q * cos) + (rotate_half(q) * sin)
         k1 = (k * cos) + (rotate_half(k) * sin)
+        if self.mscale != 1.0:
+            q1 = q1 * self.mscale
+            k1 = k1 * self.mscale
         return q1, k1
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:

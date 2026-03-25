@@ -82,7 +82,8 @@ def main(cfg):
         num_experts_per_tok=thinker_cfg.get("num_experts_per_tok", 2),
         use_spiking=thinker_cfg.get("use_spiking", False),
         use_ltc=thinker_cfg.get("use_ltc", False),
-        compile_model=use_compile
+        compile_model=use_compile,
+        window_size=thinker_cfg.get("window_size", 0)
     ).to(device)
     thinker_ckpt = cfg.get("thinker_ckpt", "checkpoints/thinker_tiny")
     if os.path.exists(os.path.join(thinker_ckpt, "thinker.pt")):

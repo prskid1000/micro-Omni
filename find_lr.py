@@ -276,7 +276,8 @@ def setup_text_model(cfg, device):
         use_moe=cfg.get("use_moe", False),
         num_experts=cfg.get("num_experts", 8),
         num_experts_per_tok=cfg.get("num_experts_per_tok", 2),
-        compile_model=False
+        compile_model=False,
+        window_size=cfg.get("window_size", 0)
     ).to(device)
     
     # Dataset
