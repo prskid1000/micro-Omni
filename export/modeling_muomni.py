@@ -159,9 +159,12 @@ class Attention(nn.Module):
             q, k, v = [rearrange(t, "b t (h d) -> b h t d", h=self.h) for t in qkv]
             q, k = self.rope(q, k, T)
 
-        y = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=mask, is_causal=(mask is None)
-        )
+        if mask is not None:
+            # Convert float mask to bool for SDPA compatibility
+            attn_mask = mask.bool() if mask.dtype != torch.bool else mask
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        else:
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
         y = rearrange(y, "b h t d -> b t (h d)")
         return self.o(y)
 
@@ -245,9 +248,9 @@ class MuOmniForCausalLM(PreTrainedModel, GenerationMixin):
         x = self.tok_emb(input_ids)
         T = x.shape[1]
 
-        mask = self._causal_mask[:, :, :T, :T]
+        mask = self._causal_mask[:, :, :T, :T].to(dtype=x.dtype)
         if attention_mask is not None:
-            pad_mask = attention_mask.unsqueeze(1).unsqueeze(2).float()
+            pad_mask = attention_mask.unsqueeze(1).unsqueeze(2).to(dtype=x.dtype)
             mask = mask * pad_mask
 
         for blk in self.blocks:
@@ -443,6 +446,7 @@ class AudioEncoder(nn.Module):
             )
         else:
             self.down = AudioConvDown(1, mid=64)
+        # Conv output: 64 channels * (mel_bins / freq_downsample)
         freq_ds = downsample_factor
         self.proj = nn.Linear(64 * (mel_bins // freq_ds), d)
         self.blocks = nn.ModuleList([AudioEncoderBlock(d, heads, ff) for _ in range(layers)])
