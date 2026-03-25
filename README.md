@@ -112,7 +112,8 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 | File | Purpose |
 |------|---------|
 | `infer_chat.py` | Interactive multimodal inference — text chat, image QA, audio transcription, TTS, OCR, video |
-| `export.py` | Merge all component checkpoints into a single `model.safetensors` file |
+| `export.py` | Merge all component checkpoints into HuggingFace-compatible safetensors |
+| `export/modeling_muomni.py` | HuggingFace `PreTrainedModel` wrapper — enables `from_pretrained()` |
 | `export/infer_standalone.py` | Inference from merged safetensors (no separate checkpoints needed) |
 | `export/test_safetensor.py` | Validate exported safetensors file |
 
@@ -230,21 +231,71 @@ Data formats:
 
 ---
 
+## Export & HuggingFace
+
+### Export to safetensors
+```bash
+# Merge all trained components into HuggingFace-compatible format
+python export.py \
+  --thinker_ckpt checkpoints/thinker_tiny \
+  --audio_ckpt checkpoints/audio_enc_tiny \
+  --vision_ckpt checkpoints/vision_tiny \
+  --talker_ckpt checkpoints/talker_tiny \
+  --ocr_ckpt checkpoints/ocr_tiny \
+  --output_dir export
+```
+
+This creates:
+- `export/model.safetensors` — HF-compatible (flat thinker keys, works with `from_pretrained`)
+- `export/model_full.safetensors` — Full multimodal model (all components with prefixed keys)
+- `export/config.json` — HuggingFace config with `auto_map` for custom model discovery
+- `export/modeling_muomni.py` — Self-contained model class (no `omni/` dependency)
+
+### Use with HuggingFace Transformers
+```python
+import sys; sys.path.insert(0, "export")
+from modeling_muomni import MuOmniForCausalLM
+from omni.tokenizer import BPETokenizer
+import torch
+
+# Load model (works exactly like any HF model)
+model = MuOmniForCausalLM.from_pretrained("./export", trust_remote_code=True)
+model = model.cuda().eval()
+
+# Tokenize and generate
+tok = BPETokenizer("export/tokenizer.model")
+ids = [1] + tok.encode("The red cat")
+x = torch.tensor([ids], device="cuda")
+out = model.generate(x, max_new_tokens=20, temperature=0.7, top_k=40)
+print(tok.decode(out[0].tolist()))
+# Output: "The red cat sits in the park."
+```
+
+### Upload to HuggingFace Hub (optional)
+```bash
+huggingface-cli login
+huggingface-cli upload prskid1000/micro-Omni export/
+```
+
+---
+
 ## Testing
 
 ```bash
 # Single component
 python test_thinker.py --checkpoint checkpoints/thinker_tiny
 
+# Multimodal SFT test
+python test_sft.py --checkpoint checkpoints/omni_sft_tiny
+
 # All tests (PowerShell)
 Get-ChildItem -Filter 'test_*.py' -Recurse | ForEach-Object { python $_.FullName }
 
-# Export and test
-python export.py --ckpt_dir checkpoints/ --output_dir exported/
+# Export validation
 python export/test_safetensor.py
 ```
 
-Flags: `--device cpu` (no GPU), `--num_samples N` (limit test size)
+Flags: `--device cpu` (no GPU), `--num_samples N` (limit test size), `--config path/to/config.json`
 
 ---
 
