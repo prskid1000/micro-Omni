@@ -24,15 +24,20 @@ Text  ──→ Token Embeddings ───────────┤
 | **Talker** (TTS) | Top-5 Accuracy | **90.0%** | EXCELLENT |
 | **SFT** (Multimodal) | Val Loss | 0.220 | GOOD |
 
-**Training time** (RTX 5070 Ti Laptop, synthetic 2000 samples):
-| Stage | Time | Epochs |
-|-------|------|--------|
-| A: Thinker | ~10 min | 500 |
-| B: Audio Encoder | ~2 min | 50 |
-| C: Vision Encoder | ~10 min | 50 |
-| D: Talker | ~5 min | 50 |
+**Training time** (RTX 5070 Ti Laptop GPU, synthetic 2000 samples):
+| Stage | Clean Run | Epochs |
+|-------|-----------|--------|
+| A: Thinker | ~15 min | 500 |
+| B: Audio Encoder | ~5 min | 50 |
+| C: Vision Encoder | ~12 min | 50 |
+| D: Talker | ~8 min | 50 |
 | E: SFT | ~25 min | 50 |
-| **Total** | **~52 min** | |
+| F: Vocoder (optional) | ~15 min | 50 |
+| G: OCR (optional) | ~10 min | 50 |
+| **Total (A-E required)** | **~65 min** | |
+| **Total (all stages)** | **~90 min** | |
+
+*Note: B+C can run in parallel. First-time setup with config tuning may take 2+ hours.*
 
 ---
 
