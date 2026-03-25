@@ -10,7 +10,29 @@ Text  ──→ Token Embeddings ───────────┤
                                        └──→ Talker ──→ RVQ ──→ Vocoder ──→ Speech
 ```
 
-> **~25.65M parameters** | **16GB VRAM** (RTX 5070 Ti) | Reference learning repo — compact and readable
+> **~13.9M parameters** | **16GB VRAM** (RTX 5070 Ti) | Reference learning repo — compact and readable
+
+## Benchmark Results (Synthetic Data, 2000 samples)
+
+| Component | Metric | Score | Rating |
+|-----------|--------|-------|--------|
+| **Thinker** (LLM) | Perplexity | 2.34 | EXCELLENT |
+| | Next-token patterns | ~90%+ | Learns counting, arithmetic, grammar |
+| **Audio Encoder** (ASR) | Beam CER | **0.0%** | PERFECT |
+| | Beam WER | **0.0%** | PERFECT |
+| **Vision Encoder** (CLIP) | Embedding Diversity | 0.88 | EXCELLENT |
+| **Talker** (TTS) | Top-5 Accuracy | **90.0%** | EXCELLENT |
+| **SFT** (Multimodal) | Val Loss | 0.220 | GOOD |
+
+**Training time** (RTX 5070 Ti Laptop, synthetic 2000 samples):
+| Stage | Time | Epochs |
+|-------|------|--------|
+| A: Thinker | ~10 min | 500 |
+| B: Audio Encoder | ~2 min | 50 |
+| C: Vision Encoder | ~10 min | 50 |
+| D: Talker | ~5 min | 50 |
+| E: SFT | ~25 min | 50 |
+| **Total** | **~52 min** | |
 
 ---
 

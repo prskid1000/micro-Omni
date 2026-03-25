@@ -102,121 +102,87 @@ def decode_ctc_greedy(logits, idx_to_char, blank_idx=0):
     return decoded
 
 
-def decode_ctc_beam_search(logits, idx_to_char, blank_idx=0, beam_width=10, alpha=0.3, beta=1.2, lm_scorer=None):
+def decode_ctc_beam_search(logits, idx_to_char, blank_idx=0, beam_width=10, alpha=0.0, beta=0.0, lm_scorer=None):
     """
-    Beam search CTC decoder with optional language model integration.
-    
-    This implementation uses a prefix beam search algorithm that maintains
-    multiple hypotheses (beams) at each timestep and selects the most probable
-    sequences based on CTC probabilities and optional language model scores.
-    
-    Args:
-        logits: (B, T, vocab_size) - model outputs (log probabilities)
-        idx_to_char: dict mapping indices to characters
-        blank_idx: index of blank token (default: 0)
-        beam_width: number of beams to maintain (default: 10)
-        alpha: language model weight (0.0 = no LM, higher = more LM influence)
-        beta: length normalization factor (encourages longer sequences)
-        lm_scorer: optional language model scorer function (text -> score)
-    
-    Returns:
-        List of decoded strings (one per batch item)
-    
-    Algorithm:
-        For each timestep:
-        1. For each beam, extend with all possible characters
-        2. Track two probabilities per prefix:
-           - p_blank: probability ending in blank
-           - p_non_blank: probability ending in non-blank
-        3. Combine paths that produce same prefix
-        4. Apply optional language model scoring
-        5. Keep top beam_width candidates
+    Prefix beam search CTC decoder.
+
+    Maintains (prefix, p_blank, p_non_blank) per beam.
+    CTC rules:
+      - Blank: keeps prefix unchanged, resets to blank-ending state
+      - Same char as last: only from blank state (otherwise it's a repetition, not a new char)
+      - Different char: from either state
+      - Same char repeated genuinely requires a blank in between
     """
     probs = torch.softmax(logits, dim=-1)  # (B, T, vocab_size)
     batch_size, T, vocab_size = probs.shape
-    
+
     decoded = []
-    
+
     for b in range(batch_size):
         batch_probs = probs[b]  # (T, vocab_size)
-        
-        # Initialize beams
-        # Each beam is: (prefix_text, p_blank, p_non_blank, score)
-        beams = [("", 1.0, 0.0, 0.0)]  # (text, p_b, p_nb, lm_score)
-        
+
+        # beams: dict[prefix] -> (p_blank, p_non_blank)
+        beams = {"": (1.0, 0.0)}
+
         for t in range(T):
-            new_beams = {}  # Dict[prefix] -> (p_blank, p_non_blank, lm_score)
-            
-            for prefix, p_b, p_nb, lm_score in beams:
-                # Get probability at this timestep
-                prob_t = batch_probs[t]  # (vocab_size,)
-                
-                # Option 1: Extend with blank
-                p_blank_next = prob_t[blank_idx].item()
-                total_p = (p_b + p_nb) * p_blank_next
-                
-                if prefix not in new_beams:
-                    new_beams[prefix] = (total_p, 0.0, lm_score)
+            new_beams = {}
+
+            for prefix, (p_b, p_nb) in beams.items():
+                prob_t = batch_probs[t]
+                total_p = p_b + p_nb
+
+                # --- Extend with blank: prefix stays the same ---
+                p_blank_next = prob_t[blank_idx].item() * total_p
+                if prefix in new_beams:
+                    new_beams[prefix] = (new_beams[prefix][0] + p_blank_next, new_beams[prefix][1])
                 else:
-                    pb_old, pnb_old, lm_old = new_beams[prefix]
-                    new_beams[prefix] = (pb_old + total_p, pnb_old, lm_old)
-                
-                # Option 2: Extend with character
+                    new_beams[prefix] = (p_blank_next, 0.0)
+
+                # --- Extend with each character ---
                 for idx in range(vocab_size):
                     if idx == blank_idx or idx not in idx_to_char:
                         continue
-                    
                     char = idx_to_char[idx]
-                    if char in ['<BLANK>', '<UNK>']:
+                    if char in ('<BLANK>', '<UNK>'):
                         continue
-                    
-                    new_prefix = prefix + char
+
                     p_char = prob_t[idx].item()
-                    
-                    # If extending with same character as last
+
                     if len(prefix) > 0 and prefix[-1] == char:
-                        # Can only extend from blank state (CTC rule)
-                        total_p = p_b * p_char
+                        # Same char as last: ONLY from blank state (CTC repeat rule)
+                        # From non-blank state this is just a repeated emission, not a new char
+                        p_new = p_b * p_char
+                        # Also allow staying in the same prefix from non-blank state
+                        # (the emission is a continuation of the same char, not a new one)
+                        stay_p = p_nb * p_char
+                        if prefix in new_beams:
+                            new_beams[prefix] = (new_beams[prefix][0], new_beams[prefix][1] + stay_p)
+                        else:
+                            new_beams[prefix] = (0.0, stay_p)
+                        # New char (after blank) extends the prefix
+                        new_prefix = prefix + char
                     else:
-                        # Can extend from either state
-                        total_p = (p_b + p_nb) * p_char
-                    
-                    # Calculate LM score for new prefix if LM available
-                    new_lm_score = lm_score
-                    if lm_scorer is not None:
-                        new_lm_score = lm_scorer(new_prefix)
-                    
-                    if new_prefix not in new_beams:
-                        new_beams[new_prefix] = (0.0, total_p, new_lm_score)
-                    else:
-                        pb_old, pnb_old, lm_old = new_beams[new_prefix]
-                        new_beams[new_prefix] = (pb_old, pnb_old + total_p, new_lm_score)
-            
-            # Prune beams - keep top beam_width
-            # Combined score: log(CTC_prob) + alpha * LM_score + beta * len(prefix)
-            scored_beams = []
-            for prefix, (pb, pnb, lm_score) in new_beams.items():
-                total_p = pb + pnb
-                if total_p > 0:
-                    # Log probability + LM score + length bonus
-                    score = (
-                        torch.log(torch.tensor(total_p)).item() + 
-                        alpha * lm_score + 
-                        beta * len(prefix)
-                    )
-                    scored_beams.append((prefix, pb, pnb, lm_score, score))
-            
-            # Sort by score and keep top beams
-            scored_beams.sort(key=lambda x: x[4], reverse=True)
-            beams = [(prefix, pb, pnb, lm_score) for prefix, pb, pnb, lm_score, _ in scored_beams[:beam_width]]
-            
-            # If no beams left, restart with empty
+                        # Different char: extend from either state
+                        p_new = total_p * p_char
+                        new_prefix = prefix + char
+
+                    if p_new > 0:
+                        if new_prefix in new_beams:
+                            new_beams[new_prefix] = (new_beams[new_prefix][0], new_beams[new_prefix][1] + p_new)
+                        else:
+                            new_beams[new_prefix] = (0.0, p_new)
+
+            # Prune: keep top beam_width by total probability
+            scored = [(pf, pb, pnb) for pf, (pb, pnb) in new_beams.items()]
+            scored.sort(key=lambda x: x[1] + x[2], reverse=True)
+            beams = {pf: (pb, pnb) for pf, pb, pnb in scored[:beam_width]}
+
             if not beams:
-                beams = [("", 1.0, 0.0, 0.0)]
-        
-        # Select best beam
-        best_beam = max(beams, key=lambda x: x[1] + x[2])
-        decoded.append(best_beam[0])
+                beams = {"": (1.0, 0.0)}
+
+        # Best beam by total probability
+        best_prefix = max(beams, key=lambda pf: beams[pf][0] + beams[pf][1])
+        decoded.append(best_prefix)
     
     return decoded
 
