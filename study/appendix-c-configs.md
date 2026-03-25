@@ -64,6 +64,7 @@ micro-Omni training scripts.
 | `batch_size`                 | int   | 32       | Batch size per step                  |
 | `gradient_accumulation_steps`| int   | 1        | Gradient accumulation factor         |
 | `max_grad_norm`              | float | 1.0      | Gradient clipping norm               |
+| `label_smoothing`            | float | 0.1      | Label smoothing factor (0 = off)     |
 | `seed`                       | int   | 42       | Random seed                          |
 | `save_every`                 | int   | 1000     | Save checkpoint every N steps        |
 | `log_every`                  | int   | 100      | Log metrics every N steps            |

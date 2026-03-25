@@ -290,7 +290,35 @@ consensus."
 
 ---
 
-## 20.12 VRAM Budget Guide (16GB GPU — RTX 5070 Ti)
+## 20.12 Label Smoothing
+
+Standard cross-entropy uses "hard" targets: the correct token gets probability 1.0, everything else gets 0.0. Label smoothing softens this by redistributing a small fraction of the probability mass to all other tokens.
+
+With the default `label_smoothing=0.1`:
+
+```
+Hard targets:      correct=1.0,  others=0.0
+Smoothed targets:  correct=0.9,  others=0.1/31999 each
+```
+
+**Why it helps:**
+
+Think of a strict teacher who only accepts one exact answer versus a teacher who says "this answer is best, but those others are not completely worthless." The strict teacher trains students to be extremely confident -- even overconfident. The relaxed teacher produces students who are well-calibrated: confident when they should be, uncertain when the answer is genuinely ambiguous.
+
+In practice, label smoothing:
+- **Prevents overconfidence**: The model does not push logits to extreme values
+- **Improves calibration**: Predicted probabilities better match actual correctness rates
+- **Acts as regularization**: Slightly penalizes the model for being too sure, reducing overfitting
+
+The 0.1 default is used in the Thinker training (`train_text.py`) and is the same value used by most production language models.
+
+```python
+criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+```
+
+---
+
+## 20.13 VRAM Budget Guide (16GB GPU — RTX 5070 Ti)
 
 Here is what fits in 16GB with all optimizations enabled:
 
@@ -348,7 +376,7 @@ VRAM usage by stage (16GB budget):
 
 ---
 
-## 20.13 Optimization Checklist
+## 20.14 Optimization Checklist
 
 ```
 [x] use_amp = True                     (or bfloat16 on Ampere+)

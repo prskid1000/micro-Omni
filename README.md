@@ -193,6 +193,7 @@ Data formats:
 
 ### Training-Level
 - Mixed precision (AMP float16/bfloat16)
+- Label smoothing (0.1) for better calibration and reduced overconfidence
 - `zero_grad(set_to_none=True)` (frees gradient memory)
 - `pin_memory=True` on DataLoaders
 - `cudnn.benchmark=True` (auto-tuned convolutions)
@@ -200,6 +201,10 @@ Data formats:
 - TF32 matmul enabled globally
 - Single gradient norm check (clip + threshold in one pass)
 - Streaming IterableDataset (90%+ RAM reduction)
+
+### Generation-Level
+- Repetition penalty for preventing degenerate loops and improving output quality
+- Top-k / top-p (nucleus) sampling for controlled diversity during text generation
 
 ---
 

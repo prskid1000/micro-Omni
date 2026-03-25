@@ -691,5 +691,77 @@ class ThinkerLM(nn.Module):
             nan_count = torch.isnan(logits).sum().item()
             inf_count = torch.isinf(logits).sum().item()
             raise RuntimeError(f"Numerical instability in ThinkerLM forward pass: NaN={nan_count}, Inf={inf_count}")
-        
+
         return logits
+
+    def generate(self, idx: torch.Tensor, max_new_tokens: int = 50, temperature: float = 0.8,
+                 top_k: int = 50, top_p: float = 0.9, repetition_penalty: float = 1.2,
+                 eos_token_id: int = 2) -> torch.Tensor:
+        """
+        Generate tokens with temperature, top-k, top-p, and repetition penalty.
+
+        Args:
+            idx: (B, T) input token ids
+            max_new_tokens: max tokens to generate
+            temperature: sampling temperature (0 = greedy, 1 = normal, >1 = more random)
+            top_k: keep top k tokens (0 = disabled)
+            top_p: nucleus sampling threshold (1.0 = disabled)
+            repetition_penalty: penalize repeated tokens (1.0 = disabled, >1 = penalize)
+            eos_token_id: stop generation at this token
+
+        Returns:
+            (B, T + generated) full sequence including generated tokens
+        """
+        self.enable_kv_cache(True)
+        self.reset_kv_cache()
+
+        generated = idx.clone()
+
+        for _ in range(max_new_tokens):
+            # Forward pass (uses KV cache after first pass)
+            logits = self.forward(generated if self.kv_cache is None or self.kv_cache[0] is None else generated[:, -1:])
+            logits = logits[:, -1, :]  # (B, vocab)
+
+            # Repetition penalty
+            if repetition_penalty != 1.0:
+                for b in range(generated.shape[0]):
+                    for prev_token in set(generated[b].tolist()):
+                        if logits[b, prev_token] > 0:
+                            logits[b, prev_token] /= repetition_penalty
+                        else:
+                            logits[b, prev_token] *= repetition_penalty
+
+            # Temperature
+            if temperature > 0:
+                logits = logits / temperature
+
+            # Top-k filtering
+            if top_k > 0:
+                indices_to_remove = logits < torch.topk(logits, min(top_k, logits.size(-1)))[0][..., -1, None]
+                logits[indices_to_remove] = float('-inf')
+
+            # Top-p (nucleus) filtering
+            if top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+                sorted_indices_to_remove = cumulative_probs > top_p
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                logits[indices_to_remove] = float('-inf')
+
+            # Sample or greedy
+            if temperature > 0:
+                probs = torch.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = logits.argmax(dim=-1, keepdim=True)
+
+            generated = torch.cat([generated, next_token], dim=1)
+
+            # Stop at EOS
+            if (next_token == eos_token_id).all():
+                break
+
+        self.enable_kv_cache(False)
+        return generated

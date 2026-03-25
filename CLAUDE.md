@@ -9,7 +9,7 @@
 ## Architecture (Thinker-Talker, ~25.65M params)
 
 ```
-omni/thinker.py       ThinkerLM       ~20.3M   Decoder-only LLM (RoPE, GQA, SwiGLU, optional MoE/Arthemis)
+omni/thinker.py       ThinkerLM       ~20.3M   Decoder-only LLM (RoPE, GQA, SwiGLU, optional MoE/Arthemis), generate() with temperature/top-k/top-p/repetition_penalty
 omni/audio_encoder.py AudioEncoderTiny ~2.0M   Mel → Conv2D 8x downsample → Transformer → CTC/CLAP
 omni/vision_encoder.py ViTTiny          ~914K   Image patches → Transformer → CLS token (CLIP training)
 omni/talker.py        TalkerTiny       ~2.2M   AR speech code predictor (2 codebooks × 128 codes)
@@ -80,7 +80,7 @@ python export/infer_standalone.py --model_dir exported/                         
 - Download scripts require `--combine` flag to produce production_* files
 
 ## Key Config Values (production, RTX 5070 Ti)
-- Thinker: d=384, layers=8, heads=6, ff=1536, ctx=256, vocab=32K, GQA kv_groups=3, batch=32, accum=2
+- Thinker: d=384, layers=8, heads=6, ff=1536, ctx=256, vocab=32K, GQA kv_groups=3, batch=32, accum=2, label_smoothing=0.1
 - Audio Enc: d=384, layers=8, heads=6, downsample=8x (12.5Hz), dropout=0.1, wd=0.01, batch=16, accum=2
 - Vision: d=192, layers=8, heads=3, embed_dim=256, temperature=0.07, batch=32, accum=8
 - Talker: d=384, layers=8, heads=6, codebooks=2×128, GQA kv_groups=3, batch=16, accum=2

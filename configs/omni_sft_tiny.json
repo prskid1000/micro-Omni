@@ -49,5 +49,6 @@
     "asr_csv": "data/audio/production_asr.csv"
   },
   "save_dir": "checkpoints/omni_sft_tiny",
-  "use_lr_spike": false
+  "use_lr_spike": false,
+  "label_smoothing": 0.1
 }

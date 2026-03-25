@@ -269,6 +269,55 @@ And a diagnostic method `check_weights_stability()` that scans all parameters fo
 
 ---
 
+## The `generate()` Method
+
+Beyond computing logits in the forward pass, the Thinker provides a `generate()` method for autoregressive text generation with production-grade sampling controls.
+
+### Sampling Parameters
+
+| Parameter | Default | What It Does |
+|-----------|---------|--------------|
+| `temperature` | 1.0 | Scales logits before softmax |
+| `top_k` | 50 | Keep only the top-k highest-probability tokens |
+| `top_p` | 0.9 | Keep the smallest set of tokens whose cumulative probability exceeds p |
+| `repetition_penalty` | 1.0 | Penalize tokens that already appeared in the context |
+
+### Real-Life Analogies
+
+**Temperature** is like the "adventurousness dial" on a restaurant recommendation app. At temperature=0.1 (low), you always get the same safe suggestion -- the most popular restaurant. At temperature=2.0 (high), the app throws in random hole-in-the-wall places. At 1.0, the original probability distribution is unchanged.
+
+**Top-k** is like asking a friend for movie recommendations but saying "give me your top 5 picks only." Even if they know 1000 movies, you cut off the long tail of obscure choices. With top_k=50, only the 50 most likely next tokens survive; everything else gets zero probability.
+
+**Top-p (nucleus sampling)** is like filling a shopping bag until it is 90% full by weight. You add items in order of weight (probability), and once the bag hits 90% capacity, you stop adding. This adapts to the shape of the distribution: if one token has 95% probability, only that token survives. If probability is spread out, many tokens survive.
+
+**Repetition penalty** is like a conversation rule that says "do not repeat yourself." Every token already in the context has its logit divided by the penalty factor (e.g., 1.2), making it less likely to be chosen again. This prevents the degenerate loops where a model writes "the the the the..." endlessly.
+
+### Generation Flow
+
+```
+prompt tokens ──→ forward pass ──→ logits (32000)
+                                      |
+                                      v
+                              apply repetition_penalty
+                                      |
+                                      v
+                              logits / temperature
+                                      |
+                                      v
+                              top-k filtering
+                                      |
+                                      v
+                              top-p filtering
+                                      |
+                                      v
+                              softmax ──→ sample token
+                                      |
+                                      v
+                              append to sequence, repeat
+```
+
+---
+
 ## File Reference
 
 - **Source**: `omni/thinker.py`

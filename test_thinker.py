@@ -4,7 +4,6 @@ Measures perplexity, next-token accuracy, generation quality, and coherence.
 """
 
 import torch
-import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 import json
 import os
@@ -13,7 +12,7 @@ import random
 import numpy as np
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
-from omni.utils import TextDataset, find_checkpoint, strip_orig_mod
+from omni.utils import find_checkpoint, strip_orig_mod
 from tqdm import tqdm
 
 torch.set_float32_matmul_precision('high')
@@ -95,8 +94,12 @@ def load_model_and_tokenizer(checkpoint_dir, device="cuda"):
 
 def compute_perplexity_and_accuracy(model, tokenizer, cfg, device="cuda", num_samples=100, verbose=True):
     """
-    Compute perplexity and next-token prediction accuracy.
-    
+    Compute perplexity and in-distribution next-token prediction accuracy.
+
+    Loads random lines from the training corpus, tokenizes each line, feeds the
+    token sequence to the model, and checks whether the predicted next token
+    matches the actual next token at every position.
+
     Metrics:
     - Perplexity: exp(cross-entropy loss). Lower is better.
     - Top-1 accuracy: Exact next-token prediction
@@ -104,22 +107,24 @@ def compute_perplexity_and_accuracy(model, tokenizer, cfg, device="cuda", num_sa
     - Top-10 accuracy: Next token in top 10 predictions
     """
     model.eval()
-    loss_fn = CrossEntropyLoss(ignore_index=0, reduction='none')
-    
+    loss_fn = CrossEntropyLoss(reduction='none')
+
+    # Load random lines from the training corpus
     text_path = cfg.get("train_text", "data/text/production_corpus.txt")
     if not os.path.exists(text_path):
         raise FileNotFoundError(f"Text file not found: {text_path}")
-    
-    # Create dataset
-    dataset = TextDataset(
-        path=text_path,
-        tokenizer=tokenizer,
-        ctx=cfg.get("ctx_len", 512),
-        shuffle_buffer_size=10000,
-        seed=42,  # Fixed seed for reproducibility
-        skip_samples=0
-    )
-    
+
+    with open(text_path, 'r', encoding='utf-8') as f:
+        all_lines = [line.strip() for line in f if len(line.strip()) >= 10]
+
+    if not all_lines:
+        raise ValueError("Training corpus is empty or has no lines with >= 10 characters")
+
+    random.seed(42)
+    sampled_lines = random.sample(all_lines, min(num_samples, len(all_lines)))
+
+    ctx_len = cfg.get("ctx_len", 512)
+
     # Accumulators
     total_loss = 0.0
     total_tokens = 0
@@ -127,75 +132,72 @@ def compute_perplexity_and_accuracy(model, tokenizer, cfg, device="cuda", num_sa
     correct_top5 = 0
     correct_top10 = 0
     total_predictions = 0
-    
+
     if verbose:
-        print(f"\nEvaluating perplexity on {num_samples} samples...")
-        iterator = tqdm(dataset, total=num_samples, desc="Processing")
+        print(f"\nEvaluating in-distribution accuracy on {len(sampled_lines)} corpus lines...")
+        iterator = tqdm(enumerate(sampled_lines), total=len(sampled_lines), desc="Processing")
     else:
-        iterator = iter(dataset)
-    
+        iterator = enumerate(sampled_lines)
+
     with torch.inference_mode():
-        for i, (x, y) in enumerate(iterator):
-            if i >= num_samples:
-                break
-            
+        for i, line in iterator:
             try:
-                x = x.unsqueeze(0).to(device)  # (1, T)
-                y = y.unsqueeze(0).to(device)  # (1, T)
-                
+                # Tokenize the line: BOS + encoded tokens
+                token_ids = [1] + tokenizer.encode(line)
+                if len(token_ids) < 3:
+                    continue  # Skip lines that are too short
+
+                # Truncate to context length
+                if len(token_ids) > ctx_len:
+                    token_ids = token_ids[:ctx_len]
+
+                # Input is all tokens except the last; target is all tokens except the first
+                x = torch.tensor([token_ids[:-1]], device=device)  # (1, T)
+                y = torch.tensor([token_ids[1:]], device=device)   # (1, T)
+
                 # Forward pass
                 logits = model(x)  # (1, T, vocab_size)
-                
-                # Compute per-token loss (ignoring padding)
+
+                seq_len = y.size(1)
+
+                # Compute per-token loss
                 loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))  # (T,)
-                mask = (y.view(-1) != 0).float()  # Mask for non-padding tokens
-                
-                # Accumulate loss for perplexity
-                valid_tokens = mask.sum().item()
-                if valid_tokens > 0:
-                    total_loss += (loss * mask).sum().item()
-                    total_tokens += valid_tokens
-                
-                # Compute accuracy for next-token prediction
-                # Predictions for positions 0 to T-1, targets for positions 1 to T
-                # But we only evaluate on valid (non-padding) targets
-                preds_logits = logits[:, :-1, :]  # (1, T-1, vocab)
-                targets = y[:, 1:]  # (1, T-1)
-                target_mask = (targets != 0)  # (1, T-1)
-                
+                total_loss += loss.sum().item()
+                total_tokens += seq_len
+
                 # Top-1 accuracy
-                preds_top1 = preds_logits.argmax(dim=-1)  # (1, T-1)
-                correct_top1 += ((preds_top1 == targets) & target_mask).sum().item()
-                
+                preds_top1 = logits.argmax(dim=-1)  # (1, T)
+                correct_top1 += (preds_top1 == y).sum().item()
+
                 # Top-5 accuracy
-                preds_top5 = preds_logits.topk(5, dim=-1).indices  # (1, T-1, 5)
-                targets_expanded = targets.unsqueeze(-1).expand(-1, -1, 5)  # (1, T-1, 5)
-                correct_top5 += ((preds_top5 == targets_expanded).any(dim=-1) & target_mask).sum().item()
-                
+                preds_top5 = logits.topk(5, dim=-1).indices  # (1, T, 5)
+                y_expanded5 = y.unsqueeze(-1).expand(-1, -1, 5)  # (1, T, 5)
+                correct_top5 += (preds_top5 == y_expanded5).any(dim=-1).sum().item()
+
                 # Top-10 accuracy
-                preds_top10 = preds_logits.topk(10, dim=-1).indices  # (1, T-1, 10)
-                targets_expanded_10 = targets.unsqueeze(-1).expand(-1, -1, 10)  # (1, T-1, 10)
-                correct_top10 += ((preds_top10 == targets_expanded_10).any(dim=-1) & target_mask).sum().item()
-                
-                total_predictions += target_mask.sum().item()
-                
+                preds_top10 = logits.topk(10, dim=-1).indices  # (1, T, 10)
+                y_expanded10 = y.unsqueeze(-1).expand(-1, -1, 10)  # (1, T, 10)
+                correct_top10 += (preds_top10 == y_expanded10).any(dim=-1).sum().item()
+
+                total_predictions += seq_len
+
             except Exception as e:
                 if verbose:
-                    print(f"\n⚠️  Error processing sample {i}: {e}")
+                    print(f"\n  Warning: Error processing line {i}: {e}")
                 continue
-    
+
     if total_tokens == 0 or total_predictions == 0:
         raise ValueError("No valid tokens processed!")
-    
+
     # Calculate metrics
     avg_loss = total_loss / total_tokens
     perplexity = np.exp(avg_loss) if avg_loss < 10 else float('inf')
     top1_accuracy = correct_top1 / total_predictions
     top5_accuracy = correct_top5 / total_predictions
     top10_accuracy = correct_top10 / total_predictions
-    
+
     return {
-        'num_samples': i + 1,
+        'num_samples': len(sampled_lines),
         'total_tokens': total_tokens,
         'avg_loss': avg_loss,
         'perplexity': perplexity,
@@ -203,81 +205,6 @@ def compute_perplexity_and_accuracy(model, tokenizer, cfg, device="cuda", num_sa
         'top5_accuracy': top5_accuracy,
         'top10_accuracy': top10_accuracy,
     }
-
-
-def generate_text(model, tokenizer, prompt, device="cuda", max_length=100, temperature=0.8, top_k=50, top_p=0.95, ctx_len=512):
-    """
-    Generate text from a prompt with advanced sampling.
-    
-    Args:
-        model: ThinkerLM model
-        tokenizer: BPETokenizer
-        prompt: Input text prompt
-        device: Device to run on
-        max_length: Maximum number of tokens to generate
-        temperature: Sampling temperature (higher = more random)
-        top_k: Keep only top k tokens for sampling
-        top_p: Nucleus sampling threshold
-        ctx_len: Context length limit
-    
-    Returns:
-        Generated text
-    """
-    model.eval()
-    
-    # Encode prompt
-    prompt_ids = [1] + tokenizer.encode(prompt)  # Add BOS token
-    if len(prompt_ids) > ctx_len - max_length:
-        prompt_ids = prompt_ids[-(ctx_len - max_length):]
-    
-    generated_ids = prompt_ids.copy()
-    
-    with torch.inference_mode():
-        for _ in range(max_length):
-            # Get context window (last ctx_len tokens)
-            context = generated_ids[-ctx_len:]
-            input_tensor = torch.tensor([context], device=device)
-            
-            # Forward pass
-            logits = model(input_tensor)  # (1, T, vocab_size)
-            next_token_logits = logits[0, -1, :] / temperature
-            
-            # Top-k filtering
-            if top_k > 0:
-                top_k_logits, top_k_indices = torch.topk(next_token_logits, min(top_k, next_token_logits.size(-1)))
-                next_token_logits = torch.full_like(next_token_logits, float('-inf'))
-                next_token_logits[top_k_indices] = top_k_logits
-            
-            # Top-p (nucleus) sampling
-            if top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                
-                # Remove tokens with cumulative probability above threshold
-                sorted_indices_to_remove = cumulative_probs > top_p
-                sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
-                sorted_indices_to_remove[0] = False
-                
-                indices_to_remove = sorted_indices[sorted_indices_to_remove]
-                next_token_logits[indices_to_remove] = float('-inf')
-            
-            # Sample next token
-            probs = F.softmax(next_token_logits, dim=-1)
-            next_token_id = torch.multinomial(probs, 1).item()
-            
-            # Stop at EOS (token 0) or special tokens
-            if next_token_id == 0:
-                break
-            
-            generated_ids.append(next_token_id)
-            
-            # Stop if exceeding context length
-            if len(generated_ids) >= ctx_len:
-                break
-    
-    # Decode generated text
-    generated_text = tokenizer.decode(generated_ids)
-    return generated_text
 
 
 def load_corpus_lines(cfg, min_length=10):
@@ -309,7 +236,7 @@ def evaluate_generation_quality(model, tokenizer, cfg, device="cuda", num_prompt
     Evaluate generation quality using in-distribution prompts from the training corpus.
 
     Reads random lines from the training data, uses the first few tokens of each line
-    as the prompt, and generates continuations.
+    as the prompt, and generates continuations via model.generate().
 
     Returns generated texts and basic quality metrics.
     """
@@ -337,15 +264,23 @@ def evaluate_generation_quality(model, tokenizer, cfg, device="cuda", num_prompt
         prompt, full_line = result
 
         try:
-            generated_text = generate_text(
-                model, tokenizer, prompt,
-                device=device,
-                max_length=50,
-                temperature=0.8,
-                top_k=50,
-                top_p=0.95,
-                ctx_len=cfg.get("ctx_len", 512)
-            )
+            # Encode the prompt and prepend BOS token
+            prompt_ids = [1] + tokenizer.encode(prompt)
+            x = torch.tensor([prompt_ids], device=device)
+
+            # Use model.generate() for sampling
+            with torch.inference_mode():
+                output_ids = model.generate(
+                    x,
+                    max_new_tokens=50,
+                    temperature=0.7,
+                    top_k=40,
+                    top_p=0.9,
+                    repetition_penalty=1.3,
+                )
+
+            # Decode the full output (prompt + generated tokens)
+            generated_text = tokenizer.decode(output_ids[0].tolist())
 
             generated_samples.append({
                 'prompt': prompt,

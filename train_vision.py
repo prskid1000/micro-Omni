@@ -459,8 +459,8 @@ def main(cfg):
                     logits_i2t = torch.matmul(img_emb, text_emb.t()) / temp  # Image-to-Text (B, B)
                     logits_t2i = torch.matmul(text_emb, img_emb.t()) / temp  # Text-to-Image (B, B)
                     labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
-                    loss_i2t = nn.CrossEntropyLoss()(logits_i2t, labels)
-                    loss_t2i = nn.CrossEntropyLoss()(logits_t2i, labels)
+                    loss_i2t = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(logits_i2t, labels)
+                    loss_t2i = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(logits_t2i, labels)
                     loss = (loss_i2t + loss_t2i) / 2  # Symmetric loss
                     # Free intermediate tensors
                     del cls, img_emb, text_embs, text_emb, logits_i2t, logits_t2i
@@ -468,7 +468,7 @@ def main(cfg):
                 cls, _ = vit(img)  # (B,1,d)
                 img_emb = img_proj(cls.squeeze(1))  # (B, embed_dim)
                 img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)  # L2 normalize
-                
+
                 # Encode captions (batch if possible for speed)
                 if torch.is_tensor(cap) and cap.dim() == 2:
                     token_batch = cap.to(device)  # (B, T)
@@ -482,14 +482,14 @@ def main(cfg):
                     text_embs = torch.stack([encode_caption(c) for c in cap]).to(device)
                 text_emb = text_proj(text_embs)
                 text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)  # L2 normalize
-                
+
                 # Contrastive loss (InfoNCE)
                 temp = temperature()
                 logits_i2t = torch.matmul(img_emb, text_emb.t()) / temp  # Image-to-Text (B, B)
                 logits_t2i = torch.matmul(text_emb, img_emb.t()) / temp  # Text-to-Image (B, B)
                 labels = torch.arange(B, device=device)  # Positive pairs are on diagonal
-                loss_i2t = nn.CrossEntropyLoss()(logits_i2t, labels)
-                loss_t2i = nn.CrossEntropyLoss()(logits_t2i, labels)
+                loss_i2t = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(logits_i2t, labels)
+                loss_t2i = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(logits_t2i, labels)
                 loss = (loss_i2t + loss_t2i) / 2  # Symmetric loss
                 # Free intermediate tensors
                 del cls, img_emb, text_embs, text_emb, logits_i2t, logits_t2i
@@ -650,19 +650,19 @@ def main(cfg):
                                     
                                     val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                                     val_labels = torch.arange(val_B, device=device)
-                                    val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
+                                    val_loss = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(val_logits, val_labels)
                             else:
                                 val_cls, _ = vit(val_img)
                                 val_img_emb = img_proj(val_cls.squeeze(1))
                                 val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
-                                
+
                                 val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
                                 val_text_emb = text_proj(val_text_embs)
                                 val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
-                                
+
                                 val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                                 val_labels = torch.arange(val_B, device=device)
-                                val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
+                                val_loss = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(val_logits, val_labels)
                             
                             # Validate validation loss
                             try:
@@ -801,12 +801,12 @@ def main(cfg):
                             
                             val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                             val_labels = torch.arange(val_B, device=device)
-                            val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
+                            val_loss = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(val_logits, val_labels)
                     else:
                         val_cls, _ = vit(val_img)
                         val_img_emb = img_proj(val_cls.squeeze(1))
                         val_img_emb = val_img_emb / val_img_emb.norm(dim=-1, keepdim=True)
-                        
+
                         # Batch-process validation captions when possible
                         if torch.is_tensor(val_cap) and val_cap.dim() == 2:
                             val_token_batch = val_cap.to(device)
@@ -819,10 +819,10 @@ def main(cfg):
                             val_text_embs = torch.stack([encode_caption(c) for c in val_cap]).to(device)
                         val_text_emb = text_proj(val_text_embs)
                         val_text_emb = val_text_emb / val_text_emb.norm(dim=-1, keepdim=True)
-                        
+
                         val_logits = torch.matmul(val_img_emb, val_text_emb.t()) / temperature()
                         val_labels = torch.arange(val_B, device=device)
-                        val_loss = nn.CrossEntropyLoss()(val_logits, val_labels)
+                        val_loss = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))(val_logits, val_labels)
                     
                     # Validate validation loss
                     try:

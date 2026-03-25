@@ -172,7 +172,7 @@ def main(cfg):
         print(f"✓ EMA enabled with decay={ema_decay}")
     
     # Loss function (ignore PAD token)
-    loss_fn = nn.CrossEntropyLoss(ignore_index=0)
+    loss_fn = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=cfg.get("label_smoothing", 0.0))
     
     # Learning rate scheduler
     warmup_steps = cfg.get("warmup_steps", 500)

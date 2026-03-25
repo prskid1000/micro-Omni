@@ -142,7 +142,7 @@ def main(cfg):
     proj_a = torch.nn.Linear(audio_dim, thinker_d_model).to(device)
     proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
     opt = torch.optim.AdamW(list(think.parameters())+list(proj_a.parameters())+list(proj_v.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
-    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
+    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0, label_smoothing=cfg.get("label_smoothing", 0.0))
     
     # Learning rate scheduler with warmup
     warmup_steps = cfg.get("warmup_steps", 200)
