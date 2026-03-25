@@ -13,3 +13,10 @@ __pycache__/
 *.pywz
 *.pyzw
 .aider*
+
+# Model checkpoints (large binaries — never commit)
+*.pt
+*.safetensors
+checkpoints/*/
+export/*.pt
+export/*.safetensors
