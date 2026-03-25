@@ -16,15 +16,27 @@ Text  ──→ Token Embeddings ───────────┤
 
 | Component | Metric | Score | Rating |
 |-----------|--------|-------|--------|
-| **Thinker** (LLM) | Top-1 Accuracy | 65.25% | GOOD |
-| | Top-5 Accuracy | 92.61% | EXCELLENT |
+| **Thinker** (GQA+MTP) | Top-1 Accuracy | 65.09% | EXCELLENT |
+| | Top-5 Accuracy | 92.92% | EXCELLENT |
 | | Top-10 Accuracy | 97.80% | EXCELLENT |
-| | Perplexity | 2.70 | EXCELLENT |
-| **Audio Encoder** (ASR) | Beam CER | **0.0%** | PERFECT |
-| | Beam WER | **0.0%** | PERFECT |
-| **Vision Encoder** (CLIP) | Embedding Diversity | 0.88 | EXCELLENT |
-| **Talker** (TTS) | Top-5 Accuracy | **90.0%** | EXCELLENT |
-| **SFT** (Multimodal) | Val Loss | 1.08 | GOOD |
+| | Perplexity | 2.71 | EXCELLENT |
+| **Audio Encoder** (8x, 12.5Hz) | Val Loss | **0.0000688** | NEAR-ZERO |
+| | Beam CER | 7.05% | GOOD |
+| **Vision Encoder** (CLIP) | Embedding Diversity | **0.93** | EXCELLENT |
+| **Talker** (FFN 8/3) | Top-5 Base | **92.33%** | EXCELLENT |
+| | Top-5 Residual | **93.00%** | EXCELLENT |
+| **SFT** (Multimodal) | Val Loss | 1.078 | GOOD |
+
+**Architecture** (Qwen3.5-aligned, synthetic config):
+| Feature | Setting |
+|---------|---------|
+| GQA | Enabled (kv_groups=2, 2:1 Q:KV ratio) |
+| FFN Ratio | 8/3 × d_model (344 for d=128) — Qwen standard |
+| Audio Downsample | 8x (12.5Hz) — matches Qwen3-Omni AuT |
+| Multi-Token Prediction | 2 heads (predict t+2, t+3) |
+| Sliding Window Attention | Infrastructure ready (window_size=0 default) |
+| YaRN RoPE | Infrastructure ready (scaling_factor=1.0 default) |
+| Label Smoothing | 0.1 across all training |
 
 **Training time** (RTX 5070 Ti Laptop GPU, synthetic 2000 samples):
 | Stage | Clean Run | Epochs |

@@ -171,7 +171,24 @@ Total (core, excl. vocoder)  ~25.65M
 
 *The HiFi-GAN vocoder is trained separately and is not counted in the core model size. Griffin-Lim requires no parameters at all.*
 
-For context: GPT-2 Small is 124M parameters, LLaMA-7B is 7,000M. This entire multimodal system fits in **25.65M** -- small enough to train on a single consumer GPU.
+*Production configs use d=384 (~25.65M params). Synthetic configs use d=128 (~13.9M params).*
+
+For context: GPT-2 Small is 124M parameters, LLaMA-7B is 7,000M. This entire multimodal system fits in **25.65M** (production) or **13.9M** (synthetic) -- small enough to train on a single consumer GPU.
+
+### Qwen3.5 Architecture Alignment
+
+The following techniques from Qwen3/3.5 are implemented:
+
+| Technique | Qwen3.5 | μOmni |
+|-----------|---------|-------|
+| Grouped Query Attention | 7:1-8:1 ratio | 2:1 ratio (kv_groups=2) |
+| SwiGLU FFN | 8/3 × d_model | 8/3 × d_model (d_ff=344 for d=128) |
+| RMSNorm pre-norm | Yes | Yes |
+| RoPE | theta=10M, YaRN | theta=10K, YaRN ready |
+| Audio frame rate | 12.5Hz (8x downsample) | 12.5Hz (8x downsample) |
+| Multi-Token Prediction | Yes | Yes (2 heads, predict t+2, t+3) |
+| Sliding Window Attention | Yes (select layers) | Ready (window_size config) |
+| Thinker-Talker architecture | Yes | Yes |
 
 ---
 

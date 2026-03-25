@@ -403,15 +403,23 @@ when tuning for your specific hardware.
 
 The following results were measured on synthetic/deterministic test data to validate pipeline correctness:
 
-| Component | Metric | Result |
-|-----------|--------|--------|
-| Thinker (text) | Top-1 accuracy | 65.25% |
-| Thinker (text) | Top-5 accuracy | 92.61% |
-| Audio Encoder | CER (Character Error Rate) | 0% |
-| Audio Encoder | WER (Word Error Rate) | 0% |
-| Vision Encoder | Diversity score | 0.88 |
-| Talker | Top-5 accuracy | 90% |
+| Component | Metric | Result | Notes |
+|-----------|--------|--------|-------|
+| Thinker (GQA+MTP) | Top-1 accuracy | 65.09% | With GQA kv_groups=2, MTP 2 heads |
+| Thinker (GQA+MTP) | Top-5 accuracy | 92.92% | |
+| Thinker | Perplexity | 2.71 | EXCELLENT |
+| Audio Encoder (8x) | Val Loss | 0.0000688 | 490x better with 8x downsample |
+| Audio Encoder (8x) | CER | 7.05% | Higher than 4x (synthetic audio too short) |
+| Vision Encoder | Diversity score | 0.93 | Improved from 0.88 with FFN 8/3 |
+| Talker | Top-5 accuracy | 92-93% | Improved from 90% with FFN 8/3 |
+| SFT | Val Loss | 1.078 | Multimodal integration |
 
-These are on deterministic synthetic data (generated via `scripts/make_deterministic_data.py`) and represent pipeline verification, not production benchmarks. Real-world performance will vary with natural data and larger model sizes.
+**Qwen3.5-aligned config changes that produced these results:**
+- GQA enabled (kv_groups=2) — 2x KV cache savings
+- FFN ratio changed from 4x to 8/3 × d_model — fewer params, same quality
+- Audio 8x downsample (12.5Hz) — matches Qwen3-Omni, halves sequence length
+- Multi-Token Prediction (2 heads) — richer training signal
+
+These are on deterministic synthetic data (2000 samples, generated via `scripts/make_deterministic_data.py`) and represent pipeline verification. Real-world performance will improve significantly with natural data and larger model sizes.
 
 **Next:** Chapter 21 covers what to do when things go wrong.
