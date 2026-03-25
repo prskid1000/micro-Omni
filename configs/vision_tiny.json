@@ -25,7 +25,7 @@
   "use_thinker_for_text": false,
   "thinker_ckpt": "checkpoints/thinker_tiny",
   "thinker": {
-    "vocab_size": 1024,
+    "vocab_size": 256,
     "n_layers": 4,
     "d_model": 128,
     "n_heads": 4,
@@ -38,7 +38,7 @@
   },
 
   "ctx_len": 77,
-  "vocab_size": 1024,
+  "vocab_size": 256,
 
   "batch_size": 32,
   "gradient_accumulation_steps": 2,
