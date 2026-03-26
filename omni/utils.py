@@ -2375,7 +2375,8 @@ class ASRDataset(IterableDataset):
         self.max_text_len = cfg.get("max_text_len", None) if cfg else None
         self.max_mel_length = cfg.get("max_mel_length", None) if cfg else None
         self.filter_outliers = cfg.get("filter_outliers", True) if cfg else True  # Skip samples exceeding max lengths
-    
+        self.use_augmentation = cfg.get("use_augmentation", True) if cfg else False  # Speed perturbation + SpecAugment
+
     def get_length(self):
         """Count CSV rows (expensive, cached after first call)"""
         if self._num_rows is None:
@@ -2384,11 +2385,11 @@ class ASRDataset(IterableDataset):
                 reader = csv.DictReader(f)
                 self._num_rows = sum(1 for _ in reader)
         return self._num_rows
-    
+
     def get_error_stats(self):
         """Get statistics about skipped files due to errors."""
         return self._error_counts.copy()
-    
+
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
         num_workers = worker_info.num_workers if worker_info else 1
@@ -2455,7 +2456,27 @@ class ASRDataset(IterableDataset):
                     wav, sr = load_audio(wav_path)
                     if sr != self.sr:
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
+
+                    # Speed perturbation (0.9x-1.1x) — triples effective data
+                    if self.use_augmentation and not val_mode and rng.random() < 0.6:
+                        speed = rng.uniform(0.9, 1.1)
+                        wav = torchaudio.functional.resample(wav, self.sr, int(self.sr * speed))
+
                     mel = self.melspec(wav)[0].T
+
+                    # SpecAugment: mask random frequency and time bands
+                    if self.use_augmentation and not val_mode:
+                        T, F = mel.shape
+                        # Frequency masking (1-2 bands, width 1-8)
+                        for _ in range(rng.randint(1, 2)):
+                            fw = rng.randint(1, min(8, F // 4))
+                            f0 = rng.randint(0, F - fw)
+                            mel[f0:f0+fw, :] = 0.0
+                        # Time masking (1-2 bands, width 1-15)
+                        for _ in range(rng.randint(1, 2)):
+                            tw = rng.randint(1, min(15, T // 4))
+                            t0 = rng.randint(0, T - tw)
+                            mel[t0:t0+tw, :] = 0.0
                     
                     # Filter outliers: skip samples exceeding max lengths
                     if self.filter_outliers:

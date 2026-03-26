@@ -1,7 +1,7 @@
 {
   "save_dir": "checkpoints/vision_tiny",
   "train_manifest": "data/images/production_annotations.json",
-  "image_root": "data/images",
+  "image_root": "data/images/images",
   "seed": 42,
   "max_epochs": 30,
   "max_steps": 840,

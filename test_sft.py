@@ -286,6 +286,7 @@ def evaluate_text_only(thinker, tokenizer, cfg, device, num_samples=50, verbose=
     total_loss = 0.0
     total_tokens = 0
     correct_top1 = 0
+    correct_top5 = 0
     total_predictions = 0
 
     iterator = tqdm(samples, desc="Text-only") if verbose else samples
@@ -308,8 +309,15 @@ def evaluate_text_only(thinker, tokenizer, cfg, device, num_samples=50, verbose=
                 total_loss += loss.item() * n_tok
                 total_tokens += n_tok
 
-                preds = logits.argmax(dim=-1).squeeze(0)
+                # Top-1 accuracy
+                preds = logits.argmax(dim=-1).squeeze(0)  # (T,)
                 correct_top1 += ((preds == y) & mask).sum().item()
+
+                # Top-5 accuracy
+                top5 = logits.squeeze(0).topk(5, dim=-1).indices  # (T, 5)
+                top5_correct = (top5 == y.unsqueeze(-1)).any(dim=-1) & mask
+                correct_top5 += top5_correct.sum().item()
+
                 total_predictions += n_tok
 
             except Exception as e:
@@ -329,6 +337,7 @@ def evaluate_text_only(thinker, tokenizer, cfg, device, num_samples=50, verbose=
         'avg_loss': avg_loss,
         'perplexity': perplexity,
         'top1_accuracy': correct_top1 / total_predictions if total_predictions > 0 else 0.0,
+        'top5_accuracy': correct_top5 / total_predictions if total_predictions > 0 else 0.0,
     }
 
 
@@ -348,6 +357,8 @@ def evaluate_image_text(thinker, vision_enc, proj_v, tokenizer, cfg, device, num
 
     total_loss = 0.0
     total_tokens = 0
+    correct_top1 = 0
+    correct_top5 = 0
     num_valid = 0
 
     iterator = tqdm(samples, desc="Image+Text") if verbose else samples
@@ -398,6 +409,15 @@ def evaluate_image_text(thinker, vision_enc, proj_v, tokenizer, cfg, device, num
                 total_tokens += n_tok
                 num_valid += 1
 
+                # Top-1 accuracy
+                preds = logits.squeeze(0).argmax(dim=-1)  # (T_total,)
+                correct_top1 += ((preds == combined_y) & mask).sum().item()
+
+                # Top-5 accuracy
+                top5 = logits.squeeze(0).topk(5, dim=-1).indices  # (T_total, 5)
+                top5_correct = (top5 == combined_y.unsqueeze(-1)).any(dim=-1) & mask
+                correct_top5 += top5_correct.sum().item()
+
             except Exception as e:
                 if verbose:
                     print(f"\n  Warning (image): {e}")
@@ -414,6 +434,8 @@ def evaluate_image_text(thinker, vision_enc, proj_v, tokenizer, cfg, device, num
         'total_tokens': total_tokens,
         'avg_loss': avg_loss,
         'perplexity': perplexity,
+        'top1_accuracy': correct_top1 / total_tokens if total_tokens > 0 else 0.0,
+        'top5_accuracy': correct_top5 / total_tokens if total_tokens > 0 else 0.0,
     }
 
 
@@ -432,6 +454,8 @@ def evaluate_audio_text(thinker, audio_enc, proj_a, tokenizer, mel_spec, cfg, de
 
     total_loss = 0.0
     total_tokens = 0
+    correct_top1 = 0
+    correct_top5 = 0
     num_valid = 0
 
     iterator = tqdm(samples, desc="Audio+Text") if verbose else samples
@@ -488,6 +512,15 @@ def evaluate_audio_text(thinker, audio_enc, proj_a, tokenizer, mel_spec, cfg, de
                 total_tokens += n_tok
                 num_valid += 1
 
+                # Top-1 accuracy
+                preds = logits.squeeze(0).argmax(dim=-1)  # (T_total,)
+                correct_top1 += ((preds == combined_y) & mask).sum().item()
+
+                # Top-5 accuracy
+                top5 = logits.squeeze(0).topk(5, dim=-1).indices  # (T_total, 5)
+                top5_correct = (top5 == combined_y.unsqueeze(-1)).any(dim=-1) & mask
+                correct_top5 += top5_correct.sum().item()
+
             except Exception as e:
                 if verbose:
                     print(f"\n  Warning (audio): {e}")
@@ -504,6 +537,8 @@ def evaluate_audio_text(thinker, audio_enc, proj_a, tokenizer, mel_spec, cfg, de
         'total_tokens': total_tokens,
         'avg_loss': avg_loss,
         'perplexity': perplexity,
+        'top1_accuracy': correct_top1 / total_tokens if total_tokens > 0 else 0.0,
+        'top5_accuracy': correct_top5 / total_tokens if total_tokens > 0 else 0.0,
     }
 
 
@@ -527,6 +562,7 @@ def print_results(text_metrics, image_metrics, audio_metrics):
         print(f"  Average Loss: {text_metrics['avg_loss']:.4f}")
         print(f"  Perplexity: {text_metrics['perplexity']:.2f}")
         print(f"  Top-1 Accuracy: {text_metrics['top1_accuracy']*100:.2f}%")
+        print(f"  Top-5 Accuracy: {text_metrics['top5_accuracy']*100:.2f}%")
         modalities_working.append("text")
     else:
         print(f"  SKIPPED - No text data available")
@@ -538,6 +574,8 @@ def print_results(text_metrics, image_metrics, audio_metrics):
         print(f"  Tokens evaluated: {image_metrics['total_tokens']:,}")
         print(f"  Average Loss: {image_metrics['avg_loss']:.4f}")
         print(f"  Perplexity: {image_metrics['perplexity']:.2f}")
+        print(f"  Top-1 Accuracy: {image_metrics['top1_accuracy']*100:.2f}%")
+        print(f"  Top-5 Accuracy: {image_metrics['top5_accuracy']*100:.2f}%")
         modalities_working.append("image+text")
     else:
         print(f"  SKIPPED - No image data available")
@@ -549,6 +587,8 @@ def print_results(text_metrics, image_metrics, audio_metrics):
         print(f"  Tokens evaluated: {audio_metrics['total_tokens']:,}")
         print(f"  Average Loss: {audio_metrics['avg_loss']:.4f}")
         print(f"  Perplexity: {audio_metrics['perplexity']:.2f}")
+        print(f"  Top-1 Accuracy: {audio_metrics['top1_accuracy']*100:.2f}%")
+        print(f"  Top-5 Accuracy: {audio_metrics['top5_accuracy']*100:.2f}%")
         modalities_working.append("audio+text")
     else:
         print(f"  SKIPPED - No audio data available")

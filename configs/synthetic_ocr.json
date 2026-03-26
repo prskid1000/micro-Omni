@@ -1,7 +1,7 @@
 {
   "save_dir": "checkpoints/ocr_tiny",
   "train_csv": "data/ocr/production_ocr.csv",
-  "image_root": "data/ocr",
+  "image_root": "data/ocr/images",
   "img_size": 224,
   "patch": 16,
   "vision_d_model": 192,

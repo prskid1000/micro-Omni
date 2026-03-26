@@ -140,7 +140,19 @@ def compute_codec_metrics(rvq, mel, device="cuda"):
         for book_idx in range(codes.shape[-1]):
             unique_codes = torch.unique(codes[:, :, book_idx]).numel()
             unique_codes_per_book.append(unique_codes)
-        
+
+        # Codebook perplexity (measures effective codebook usage uniformity)
+        perplexity_per_book = []
+        for book_idx in range(codes.shape[-1]):
+            code_indices = codes[:, :, book_idx].reshape(-1).cpu().numpy()
+            cb_size = rvq.codebooks[book_idx].num_embeddings if hasattr(rvq, 'codebooks') else int(code_indices.max()) + 1
+            code_counts = np.bincount(code_indices, minlength=cb_size)
+            probs = code_counts / code_counts.sum()
+            probs = probs[probs > 0]  # remove zeros
+            entropy = -np.sum(probs * np.log(probs))
+            perplexity = np.exp(entropy)
+            perplexity_per_book.append(float(perplexity))
+
         return {
             'mse': mse,
             'mae': mae,
@@ -148,6 +160,7 @@ def compute_codec_metrics(rvq, mel, device="cuda"):
             'codes': codes,
             'mel_recon': mel_recon,
             'unique_codes_per_book': unique_codes_per_book,
+            'perplexity_per_book': perplexity_per_book,
         }
 
 
@@ -256,6 +269,7 @@ def evaluate_tts_quality(rvq, talker, cfg, device="cuda", num_samples=100, verbo
     total_base_loss = 0.0
     total_res_loss = 0.0
     all_unique_codes = [[] for _ in range(cfg.get("codebooks", 2))]
+    all_perplexities = [[] for _ in range(cfg.get("codebooks", 2))]
     num_valid = 0
     
     if verbose:
@@ -289,9 +303,11 @@ def evaluate_tts_quality(rvq, talker, cfg, device="cuda", num_samples=100, verbo
                 total_base_loss += ar_metrics['base_loss']
                 total_res_loss += ar_metrics['res_loss']
                 
-                # Track unique codes
+                # Track unique codes and perplexity
                 for book_idx, unique_count in enumerate(codec_metrics['unique_codes_per_book']):
                     all_unique_codes[book_idx].append(unique_count)
+                for book_idx, ppl in enumerate(codec_metrics['perplexity_per_book']):
+                    all_perplexities[book_idx].append(ppl)
                 
                 num_valid += 1
                 
@@ -318,7 +334,8 @@ def evaluate_tts_quality(rvq, talker, cfg, device="cuda", num_samples=100, verbo
     codebook_size = cfg.get("codebook_size", 128)
     avg_unique_per_book = [np.mean(codes) for codes in all_unique_codes]
     utilization_per_book = [avg / codebook_size for avg in avg_unique_per_book]
-    
+    avg_perplexity_per_book = [np.mean(ppls) for ppls in all_perplexities]
+
     return {
         'num_samples': num_valid,
         # Codec metrics
@@ -336,6 +353,7 @@ def evaluate_tts_quality(rvq, talker, cfg, device="cuda", num_samples=100, verbo
         # Codebook metrics
         'avg_unique_codes_per_book': avg_unique_per_book,
         'codebook_utilization': utilization_per_book,
+        'codebook_perplexity': avg_perplexity_per_book,
     }
 
 
@@ -368,9 +386,22 @@ def print_results(metrics, cfg):
     # Codebook utilization
     print(f"\nCODEBOOK UTILIZATION:")
     codebook_size = cfg.get("codebook_size", 128)
-    for i, (unique, util) in enumerate(zip(metrics['avg_unique_codes_per_book'], 
+    for i, (unique, util) in enumerate(zip(metrics['avg_unique_codes_per_book'],
                                            metrics['codebook_utilization'])):
         print(f"  Codebook {i}: {unique:.1f}/{codebook_size} codes used ({util*100:.1f}%)")
+
+    # Codebook perplexity
+    print(f"\nCODEBOOK PERPLEXITY:")
+    for i, ppl in enumerate(metrics['codebook_perplexity']):
+        if ppl > 64:
+            ppl_label = "EXCELLENT"
+        elif ppl > 32:
+            ppl_label = "GOOD"
+        elif ppl > 16:
+            ppl_label = "ACCEPTABLE"
+        else:
+            ppl_label = "POOR"
+        print(f"  Codebook {i}: {ppl:.2f} / {codebook_size} ({ppl_label})")
     
     # Interpretation
     print(f"\n{'='*70}")
@@ -409,10 +440,22 @@ def print_results(metrics, cfg):
         util_status = "⚠ ACCEPTABLE - Some codebook collapse"
     else:
         util_status = "✗ POOR - Severe codebook collapse"
-    
+
+    # Codebook perplexity assessment
+    avg_ppl = np.mean(metrics['codebook_perplexity'])
+    if avg_ppl > 64:
+        ppl_status = "✓ EXCELLENT - Uniform codebook usage (perplexity {:.1f})".format(avg_ppl)
+    elif avg_ppl > 32:
+        ppl_status = "✓ GOOD - Reasonable codebook diversity (perplexity {:.1f})".format(avg_ppl)
+    elif avg_ppl > 16:
+        ppl_status = "⚠ ACCEPTABLE - Moderate codebook collapse (perplexity {:.1f})".format(avg_ppl)
+    else:
+        ppl_status = "✗ POOR - Severe codebook collapse (perplexity {:.1f})".format(avg_ppl)
+
     print(f"Codec Quality: {codec_status}")
     print(f"AR Prediction: {ar_status}")
     print(f"Codebook Usage: {util_status}")
+    print(f"Codebook Perplexity: {ppl_status}")
     
     # Overall assessment
     print(f"\n{'='*70}")

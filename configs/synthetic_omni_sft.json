@@ -47,7 +47,7 @@
   "sft_mix": {
     "text_path": "data/text/production_corpus.txt",
     "image_manifest": "data/images/production_annotations.json",
-    "image_root": "data/images",
+    "image_root": "data/images/images",
     "asr_csv": "data/audio/production_asr.csv"
   },
   "save_dir": "checkpoints/omni_sft_tiny",

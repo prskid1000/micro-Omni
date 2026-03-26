@@ -112,7 +112,7 @@ python export/test_hf_multimodal.py                                             
 
 ## Key Config Values (synthetic configs, RTX 5070 Ti)
 - Thinker: d=128, layers=4, heads=4, d_ff=344 (8/3 x d_model), ctx=64, vocab=256, use_gqa=true kv_groups=2, batch=32, accum=1
-- Audio Enc: d=128, layers=4, heads=4, d_ff=344, downsample=8x (12.5Hz), dropout=0.1, wd=0.01, batch=16, accum=1
+- Audio Enc: d=128, layers=4, heads=4, d_ff=344, downsample=8x (12.5Hz), dropout=0.1, wd=0.01, batch=16, accum=1, use_augmentation=true (speed perturbation + SpecAugment)
 - Vision: d=128, layers=4, heads=4, d_ff=344, embed_dim=128, temperature=0.07, batch=64, accum=1
 - Talker: d=128, layers=4, heads=4, d_ff=344, codebooks=2x128, batch=16, accum=1
 - Vocoder: batch=2, accum=2, max_audio_percentile=50%, shuffle_buffer=1000
