@@ -448,7 +448,14 @@ def main(cfg):
     msd.train()
     
     epoch = start_epoch
+    max_steps_reached_logged = False
     while epoch < max_epochs:
+        if step >= max_steps:
+            if not max_steps_reached_logged:
+                logger.info(f"Reached max_steps ({max_steps}), stopping training")
+                max_steps_reached_logged = True
+            break
+
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
@@ -466,9 +473,9 @@ def main(cfg):
         remaining_epochs = max_epochs - epoch - 1
         pbar_desc = f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step}"
         if epoch == start_epoch and start_batch_idx > 0:
-            pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch)
+            pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch, dynamic_ncols=True, leave=False)
         else:
-            pbar = tqdm(train_dl, desc=pbar_desc, total=steps_per_epoch)
+            pbar = tqdm(train_dl, desc=pbar_desc, total=steps_per_epoch, dynamic_ncols=True, leave=False)
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0
@@ -987,8 +994,14 @@ def main(cfg):
                 logger.info(f"Saved checkpoint: {model_path}")
             
             if step >= max_steps:
-                logger.info(f"Reached max_steps ({max_steps}), stopping training")
+                if not max_steps_reached_logged:
+                    logger.info(f"Reached max_steps ({max_steps}), stopping training")
+                    max_steps_reached_logged = True
                 break
+
+        # If we exited the batch loop due to max_steps, don't keep looping epochs/validating.
+        if step >= max_steps:
+            break
         
         # Final validation at end of epoch
         with ValidationSkipSamplesContext(train_ds):

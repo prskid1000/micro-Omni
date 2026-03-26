@@ -286,9 +286,9 @@ def main(cfg):
         remaining_epochs = max_epochs - epoch - 1
         pbar_desc = f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step}"
         if epoch == start_epoch and start_batch_idx > 0:
-            pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch)
+            pbar = tqdm(train_dl, desc=pbar_desc, initial=start_batch_idx, total=steps_per_epoch, dynamic_ncols=True, leave=False)
         else:
-            pbar = tqdm(train_dl, desc=pbar_desc, total=steps_per_epoch)
+            pbar = tqdm(train_dl, desc=pbar_desc, total=steps_per_epoch, dynamic_ncols=True, leave=False)
         
         # Start enumeration from the correct position when resuming mid-epoch
         enum_start = start_batch_idx if (epoch == start_epoch and start_batch_idx > 0) else 0

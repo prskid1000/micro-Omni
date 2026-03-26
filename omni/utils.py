@@ -1066,6 +1066,18 @@ class SimpleLogger:
     def __init__(self, name="Training"):
         self.name = name
         self.start_time = datetime.now()
+
+    def _write(self, text: str) -> None:
+        """
+        Write a log line in a way that plays nicely with tqdm progress bars.
+        Falls back to plain print if tqdm isn't available.
+        """
+        try:
+            # tqdm is an optional runtime dependency for clean console output
+            from tqdm import tqdm  # type: ignore
+            tqdm.write(text)
+        except Exception:
+            print(text)
     
     def _format_time(self):
         """Format current time"""
@@ -1078,38 +1090,38 @@ class SimpleLogger:
     
     def info(self, message):
         """Log info message"""
-        print(self._format_message("INFO", message))
+        self._write(self._format_message("INFO", message))
     
     def warning(self, message):
         """Log warning message"""
-        print(self._format_message("WARN", message))
+        self._write(self._format_message("WARN", message))
     
     def error(self, message):
         """Log error message"""
-        print(self._format_message("ERROR", message))
+        self._write(self._format_message("ERROR", message))
     
     def train_step(self, step, loss, lr, epoch=None):
         """Log training step metrics"""
         epoch_str = f"epoch={epoch}, " if epoch is not None else ""
         msg = f"Step {step} | {epoch_str}train_loss={loss:.4f} | lr={lr:.6f}"
-        print(self._format_message("TRAIN", msg))
+        self._write(self._format_message("TRAIN", msg))
     
     def val_step(self, step, val_loss, epoch=None):
         """Log validation step metrics"""
         epoch_str = f"epoch={epoch}, " if epoch is not None else ""
         msg = f"Step {step} | {epoch_str}val_loss={val_loss:.4f}"
-        print(self._format_message("VAL", msg))
+        self._write(self._format_message("VAL", msg))
     
     def checkpoint(self, step, path, is_best=False):
         """Log checkpoint save"""
         best_str = " (BEST)" if is_best else ""
         msg = f"Checkpoint saved at step {step}{best_str}: {path}"
-        print(self._format_message("CHECKPOINT", msg))
+        self._write(self._format_message("CHECKPOINT", msg))
     
     def epoch_start(self, epoch):
         """Log epoch start"""
         msg = f"Starting epoch {epoch}"
-        print(self._format_message("EPOCH", msg))
+        self._write(self._format_message("EPOCH", msg))
     
     def epoch_end(self, epoch, train_loss=None, val_loss=None):
         """Log epoch end"""
@@ -1119,26 +1131,26 @@ class SimpleLogger:
         if val_loss is not None:
             parts.append(f"val_loss={val_loss:.4f}")
         msg = " | ".join(parts)
-        print(self._format_message("EPOCH", msg))
+        self._write(self._format_message("EPOCH", msg))
     
     def training_start(self, total_steps, train_samples, val_samples=None):
         """Log training start"""
         msg = f"Starting training | max_steps={total_steps} | train_samples={train_samples}"
         if val_samples is not None:
             msg += f" | val_samples={val_samples}"
-        print(self._format_message("START", msg))
+        self._write(self._format_message("START", msg))
     
     def training_end(self, total_steps):
         """Log training end"""
         elapsed = datetime.now() - self.start_time
         msg = f"Training completed | total_steps={total_steps} | elapsed={elapsed}"
-        print(self._format_message("END", msg))
+        self._write(self._format_message("END", msg))
     
     def metric(self, step, metric_name, value, epoch=None):
         """Log custom metric"""
         epoch_str = f"epoch={epoch}, " if epoch is not None else ""
         msg = f"Step {step} | {epoch_str}{metric_name}={value:.4f}"
-        print(self._format_message("METRIC", msg))
+        self._write(self._format_message("METRIC", msg))
 
 def calculate_wer(reference, hypothesis):
     """
