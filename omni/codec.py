@@ -11,8 +11,9 @@ class RVQ(nn.Module):
     Two-level residual vector quantizer for 80/128-bin mel frames.
     Optimized with torch.compile() support for improved performance.
     """
-    def __init__(self, codebooks: int = 2, codebook_size: int = 128, d: int = 64, 
-                 compile_model: bool = False) -> None:
+    def __init__(self, codebooks: int = 2, codebook_size: int = 128, d: int = 64,
+                 compile_model: bool = False, ema_decay: float = 0.99,
+                 gumbel_temp: float = 0.5, reset_threshold: int = 2) -> None:
         """
         Initialize RVQ with performance optimizations.
         
@@ -23,10 +24,22 @@ class RVQ(nn.Module):
             compile_model: use torch.compile() for 30-50% speedup (default: False)
         """
         super().__init__()
+        self.num_codebooks = codebooks
+        self.codebook_size = codebook_size
+        self.d = d
         self.codebooks = nn.ParameterList([nn.Embedding(codebook_size, d) for _ in range(codebooks)])
         self.proj_in = nn.Linear(128, d)
         self.proj_out = nn.Linear(d, 128)
-        
+
+        # EMA codebook tracking (for codebook reset + EMA update)
+        for i in range(codebooks):
+            self.register_buffer(f'_code_usage_{i}', torch.zeros(codebook_size))
+            self.register_buffer(f'_code_ema_{i}', self.codebooks[i].weight.data.clone())
+        self._ema_decay = ema_decay
+        self._reset_threshold = reset_threshold
+        self._gumbel_temp = gumbel_temp
+        self._total_encodes = 0
+
         # Compilation support for additional speedup
         self._compiled = False
         if compile_model:
@@ -105,17 +118,61 @@ class RVQ(nn.Module):
         residual = z
         idxs = []
         
-        # Greedy residual quantization: each codebook quantizes the residual
-        for cb in self.codebooks:
+        # Greedy residual quantization with exploration noise
+        for i, cb in enumerate(self.codebooks):
             # Nearest neighbor search via cdist (fused, memory-efficient)
             dist = torch.cdist(residual.unsqueeze(1), cb.weight.unsqueeze(0)).squeeze(1)  # (B, K)
+
+            # Gumbel noise during training to encourage codebook exploration
+            if self.training:
+                noise = -torch.log(-torch.log(torch.rand_like(dist).clamp(1e-10) + 1e-10) + 1e-10)
+                dist = dist + noise * self._gumbel_temp
+
             ind = dist.argmin(dim=-1)  # (B,)
             idxs.append(ind)
+
+            # Track codebook usage for reset logic
+            if self.training:
+                usage = getattr(self, f'_code_usage_{i}')
+                usage.scatter_add_(0, ind, torch.ones_like(ind, dtype=usage.dtype))
+                self._total_encodes += ind.shape[0]
+
+                # EMA update codebook entries toward assigned vectors
+                with torch.no_grad():
+                    for code_idx in ind.unique():
+                        mask = (ind == code_idx)
+                        avg_vec = residual[mask].mean(dim=0)
+                        cb.weight.data[code_idx] = self._ema_decay * cb.weight.data[code_idx] + (1 - self._ema_decay) * avg_vec
+
             # Update residual: subtract quantized value
             residual = residual - cb(ind)  # (B, d) - (B, d) = (B, d)
-        
+
         # Stack indices: (B, codebooks)
         return torch.stack(idxs, dim=-1)
+
+    def reset_dead_codes(self, encoder_outputs: torch.Tensor = None):
+        """Reset underused codebook entries to random encoder outputs or random vectors.
+        Call once per epoch during training."""
+        with torch.no_grad():
+            for i, cb in enumerate(self.codebooks):
+                usage = getattr(self, f'_code_usage_{i}')
+                dead_mask = usage < self._reset_threshold
+                n_dead = dead_mask.sum().item()
+                if n_dead > 0:
+                    if encoder_outputs is not None and len(encoder_outputs) >= n_dead:
+                        # Replace with random encoder outputs
+                        perm = torch.randperm(len(encoder_outputs))[:n_dead]
+                        cb.weight.data[dead_mask] = encoder_outputs[perm].to(cb.weight.device)
+                    else:
+                        # Replace with perturbed copies of active codes
+                        active_mask = ~dead_mask
+                        if active_mask.any():
+                            active_codes = cb.weight.data[active_mask]
+                            replace_idx = torch.randint(0, len(active_codes), (n_dead,))
+                            noise = torch.randn_like(cb.weight.data[dead_mask]) * 0.1
+                            cb.weight.data[dead_mask] = active_codes[replace_idx] + noise
+                # Reset usage counters
+                usage.zero_()
 
     def decode(self, idxs: torch.Tensor) -> torch.Tensor:
         """

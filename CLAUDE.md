@@ -87,6 +87,7 @@ python export/test_hf_multimodal.py                                             
 - GQA: expand KV heads via `unsqueeze().expand().reshape()` (zero-copy), never `repeat_interleave`
 - MoE: sorted batched dispatch (sort tokens by expert ID, process in one loop), never nested Python loops
 - RVQ: use `torch.cdist` for codebook distance, never broadcasting `(residual[:,None,:] - code[None,:,:])`
+- RVQ codebook health: EMA update + Gumbel noise exploration + dead code reset per epoch (configurable via `rvq_ema_decay`, `rvq_gumbel_temp`, `rvq_reset_threshold`)
 - Gradient clipping: `clip_gradients()` returns the norm — check that directly, don't call `check_gradient_explosion()` separately
 - `use_compile: false` on this machine (RTX 5070 Ti / Blackwell)
 

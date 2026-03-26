@@ -2457,25 +2457,30 @@ class ASRDataset(IterableDataset):
                     if sr != self.sr:
                         wav = torchaudio.transforms.Resample(sr, self.sr)(wav)
 
-                    # Speed perturbation (0.9x-1.1x) — triples effective data
-                    if self.use_augmentation and not val_mode and rng.random() < 0.6:
-                        speed = rng.uniform(0.9, 1.1)
-                        wav = torchaudio.functional.resample(wav, self.sr, int(self.sr * speed))
-
                     mel = self.melspec(wav)[0].T
 
-                    # SpecAugment: mask random frequency and time bands
+                    # Augmentation (applied on mel, not raw wav — much faster)
                     if self.use_augmentation and not val_mode:
                         T, F = mel.shape
-                        # Frequency masking (1-2 bands, width 1-8)
+
+                        # Speed perturbation via mel interpolation (0.9x-1.1x)
+                        if rng.random() < 0.6:
+                            speed = rng.uniform(0.9, 1.1)
+                            new_T = max(1, int(T * speed))
+                            mel = torch.nn.functional.interpolate(
+                                mel.unsqueeze(0).unsqueeze(0), size=(new_T, F), mode='bilinear', align_corners=False
+                            ).squeeze(0).squeeze(0)
+                            T = new_T
+
+                        # SpecAugment: frequency masking (1-2 bands, width 1-8)
                         for _ in range(rng.randint(1, 2)):
                             fw = rng.randint(1, min(8, F // 4))
-                            f0 = rng.randint(0, F - fw)
-                            mel[f0:f0+fw, :] = 0.0
-                        # Time masking (1-2 bands, width 1-15)
+                            f0 = rng.randint(0, max(1, F - fw))
+                            mel[:, f0:f0+fw] = 0.0
+                        # SpecAugment: time masking (1-2 bands, width 1-15)
                         for _ in range(rng.randint(1, 2)):
-                            tw = rng.randint(1, min(15, T // 4))
-                            t0 = rng.randint(0, T - tw)
+                            tw = rng.randint(1, min(15, max(1, T // 4)))
+                            t0 = rng.randint(0, max(1, T - tw))
                             mel[t0:t0+tw, :] = 0.0
                     
                     # Filter outliers: skip samples exceeding max lengths
@@ -2517,6 +2522,7 @@ class ASRDataset(IterableDataset):
                         print(f"Warning: Error loading audio in row {idx} (worker {worker_id}): {wav_path}")
                         print(f"  Error: {str(e)}")
                         self._first_error_logged = True
+                    self._error_counts["load_error"] += 1
                     self._error_counts["load_error"] += 1
                     continue
         

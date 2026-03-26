@@ -38,7 +38,10 @@ def main(cfg):
     
     codebooks = cfg.get("codebooks", 2)
     codebook_size = cfg.get("codebook_size", 128)
-    rvq = RVQ(codebooks, codebook_size, d=64, compile_model=use_compile).to(device)
+    rvq = RVQ(codebooks, codebook_size, d=64, compile_model=use_compile,
+              ema_decay=cfg.get("rvq_ema_decay", 0.99),
+              gumbel_temp=cfg.get("rvq_gumbel_temp", 0.5),
+              reset_threshold=cfg.get("rvq_reset_threshold", 2)).to(device)
     talker = TalkerTiny(
         cfg.get("d_model", 384), 
         cfg.get("n_layers", 8), 
@@ -266,6 +269,10 @@ def main(cfg):
     
     epoch = start_epoch
     while epoch < max_epochs:
+        # Reset dead codebook entries at start of each epoch (after first)
+        if epoch > 0:
+            rvq.reset_dead_codes()
+
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
