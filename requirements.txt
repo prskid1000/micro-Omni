@@ -22,3 +22,8 @@ tqdm
 pesq
 pystoi
 ffmpeg
+
+# Data generation (generate_synthetic_data.py)
+faker
+edge-tts
+pydub

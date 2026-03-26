@@ -18,6 +18,15 @@ __pycache__/
 *.pt
 *.safetensors
 checkpoints/*/
+
+# Training data (generated/downloaded — never commit binaries)
+data/audio/wav/
+data/audio/*.wav
+data/images/images/
+data/images/*.png
+data/ocr/images/
+data/ocr/*.png
+logs/
 export/*.pt
 export/*.safetensors
 *.model

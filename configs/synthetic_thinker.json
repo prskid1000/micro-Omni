@@ -5,7 +5,7 @@
   "d_ff": 344,
   "n_heads": 4,
   "ctx_len": 64,
-  "dropout": 0.05,
+  "dropout": 0.0,
   "rope_theta": 10000,
   "use_gqa": true,
   "kv_groups": 2,
@@ -20,7 +20,7 @@
   "lr": 0.001,
   "wd": 0.0,
   "warmup_steps": 50,
-  "max_steps": 1700,
+  "max_steps": 3400,
 
   "batch_size": 32,
   "gradient_accumulation_steps": 1,
@@ -33,7 +33,7 @@
   "drop_last": true,
 
   "print_freq": 50,
-  "max_epochs": 30,
+  "max_epochs": 60,
 
   "val_loss_threshold": 999.0,
   "val_split": 0.1,
