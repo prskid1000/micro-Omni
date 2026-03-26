@@ -20,6 +20,7 @@ __pycache__/
 checkpoints/*/
 
 # Training data (generated/downloaded — never commit binaries)
+data/
 data/audio/wav/
 data/audio/*.wav
 data/images/images/
