@@ -30,40 +30,35 @@ except Exception as e:
 
 # Try to use recommended torchcodec API for audio loading
 # This fixes the deprecation warning about torchaudio.load()
-def load_audio(path):
+def load_audio(path, target_sr=16000):
     """
-    Load audio file using recommended API when available,
-    falling back to torchaudio.load() for compatibility.
-    
-    Args:
-        path: Path to audio file
-    
-    Returns:
-        tuple: (audio_tensor, sample_rate)
+    Load audio file, convert to mono, resample to target_sr (default 16kHz).
+    Handles any input sample rate — always returns 16kHz mono.
     """
-    # Try torchaudio.load
+    audio, sr, e1 = None, None, None
+
     try:
         audio, sr = torchaudio.load(path)
-        # If stereo, convert to mono
         if audio.ndim > 1:
             audio = audio.mean(dim=0, keepdim=True)
-        return audio, sr
-    except Exception as e1:
-        pass
+    except Exception as _e1:
+        e1 = _e1
+        try:
+            import soundfile as sf
+            audio_np, sr = sf.read(path)
+            if audio_np.ndim == 1:
+                audio = torch.from_numpy(audio_np).float().unsqueeze(0)
+            else:
+                audio = torch.from_numpy(audio_np.T).float().mean(dim=0, keepdim=True)
+        except Exception as e2:
+            raise RuntimeError(f"Failed to load audio: {path}. Error: {e1} | {e2}")
 
-    # Fallback to soundfile for formats like .flac
-    try:
-        import soundfile as sf
-        import torch
-        audio_np, sr = sf.read(path)
-        # Convert to tensor and mono
-        if audio_np.ndim == 1:
-            audio = torch.from_numpy(audio_np).float().unsqueeze(0)
-        else:
-            audio = torch.from_numpy(audio_np.T).float().mean(dim=0, keepdim=True)
-        return audio, sr
-    except Exception as e2:
-        raise RuntimeError(f"Failed to load audio file: {path}. Error: {e1} | {e2}")
+    # Resample to target_sr if needed
+    if sr != target_sr and audio is not None:
+        audio = torchaudio.functional.resample(audio, sr, target_sr)
+        sr = target_sr
+
+    return audio, sr
 
 # Model utilities
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
