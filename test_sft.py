@@ -22,7 +22,7 @@ from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
 from omni.tokenizer import BPETokenizer
-from omni.utils import find_checkpoint, strip_orig_mod, load_audio
+from omni.utils import find_checkpoint, strip_orig_mod, load_audio, enable_log_file, default_log_path
 
 torch.set_float32_matmul_precision('high')
 
@@ -689,7 +689,9 @@ def main():
                         help="Device to use (cuda/cpu)")
     parser.add_argument("--quick", action="store_true",
                         help="Quick test with fewer samples")
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"test_sft.py start | checkpoint={args.checkpoint}")
 
     if args.quick:
         args.num_samples = 10

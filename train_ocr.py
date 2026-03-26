@@ -22,7 +22,7 @@ from omni.utils import (
     check_gradient_explosion, OCRDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, analyze_ocr_dataset,
-    save_training_metadata, load_training_metadata, TrainingMonitor, setup_cuda
+    save_training_metadata, load_training_metadata, TrainingMonitor, setup_cuda, enable_log_file, default_log_path
 )
 from tqdm import tqdm
 
@@ -692,7 +692,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train OCR model")
     parser.add_argument("--config", type=str, default="configs/ocr_tiny.json",
                        help="Path to config file")
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"train_ocr.py start | config={args.config}")
     
     if os.path.exists(args.config):
         with open(args.config, 'r') as f:

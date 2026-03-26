@@ -12,7 +12,7 @@ import random
 import numpy as np
 import torchaudio  # Only used for transforms, not for loading audio
 from omni.codec import HiFiGANVocoder
-from omni.utils import VocoderDataset, find_checkpoint, strip_orig_mod
+from omni.utils import VocoderDataset, find_checkpoint, strip_orig_mod, enable_log_file, default_log_path
 from tqdm import tqdm
 
 torch.set_float32_matmul_precision('high')
@@ -529,7 +529,9 @@ def main():
                        help="Device to use (cuda/cpu)")
     parser.add_argument("--quick", action="store_true",
                        help="Quick test with 10 samples")
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"test_vocoder.py start | checkpoint={args.checkpoint}")
     
     if args.quick:
         args.num_samples = 10

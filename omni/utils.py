@@ -4,9 +4,10 @@ import random
 import csv
 import json
 import glob
+import sys
 import torch
 from torch import nn
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TextIO
 from datetime import datetime
 from torch.utils.data import IterableDataset, Dataset
 import torchaudio
@@ -14,6 +15,83 @@ from PIL import Image
 from torchvision import transforms
 from einops import rearrange
 from itertools import zip_longest
+
+_LOG_TEE_STATE = {
+    "enabled": False,
+    "path": None,
+    "file": None,
+    "stdout": None,
+    "stderr": None,
+}
+
+class _TeeTextIO:
+    def __init__(self, a: TextIO, b: TextIO) -> None:
+        self._a = a
+        self._b = b
+
+    def write(self, s: str) -> int:
+        na = self._a.write(s)
+        self._a.flush()
+        self._b.write(s)
+        self._b.flush()
+        return na
+
+    def flush(self) -> None:
+        self._a.flush()
+        self._b.flush()
+
+    def isatty(self) -> bool:
+        # Keep tqdm behavior consistent with the original stream
+        try:
+            return bool(getattr(self._a, "isatty", lambda: False)())
+        except Exception:
+            return False
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self._a, "encoding", "utf-8")
+
+    def fileno(self) -> int:
+        return self._a.fileno()
+
+def enable_log_file(log_file: Optional[str], *, header: Optional[str] = None) -> Optional[str]:
+    """
+    Tee stdout/stderr into a UTF-8 log file.
+
+    - If log_file is None/empty, does nothing.
+    - If already enabled, does nothing (first call wins).
+    - Returns the resolved log path if enabled.
+    """
+    if not log_file:
+        return None
+    if _LOG_TEE_STATE["enabled"]:
+        return _LOG_TEE_STATE["path"]
+
+    log_path = os.path.normpath(log_file)
+    log_dir = os.path.dirname(log_path) or "."
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Line-buffered text stream so you can tail logs live.
+    f = open(log_path, "a", encoding="utf-8", buffering=1)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if header is None:
+        header = f"--- log start {ts} ---"
+    f.write(header + "\n")
+
+    _LOG_TEE_STATE["enabled"] = True
+    _LOG_TEE_STATE["path"] = log_path
+    _LOG_TEE_STATE["file"] = f
+    _LOG_TEE_STATE["stdout"] = sys.stdout
+    _LOG_TEE_STATE["stderr"] = sys.stderr
+
+    sys.stdout = _TeeTextIO(sys.stdout, f)  # type: ignore[assignment]
+    sys.stderr = _TeeTextIO(sys.stderr, f)  # type: ignore[assignment]
+    return log_path
+
+def default_log_path(script_name: str, *, logs_dir: str = "logs") -> str:
+    base = os.path.basename(script_name)
+    base = base[:-3] if base.endswith(".py") else base
+    return os.path.join(logs_dir, f"{base}.log")
 
 # Configure nvFuser as the compilation backend for optimal kernel fusion
 # This applies globally to all training scripts that import utils

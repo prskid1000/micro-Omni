@@ -5,7 +5,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata, TrainingMonitor, setup_cuda
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata, TrainingMonitor, setup_cuda, enable_log_file, default_log_path
 from tqdm import tqdm
 
 def main(cfg):
@@ -812,6 +812,10 @@ def main(cfg):
         epoch += 1
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--config", required=True)
-    cfg = json.load(open(ap.parse_args().config))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", required=True)
+    ap.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
+    args = ap.parse_args()
+    enable_log_file(args.log_file, header=f"train_audio_enc.py start | config={args.config}")
+    cfg = json.load(open(args.config))
     main(cfg)

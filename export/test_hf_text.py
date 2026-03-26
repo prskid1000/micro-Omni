@@ -22,6 +22,7 @@ from modeling_muomni import MuOmniForCausalLM
 # Add parent dir for omni imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from omni.tokenizer import BPETokenizer
+from omni.utils import enable_log_file, default_log_path
 
 
 def main():
@@ -31,7 +32,9 @@ def main():
     parser.add_argument("--num_samples", type=int, default=100)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"test_hf_text.py start | model_dir={args.model_dir}")
 
     print("=" * 60)
     print("HF TEXT MODEL — SCORED TEST")

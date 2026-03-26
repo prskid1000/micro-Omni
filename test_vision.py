@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 from torchvision import transforms
 from omni.vision_encoder import ViTTiny, TransformerTextEncoder
-from omni.utils import ImgCapDataset, find_checkpoint, strip_orig_mod
+from omni.utils import ImgCapDataset, find_checkpoint, strip_orig_mod, enable_log_file, default_log_path
 from tqdm import tqdm
 
 # Import your custom tokenizer and Thinker model
@@ -647,7 +647,9 @@ def main():
                        help="Also evaluate retrieval metrics (requires more samples)")
     parser.add_argument("--config", type=str, default=None,
                        help="Path to config JSON (overrides checkpoint/auto-detected config)")
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"test_vision.py start | checkpoint={args.checkpoint}")
     
     if args.quick:
         args.num_samples = 10

@@ -22,7 +22,7 @@ from omni.utils import (
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
     save_training_metadata, load_training_metadata, analyze_vocoder_dataset, TrainingMonitor,
-    setup_cuda, validate_loss
+    setup_cuda, validate_loss, enable_log_file, default_log_path
 )
 from tqdm import tqdm
 
@@ -1114,7 +1114,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train HiFi-GAN neural vocoder")
     parser.add_argument("--config", type=str, default="configs/vocoder_tiny.json",
                        help="Path to config file")
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"train_vocoder.py start | config={args.config}")
     
     if os.path.exists(args.config):
         with open(args.config, 'r') as f:

@@ -20,7 +20,7 @@ import shutil
 import torch
 from safetensors.torch import save_file
 from pathlib import Path
-from omni.utils import find_checkpoint, strip_orig_mod
+from omni.utils import find_checkpoint, strip_orig_mod, enable_log_file, default_log_path
 from typing import Dict
 
 
@@ -725,8 +725,10 @@ Note: The script automatically discovers and exports ALL available models:
         default="omni_sft_tiny.json",
         help="Name of the omni config file in configs_dir to read checkpoint paths from (default: omni_sft_tiny.json)"
     )
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     
     args = parser.parse_args()
+    enable_log_file(args.log_file, header="export.py start")
     
     # Always use configs_dir for reading config files
     configs_dir = args.configs_dir

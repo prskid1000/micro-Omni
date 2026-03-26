@@ -33,7 +33,7 @@ from omni.codec import RVQ, NeuralVocoder
 from omni.talker import TalkerTiny
 from omni.tokenizer import BPETokenizer
 from omni.ocr_model import OCRModel
-from omni.utils import find_checkpoint, load_audio, normalize_state_dict
+from omni.utils import find_checkpoint, load_audio, normalize_state_dict, enable_log_file, default_log_path
 
 
 # ============================================================================
@@ -1274,7 +1274,9 @@ def main():
     parser.add_argument("--text", default=None, help="Text prompt (optional, for multimodal)")
     parser.add_argument("--prompt", default=None, help="Override default prompt")
     parser.add_argument("--ocr", action="store_true", help="Extract text from image using OCR")
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"infer_chat.py start | ckpt_dir={args.ckpt_dir}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")

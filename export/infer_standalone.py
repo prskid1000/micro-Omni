@@ -41,6 +41,10 @@ try:
 except ImportError:
     AUDIO_AVAILABLE = False
 
+# Add parent dir for omni imports (logging helper lives there)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from omni.utils import enable_log_file, default_log_path
+
 
 def load_model_with_transformers(model_dir, device="cuda"):
     """
@@ -307,8 +311,10 @@ Examples:
         action="store_true",
         help="Force standalone mode even if full codebase is available"
     )
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"infer_standalone.py start | model_dir={args.model_dir}")
     
     print("=" * 60)
     print("μOmni Inference")

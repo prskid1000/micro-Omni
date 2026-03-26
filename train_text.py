@@ -10,7 +10,7 @@ from omni.utils import (
     reload_from_last_checkpoint, TextDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, save_training_metadata, load_training_metadata,
-    analyze_text_dataset, TrainingMonitor, setup_cuda
+    analyze_text_dataset, TrainingMonitor, setup_cuda, enable_log_file, default_log_path
 )
 from tqdm import tqdm
 
@@ -695,6 +695,10 @@ def main(cfg):
         epoch += 1
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--config", required=True)
-    cfg = json.load(open(ap.parse_args().config))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", required=True)
+    ap.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
+    args = ap.parse_args()
+    enable_log_file(args.log_file, header=f"train_text.py start | config={args.config}")
+    cfg = json.load(open(args.config))
     main(cfg)

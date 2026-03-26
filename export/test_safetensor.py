@@ -16,6 +16,10 @@ import argparse
 from pathlib import Path
 from collections import defaultdict
 
+# Logging helper (writes stdout/stderr to logs/)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from omni.utils import enable_log_file, default_log_path
+
 def run_inference(cmd_args, description, silent=False):
     """Run inference command and return success status and timing"""
     if not silent:
@@ -249,7 +253,9 @@ def main():
                        help="Number of samples to test per test type (default: 100)")
     parser.add_argument("--export_dir", type=str, default="export",
                        help="Directory containing exported model (default: export)")
+    parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
+    enable_log_file(args.log_file, header=f"test_safetensor.py start | export_dir={args.export_dir}")
     
     print("μOmni Merged Safetensors Model Test Suite")
     print("=" * 60)
