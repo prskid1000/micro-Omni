@@ -278,9 +278,6 @@ def main(cfg):
     if accumulation_steps > 1:
         print(f"✓ Gradient accumulation: {accumulation_steps} steps (effective batch size: {effective_batch_size})")
     
-    # Validation loss threshold for reloading
-    val_loss_threshold = cfg.get("val_loss_threshold", float('inf'))
-    
     # Memory optimizations summary
 
     print(f"  • Audio length limit: {cfg.get('max_audio_length', 8192)} samples (~{cfg.get('max_audio_length', 8192)/sr:.2f}s)")
@@ -389,10 +386,10 @@ def main(cfg):
         }
     )
     
-    # Track validation loss for reload logic
-    last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
-    most_recent_val_loss = last_checkpoint_val_loss
-    consecutive_reloads = 0  # Track consecutive reloads due to validation loss spikes
+    # Seed monitor with last checkpoint val loss from metadata (backward compat for old checkpoints)
+    monitor.last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
+    # Track most recent val loss for logging/metadata
+    most_recent_val_loss = None
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 4)
@@ -448,7 +445,6 @@ def main(cfg):
     
     epoch = start_epoch
     while epoch < max_epochs:
-        reload_needed = False
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
@@ -945,32 +941,15 @@ def main(cfg):
                     if ema is not None:
                         ema.restore()
                     
-                    # Check for loss spike
-                    if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
-                        if val_loss_g > last_checkpoint_val_loss + val_loss_threshold:
-                             logger.warning(f"Validation loss spiked! {val_loss_g:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
-                             consecutive_reloads += 1
-                             if consecutive_reloads >= 2:
-                                 logger.error(f"Training stopped: Validation loss spiked {consecutive_reloads} times consecutively.")
-                                 logger.error("This indicates the model is not learning effectively. Consider:")
-                                 logger.error("  - Reducing learning rate")
-                                 logger.error("  - Adjusting val_loss_threshold")
-                                 logger.error("  - Checking data quality")
-                                 logger.training_end(step)
-                                 return
-                             reload_needed = True
-                             break
-                        else:
-                            consecutive_reloads = 0  # Reset counter on successful validation
                     most_recent_val_loss = val_loss_g
                     
                     generator.train()
                     mpd.train()
                     msd.train()
             
-            if reload_needed:
+            if monitor.reload_needed:
                 break
-            
+
             # Checkpointing
             if batch_step % checkpoint_freq == 0 and batch_step > 0:
                 model_path = os.path.join(save_dir, f"{model_name}.pt")
@@ -993,14 +972,14 @@ def main(cfg):
                     "epoch": epoch,
                     "max_audio_length": cfg.get("max_audio_length", max_audio_length),
                     "max_mel_length": cfg.get("max_mel_length", max_mel_length),
-                    "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+                    "last_checkpoint_val_loss": most_recent_val_loss,
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
-                
-                # Update last_checkpoint_val_loss
+
+                # Update monitor's checkpoint baseline for spike detection
                 if most_recent_val_loss is not None:
-                    last_checkpoint_val_loss = most_recent_val_loss
-                
+                    monitor.update_checkpoint_loss(most_recent_val_loss)
+
                 logger.info(f"Saved checkpoint: {model_path}")
             
             if step >= max_steps:
@@ -1041,11 +1020,6 @@ def main(cfg):
                 avg_val_loss = val_loss_sum / val_count
                 logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
                 
-                # Check for loss spike
-                if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
-                    if avg_val_loss > last_checkpoint_val_loss + val_loss_threshold:
-                         logger.warning(f"Validation loss spiked! {avg_val_loss:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
-                         reload_needed = True
                 most_recent_val_loss = avg_val_loss
             
             # Restore original weights after validation
@@ -1054,12 +1028,12 @@ def main(cfg):
             
             generator.train()
         
-        if reload_needed:
+        if monitor.reload_needed:
             # Reload from last checkpoint
             step, metadata = load_checkpoint(
-                save_dir, 
-                model_name, 
-                device, 
+                save_dir,
+                model_name,
+                device,
                 logger,
                 state_dict_loaders={
                     "generator": (generator, generator.load_state_dict),
@@ -1071,8 +1045,7 @@ def main(cfg):
                     "scheduler_d": (scheduler_d, scheduler_d.load_state_dict)
                 }
             )
-            last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
-            most_recent_val_loss = last_checkpoint_val_loss
+            most_recent_val_loss = monitor.last_checkpoint_val_loss
             
             # Recalculate positions
             start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
@@ -1114,7 +1087,7 @@ def main(cfg):
         "epoch": epoch if 'epoch' in locals() else 0,
         "max_audio_length": cfg.get("max_audio_length", max_audio_length),
         "max_mel_length": cfg.get("max_mel_length", max_mel_length),
-        "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+        "last_checkpoint_val_loss": most_recent_val_loss,
     }
     save_training_metadata(save_dir, model_name, training_metadata)
     logger.info(f"Training complete! Final model saved to: {final_path}")

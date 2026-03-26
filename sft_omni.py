@@ -181,8 +181,7 @@ def main(cfg):
     if accumulation_steps > 1:
         print(f"Gradient accumulation: {accumulation_steps} steps")
 
-    # Validation loss threshold for reloading
-    val_loss_threshold = cfg.get("val_loss_threshold", float('inf'))
+
 
     mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=160, win_length=400, n_mels=128).to(device)
     tok_model = os.path.join(thinker_ckpt, "tokenizer.model")
@@ -460,10 +459,10 @@ def main(cfg):
         }
     )
     
-    # Track validation loss for reload logic
-    last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
-    most_recent_val_loss = last_checkpoint_val_loss
-    # Handle scaler separately if needed
+    # Seed monitor with last checkpoint val loss from metadata (backward compat for old checkpoints)
+    monitor.last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
+    # Track most recent val loss for logging/metadata
+    most_recent_val_loss = None
     # Handle scaler separately if needed
     if step > 0 and scaler is not None:
         model_path = os.path.join(save_dir, f"{model_name}.pt")
@@ -509,7 +508,6 @@ def main(cfg):
     
     epoch = start_epoch
     while epoch < max_epochs:
-        reload_needed = False
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
@@ -776,19 +774,13 @@ def main(cfg):
                     if monitor.should_stop:
                         break
                     
-                    # Check for loss spike
-                    if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
-                        if avg_val_loss > last_checkpoint_val_loss + val_loss_threshold:
-                             logger.warning(f"Validation loss spiked! {avg_val_loss:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
-                             reload_needed = True
-                             break
                     most_recent_val_loss = avg_val_loss
                     
                     think.train()
                     proj_a.train()
                     proj_v.train()
             
-            if reload_needed:
+            if monitor.reload_needed:
                 # Reload from last checkpoint
                 step, metadata = load_checkpoint(
                     save_dir, 
@@ -804,9 +796,8 @@ def main(cfg):
                         "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None
                     }
                 )
-                last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
-                most_recent_val_loss = last_checkpoint_val_loss
-                
+                most_recent_val_loss = monitor.last_checkpoint_val_loss
+
                 # Also reload proj_a and proj_v from checkpoint if available (handled by load_checkpoint above)
                 
                 # Recalculate positions
@@ -846,15 +837,15 @@ def main(cfg):
                 training_metadata = {
                     "step": step,
                     "epoch": epoch,
-                    "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+                    "last_checkpoint_val_loss": most_recent_val_loss,
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.checkpoint(step, model_path)
-                
-                # Update last_checkpoint_val_loss
+
+                # Update monitor's checkpoint baseline for spike detection
                 if most_recent_val_loss is not None:
-                    last_checkpoint_val_loss = most_recent_val_loss
-            
+                    monitor.update_checkpoint_loss(most_recent_val_loss)
+
             if step >= max_steps:
                 os.makedirs(save_dir, exist_ok=True)
                 final_path = os.path.join(save_dir, f"{model_name}.pt")
@@ -873,7 +864,7 @@ def main(cfg):
                 training_metadata = {
                     "step": step,
                     "epoch": epoch,
-                    "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+                    "last_checkpoint_val_loss": most_recent_val_loss,
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.info(f"Final model saved to {save_dir}")
@@ -978,15 +969,15 @@ def main(cfg):
         training_metadata = {
             "step": step,
             "epoch": epoch,
-            "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+            "last_checkpoint_val_loss": most_recent_val_loss,
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
-        
-        # Update last_checkpoint_val_loss
+
+        # Update monitor's checkpoint baseline for spike detection
         if most_recent_val_loss is not None:
-            last_checkpoint_val_loss = most_recent_val_loss
-        
+            monitor.update_checkpoint_loss(most_recent_val_loss)
+
         # Check if we've reached max_steps after epoch completion
         if step >= max_steps:
             logger.info(f"Reached max_steps={max_steps}. Training complete.")

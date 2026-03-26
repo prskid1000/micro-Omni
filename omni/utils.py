@@ -822,6 +822,13 @@ class TrainingMonitor:
             consecutive_increases=cfg.get("lr_spike_consecutive_increases", 3),
         ) if self.use_lr_spike else None
 
+        # Val loss threshold — reload checkpoint on sustained divergence
+        # Requires consecutive_spike_limit consecutive spikes to trigger (not just one)
+        self.val_loss_threshold = cfg.get("val_loss_threshold", float('inf'))
+        self.consecutive_spike_limit = cfg.get("val_loss_spike_patience", 3)
+        self.spike_count = 0
+        self.reload_needed = False
+
         # Early stopping
         self.use_early_stopping = cfg.get("use_early_stopping", False)
         self.es_patience = cfg.get("early_stopping_patience", 5)
@@ -832,6 +839,7 @@ class TrainingMonitor:
         # Best model tracking (shared by early stopping + general best-model saving)
         self.best_val_loss = float('inf')
         self.best_state_dicts = {}
+        self.last_checkpoint_val_loss = None
 
     def on_val_end(self, val_loss: float, optimizer, models: dict = None, logger=None) -> bool:
         """
@@ -851,10 +859,26 @@ class TrainingMonitor:
         if improved:
             self.best_val_loss = val_loss
             self.es_counter = 0
+            self.spike_count = 0  # Reset spike counter on improvement
             if models:
                 self.best_state_dicts = {n: {k: v.clone() for k, v in m.state_dict().items()} for n, m in models.items()}
         else:
             self.es_counter += 1
+
+        # Val loss threshold — check for CONSECUTIVE spikes above threshold
+        self.reload_needed = False
+        if self.last_checkpoint_val_loss is not None and self.val_loss_threshold < 999.0:
+            if val_loss > self.last_checkpoint_val_loss + self.val_loss_threshold:
+                self.spike_count += 1
+                if logger:
+                    logger.warning(f"Val loss spike ({self.spike_count}/{self.consecutive_spike_limit}): {val_loss:.4f} > {self.last_checkpoint_val_loss:.4f} + {self.val_loss_threshold}")
+                if self.spike_count >= self.consecutive_spike_limit:
+                    self.reload_needed = True
+                    self.spike_count = 0
+                    if logger:
+                        logger.warning(f"Sustained divergence detected ({self.consecutive_spike_limit} consecutive spikes). Reload needed.")
+            else:
+                self.spike_count = 0  # Reset on non-spike
 
         # LR spike
         if self.spike is not None:
@@ -870,6 +894,10 @@ class TrainingMonitor:
                     logger.info("EarlyStopping: patience exhausted. Stopping training.")
 
         return self.should_stop
+
+    def update_checkpoint_loss(self, val_loss: float):
+        """Call when saving a checkpoint to update the baseline for spike detection."""
+        self.last_checkpoint_val_loss = val_loss
 
     def step(self, optimizer, logger=None):
         """Call every training step (for LR spike countdown)."""
@@ -888,7 +916,9 @@ class TrainingMonitor:
     def get_state_dict(self):
         state = {
             'best_val_loss': self.best_val_loss,
+            'last_checkpoint_val_loss': self.last_checkpoint_val_loss,
             'es_counter': self.es_counter,
+            'spike_count': self.spike_count,
             'should_stop': self.should_stop,
         }
         if self.spike is not None:
@@ -897,7 +927,9 @@ class TrainingMonitor:
 
     def load_state_dict(self, state_dict):
         self.best_val_loss = state_dict.get('best_val_loss', float('inf'))
+        self.last_checkpoint_val_loss = state_dict.get('last_checkpoint_val_loss', None)
         self.es_counter = state_dict.get('es_counter', 0)
+        self.spike_count = state_dict.get('spike_count', 0)
         self.should_stop = state_dict.get('should_stop', False)
         if self.spike is not None and 'lr_spike' in state_dict:
             self.spike.load_state_dict(state_dict['lr_spike'])

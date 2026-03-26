@@ -194,9 +194,6 @@ def main(cfg):
     # Gradient accumulation
     accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
     
-    # Validation loss threshold for reloading
-    val_loss_threshold = cfg.get("val_loss_threshold", float('inf'))
-    
     # Mixed precision training (AMP)
     use_amp = cfg.get("use_amp", True) and device == "cuda"
     scaler = GradScaler('cuda') if use_amp else None
@@ -287,9 +284,8 @@ def main(cfg):
     )
     
     # Track validation loss for reload logic
-    last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
-    most_recent_val_loss = last_checkpoint_val_loss
-    consecutive_reloads = 0  # Track consecutive reloads due to validation loss spikes
+    monitor.last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
+    most_recent_val_loss = None
     # Load scaler from model file if needed
     if step > 0 and scaler is not None:
         model_path = os.path.join(save_dir, f"{model_name}.pt")
@@ -333,7 +329,6 @@ def main(cfg):
     
     epoch = start_epoch
     while epoch < max_epochs:
-        reload_needed = False
         # Recreate DataLoader for each epoch since IterableDatasets are exhausted after one iteration
         # skip_samples is automatically reset to 0 by the dataset after first iteration
         if epoch > start_epoch:
@@ -506,14 +501,14 @@ def main(cfg):
                     "vocab_size": vocab_size_dynamic,
                     "max_text_len": max_text_len_dynamic,
                     "max_mel_length": max_mel_length_dynamic,
-                    "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+                    "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else monitor.last_checkpoint_val_loss,
                 }
                 save_training_metadata(save_dir, model_name, training_metadata)
                 logger.checkpoint(step, model_path)
                 
-                # Update last_checkpoint_val_loss to the most recent one since we just saved a checkpoint
+                # Update monitor's checkpoint loss tracker
                 if most_recent_val_loss is not None:
-                    last_checkpoint_val_loss = most_recent_val_loss
+                    monitor.update_checkpoint_loss(most_recent_val_loss)
             
             # Validation
             if step % val_freq == 0 and step > 0:
@@ -591,31 +586,14 @@ def main(cfg):
                     if monitor.should_stop:
                         break
                     
-                    # Check for loss spike
-                    if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
-                        if avg_val_loss > last_checkpoint_val_loss + val_loss_threshold:
-                             logger.warning(f"Validation loss spiked! {avg_val_loss:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
-                             consecutive_reloads += 1
-                             if consecutive_reloads >= 2:
-                                 logger.error(f"Training stopped: Validation loss spiked {consecutive_reloads} times consecutively.")
-                                 logger.error("This indicates the model is not learning effectively. Consider:")
-                                 logger.error("  - Reducing learning rate")
-                                 logger.error("  - Adjusting val_loss_threshold")
-                                 logger.error("  - Checking data quality")
-                                 logger.training_end(step)
-                                 return
-                             reload_needed = True
-                             break
-                        else:
-                            consecutive_reloads = 0  # Reset counter on successful validation
                     most_recent_val_loss = avg_val_loss
                     
                     model.train()
                     head.train()
             
-            if reload_needed:
+            if monitor.reload_needed:
                 break
-            
+
             if step >= max_steps:
                 # Save final model weights
                 final_path = os.path.join(save_dir, f"{model_name}.pt")
@@ -647,7 +625,7 @@ def main(cfg):
                 logger.training_end(step)
                 return
         
-        if reload_needed:
+        if monitor.reload_needed:
             # Reload from last checkpoint
             reload_loaders_1 = {
                 "enc": (model, model.load_state_dict),
@@ -665,8 +643,7 @@ def main(cfg):
                 logger,
                 state_dict_loaders=reload_loaders_1
             )
-            last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
-            most_recent_val_loss = last_checkpoint_val_loss
+            most_recent_val_loss = None
             
             # Recalculate positions
             start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
@@ -746,18 +723,13 @@ def main(cfg):
             avg_val_loss = val_loss_sum / max(val_count, 1)
             logger.epoch_end(epoch, train_loss=None, val_loss=avg_val_loss)
             
-            # Check for loss spike
-            if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
-                if avg_val_loss > last_checkpoint_val_loss + val_loss_threshold:
-                     logger.warning(f"Validation loss spiked! {avg_val_loss:.4f} > {last_checkpoint_val_loss:.4f} + {val_loss_threshold}. Reloading from last checkpoint...")
-                     reload_needed = True
             most_recent_val_loss = avg_val_loss
             
             model.train()
             if head is not None:
                 head.train()
         
-        if reload_needed:
+        if monitor.reload_needed:
             # Reload from last checkpoint
             reload_loaders_2 = {
                 "enc": (model, model.load_state_dict),
@@ -775,8 +747,7 @@ def main(cfg):
                 logger,
                 state_dict_loaders=reload_loaders_2
             )
-            last_checkpoint_val_loss = metadata.get("last_checkpoint_val_loss", None) if metadata else None
-            most_recent_val_loss = last_checkpoint_val_loss
+            most_recent_val_loss = None
             
             # Recalculate positions
             start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
@@ -817,15 +788,15 @@ def main(cfg):
             "vocab_size": vocab_size_dynamic,
             "max_text_len": max_text_len_dynamic,
             "max_mel_length": max_mel_length_dynamic,
-            "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else last_checkpoint_val_loss,
+            "last_checkpoint_val_loss": most_recent_val_loss if most_recent_val_loss is not None else monitor.last_checkpoint_val_loss,
         }
         save_training_metadata(save_dir, model_name, training_metadata)
         logger.info(f"Model saved to {save_dir} at end of epoch {epoch}, step {step}")
         
-        # Update last_checkpoint_val_loss
+        # Update monitor's checkpoint loss tracker
         if most_recent_val_loss is not None:
-            last_checkpoint_val_loss = most_recent_val_loss
-        
+            monitor.update_checkpoint_loss(most_recent_val_loss)
+
         # Check if we've reached max_steps after epoch completion
         if step >= max_steps:
             logger.info(f"Reached max_steps={max_steps}. Training complete.")
