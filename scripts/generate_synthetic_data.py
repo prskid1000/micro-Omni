@@ -26,182 +26,288 @@ from pathlib import Path
 # ============================================================
 
 def generate_text_corpus(output_path: str, count: int = 5000):
-    """Generate diverse text corpus using CFG-like rules + Faker-style entities."""
-    print(f"Generating {count} text samples...")
+    """Generate diverse text: 40% math/numeric, 30% knowledge facts, 30% grammar sentences."""
+    print(f"Generating {count} text samples (math + knowledge + grammar)...")
 
-    # Rich vocabulary pools
-    subjects = [
-        "the cat", "a dog", "the bird", "my friend", "the teacher", "a student",
-        "the doctor", "a child", "the farmer", "an artist", "the scientist",
-        "a musician", "the chef", "a pilot", "the dancer", "a writer",
-        "the old man", "a young woman", "the little boy", "a tall girl",
-        "the clever fox", "a brave knight", "the wise owl", "a tiny mouse",
-        "the happy family", "a busy worker", "the kind nurse", "a strong lion",
-        "the quiet librarian", "a fast runner", "the gentle giant", "a curious baby"
-    ]
+    # ============ MATH & NUMERIC (40%) ============
 
-    verbs_intransitive = [
-        "runs", "walks", "sleeps", "sings", "dances", "jumps", "swims",
-        "flies", "laughs", "cries", "smiles", "thinks", "waits", "reads",
-        "writes", "plays", "works", "rests", "dreams", "travels"
-    ]
+    def gen_addition():
+        a, b = random.randint(0, 100), random.randint(0, 100)
+        return f"{a} + {b} = {a + b}."
 
-    verbs_transitive = [
-        "sees", "likes", "loves", "finds", "takes", "gives", "makes",
-        "builds", "reads", "writes", "draws", "paints", "cooks", "eats",
-        "drinks", "carries", "holds", "opens", "closes", "breaks"
-    ]
+    def gen_subtraction():
+        a = random.randint(0, 100); b = random.randint(0, a)
+        return f"{a} - {b} = {a - b}."
 
-    objects = [
-        "a book", "the ball", "some food", "a letter", "the door", "a picture",
-        "the cake", "a song", "the box", "a flower", "the key", "a map",
-        "the bridge", "a boat", "the house", "a garden", "the window",
-        "a present", "the clock", "a puzzle", "the hat", "a coin", "the rope"
-    ]
+    def gen_multiplication():
+        a, b = random.randint(0, 12), random.randint(0, 12)
+        return f"{a} x {b} = {a * b}."
 
-    locations = [
-        "in the park", "at home", "near the river", "on the hill", "by the lake",
-        "in the garden", "at school", "in the city", "on the farm", "near the forest",
-        "at the market", "in the kitchen", "on the roof", "by the sea", "in the cave",
-        "at the library", "in the hospital", "on the road", "near the castle"
-    ]
+    def gen_division():
+        b = random.randint(1, 12); r = random.randint(0, 12); a = b * r
+        return f"{a} / {b} = {r}."
 
-    times = [
-        "today", "yesterday", "every morning", "at night", "in the summer",
-        "on Monday", "last week", "this afternoon", "before sunrise", "after lunch",
-        "during winter", "at noon", "in the evening", "early morning", "late at night"
-    ]
-
-    adjectives = [
-        "big", "small", "red", "blue", "green", "old", "new", "fast", "slow",
-        "bright", "dark", "warm", "cold", "soft", "hard", "sweet", "loud",
-        "quiet", "tall", "short", "heavy", "light", "clean", "dirty", "sharp"
-    ]
-
-    conjunctions = ["and", "but", "so", "because", "although", "when", "while", "if"]
-
-    adverbs = [
-        "quickly", "slowly", "carefully", "happily", "sadly", "loudly", "quietly",
-        "always", "never", "often", "sometimes", "suddenly", "gently", "bravely"
-    ]
-
-    # Sentence templates (30+ patterns for diversity)
-    def gen_simple_svo():
-        return f"{random.choice(subjects)} {random.choice(verbs_transitive)} {random.choice(objects)}."
-
-    def gen_simple_sv_loc():
-        return f"{random.choice(subjects)} {random.choice(verbs_intransitive)} {random.choice(locations)}."
-
-    def gen_adverb():
-        return f"{random.choice(subjects)} {random.choice(adverbs)} {random.choice(verbs_intransitive)} {random.choice(locations)}."
-
-    def gen_time():
-        return f"{random.choice(times)}, {random.choice(subjects)} {random.choice(verbs_intransitive)}."
-
-    def gen_compound():
-        s1 = f"{random.choice(subjects)} {random.choice(verbs_intransitive)}"
-        s2 = f"{random.choice(subjects)} {random.choice(verbs_intransitive)}"
-        return f"{s1} {random.choice(conjunctions)} {s2}."
-
-    def gen_complex():
-        s1 = f"{random.choice(subjects)} {random.choice(verbs_transitive)} {random.choice(objects)}"
-        s2 = f"{random.choice(subjects)} {random.choice(verbs_intransitive)} {random.choice(locations)}"
-        return f"{random.choice(conjunctions).capitalize()} {s2}, {s1}."
-
-    def gen_question():
-        templates = [
-            f"Does {random.choice(subjects)} {random.choice(verbs_intransitive)}?",
-            f"Where does {random.choice(subjects)} {random.choice(verbs_intransitive)}?",
-            f"What does {random.choice(subjects)} {random.choice(verbs_transitive)}?",
-            f"Can {random.choice(subjects)} {random.choice(verbs_intransitive)} {random.choice(locations)}?",
-            f"Why does {random.choice(subjects)} {random.choice(verbs_intransitive)} {random.choice(adverbs)}?",
-            f"How many {random.choice(['cats', 'dogs', 'birds', 'fish', 'trees'])} are {random.choice(locations)}?",
-        ]
-        return random.choice(templates)
-
-    def gen_imperative():
-        templates = [
-            f"Please {random.choice(verbs_intransitive)} {random.choice(locations)}.",
-            f"Do not {random.choice(verbs_intransitive)} {random.choice(locations)}.",
-            f"Try to {random.choice(verbs_transitive)} {random.choice(objects)} {random.choice(adverbs)}.",
-            f"Always {random.choice(verbs_intransitive)} {random.choice(adverbs)}.",
-        ]
-        return random.choice(templates)
-
-    def gen_comparison():
-        a, b = random.sample(subjects, 2)
-        adj = random.choice(adjectives)
-        return f"{a} is more {adj} than {b}."
+    def gen_word_math():
+        a, b = random.randint(1, 50), random.randint(1, 50)
+        return random.choice([
+            f"{a} plus {b} equals {a + b}.",
+            f"{a} minus {b} equals {abs(a - b)}.",
+            f"{a} times {b} equals {a * b}.",
+        ])
 
     def gen_counting():
-        n = random.randint(1, 20)
-        nums = " ".join(str(i) for i in range(1, n + 1))
-        return f"Count: {nums}."
+        start = random.randint(0, 50)
+        step = random.choice([1, 2, 3, 5, 10])
+        nums = [str(start + i * step) for i in range(random.randint(4, 8))]
+        return f"Count by {step}: {', '.join(nums)}."
 
-    def gen_math():
-        a, b = random.randint(1, 50), random.randint(1, 50)
-        ops = [("+", a + b), ("-", abs(a - b)), ("times", a * b)]
-        op, result = random.choice(ops)
-        return f"{a} {op} {b} is {result}."
+    def gen_comparison_num():
+        a, b = random.randint(1, 100), random.randint(1, 100)
+        if a > b: return f"{a} is greater than {b}."
+        elif a < b: return f"{a} is less than {b}."
+        else: return f"{a} is equal to {b}."
 
-    def gen_list():
-        items = random.sample(["apples", "bread", "milk", "eggs", "rice", "fish",
-                               "cheese", "water", "salt", "sugar", "butter", "flour",
-                               "meat", "tea", "coffee", "juice", "soup", "cake"], random.randint(3, 6))
-        return f"I need {', '.join(items[:-1])} and {items[-1]}."
+    def gen_even_odd():
+        n = random.randint(1, 100)
+        return f"{n} is {'even' if n % 2 == 0 else 'odd'}."
+
+    def gen_ordinal():
+        ords = {1:"first",2:"second",3:"third",4:"fourth",5:"fifth",6:"sixth",
+                7:"seventh",8:"eighth",9:"ninth",10:"tenth",11:"eleventh",12:"twelfth"}
+        n = random.randint(1, 12)
+        return f"The {ords[n]} number is {n}."
+
+    def gen_word_problem():
+        name = random.choice(["Alice","Bob","Sam","Emma","Tom","Mary","Liam","Zara"])
+        item = random.choice(["apples","books","coins","eggs","pencils","stickers"])
+        a, b = random.randint(3, 20), random.randint(1, 10)
+        return random.choice([
+            f"{name} has {a} {item} and gets {b} more. Now {name} has {a+b} {item}.",
+            f"{name} has {a} {item} and gives {min(b,a)} away. Now {name} has {a-min(b,a)} {item}.",
+            f"Each bag has {a} {item}. There are {b} bags. That is {a*b} {item} in total.",
+        ])
+
+    def gen_fraction():
+        n, d = random.randint(1, 9), random.randint(2, 10)
+        halves = {2:"half",3:"third",4:"quarter",5:"fifth",6:"sixth",7:"seventh",8:"eighth",9:"ninth",10:"tenth"}
+        return f"{n}/{d} means {n} {halves.get(d,f'{d}th')}{'s' if n>1 else ''}."
+
+    def gen_percentage():
+        p, w = random.randint(1, 100), random.choice([10,20,50,100])
+        return f"{p} out of {w} is {round(p/w*100,1)} percent."
+
+    def gen_sequence():
+        return random.choice([
+            f"Square numbers: {', '.join(str(i*i) for i in range(1,7))}.",
+            f"Powers of 2: {', '.join(str(2**i) for i in range(8))}.",
+            f"Fibonacci: 1, 1, 2, 3, 5, 8, 13, 21.",
+            f"Triangular numbers: 1, 3, 6, 10, 15, 21.",
+            f"Prime numbers: 2, 3, 5, 7, 11, 13, 17, 19.",
+        ])
+
+    def gen_geometry():
+        return random.choice([
+            f"A triangle has 3 sides and 3 angles. The angles add up to 180 degrees.",
+            f"A square has 4 equal sides. Its area is side times side.",
+            f"A rectangle with length {(l:=random.randint(2,10))} and width {(w:=random.randint(2,10))} has area {l*w}.",
+            f"A circle with radius {(r:=random.randint(1,10))} has diameter {2*r}.",
+            f"The perimeter of a square with side {(s:=random.randint(1,10))} is {4*s}.",
+            f"A pentagon has 5 sides. A hexagon has 6 sides. An octagon has 8 sides.",
+        ])
+
+    def gen_time_math():
+        h, m = random.randint(1,12), random.choice([0,15,30,45])
+        ah = random.randint(1,5)
+        return f"It is {h}:{m:02d}. In {ah} hours it will be {(h+ah-1)%12+1}:{m:02d}."
+
+    # ============ KNOWLEDGE & FACTS (30%) ============
+
+    def gen_science():
+        return random.choice([
+            "Water boils at 100 degrees Celsius.", "Ice melts at 0 degrees Celsius.",
+            "The sun is a star at the center of our solar system.", "The moon orbits the earth.",
+            "Light travels faster than sound.", "Sound travels through air as waves.",
+            "Plants make food using sunlight. This is called photosynthesis.",
+            "The earth rotates once every 24 hours.", "The earth orbits the sun once a year.",
+            "Gravity pulls objects toward the ground.", "Magnets attract iron and steel.",
+            "Electricity flows through conductors like copper wire.",
+            "Atoms are the building blocks of matter.", "Water is made of hydrogen and oxygen.",
+            "The human body has 206 bones.", "The heart pumps blood through the body.",
+            "The brain controls thinking and movement.", "Muscles help the body move.",
+            "Trees produce oxygen and absorb carbon dioxide.",
+            "Bees pollinate flowers and make honey.", "Spiders have 8 legs. Insects have 6.",
+        ])
+
+    def gen_geography():
+        return random.choice([
+            "The earth has 7 continents and 5 oceans.", "Asia is the largest continent.",
+            "The Pacific Ocean is the largest ocean.", "Mount Everest is the tallest mountain.",
+            "The Nile is one of the longest rivers in the world.",
+            "The Amazon rainforest is the largest tropical forest.",
+            "Deserts are dry places with very little rain.", "Islands are land surrounded by water.",
+            "Volcanoes can erupt and release hot lava.", "Glaciers are large bodies of moving ice.",
+            "The North Pole is at the top of the earth. The South Pole is at the bottom.",
+            "Rivers flow from mountains to the sea.", "Lakes are bodies of water surrounded by land.",
+        ])
+
+    def gen_definition():
+        return random.choice([
+            "A book is a collection of written pages bound together.",
+            "A teacher is a person who helps students learn new things.",
+            "A doctor is a person who treats people when they are sick.",
+            "A school is a place where children go to learn.",
+            "A library is a building where people can borrow books.",
+            "A hospital is a place where sick people receive care.",
+            "A farm is land where crops are grown and animals are raised.",
+            "A bridge is a structure built to cross over water or a valley.",
+            "A clock is a device used to measure and show the time.",
+            "A map is a drawing that shows where places are located.",
+            "A garden is a piece of ground where flowers and plants grow.",
+            "An island is a piece of land completely surrounded by water.",
+        ])
+
+    def gen_cause_effect():
+        c, e = random.choice([
+            ("it rains", "the ground gets wet"), ("the sun sets", "the sky becomes dark"),
+            ("you study hard", "you learn more"), ("you eat healthy food", "your body stays strong"),
+            ("you exercise daily", "you become more fit"), ("ice is heated", "it melts into water"),
+            ("you plant a seed and water it", "a plant begins to grow"),
+            ("the wind blows hard", "the trees sway back and forth"),
+            ("you turn off the light", "the room becomes dark"),
+            ("winter comes", "the temperature drops and it gets cold"),
+        ])
+        return random.choice([f"When {c}, {e}.", f"If {c}, then {e}.", f"Because {c}, {e}."])
+
+    def gen_qa():
+        q, a = random.choice([
+            ("What color is the sky?", "The sky is blue."),
+            ("How many legs does a dog have?", "A dog has four legs."),
+            ("How many days are in a week?", "There are seven days in a week."),
+            ("How many months are in a year?", "There are twelve months in a year."),
+            ("What do plants need to grow?", "Plants need water, sunlight, and soil."),
+            ("How many sides does a triangle have?", "A triangle has three sides."),
+            ("What is the opposite of hot?", "The opposite of hot is cold."),
+            ("Where does the sun rise?", "The sun rises in the east."),
+            ("What season comes after winter?", "Spring comes after winter."),
+            ("What is the largest planet?", "Jupiter is the largest planet in our solar system."),
+            ("How many hours are in a day?", "There are twenty-four hours in a day."),
+            ("What is the boiling point of water?", "Water boils at one hundred degrees Celsius."),
+        ])
+        return f"{q} {a}"
+
+    # ============ GRAMMAR & SENTENCES (30%) ============
+
+    subjects_s = [  # singular (verb takes 's')
+        "the cat", "a dog", "the bird", "the teacher", "a student", "the doctor",
+        "the farmer", "the scientist", "the chef", "the dancer", "the old man",
+        "a young woman", "the little boy", "the wise owl", "a brave knight",
+    ]
+    subjects_p = [  # plural (verb takes base form)
+        "the cats", "two dogs", "the birds", "the teachers", "some students",
+        "the children", "many farmers", "the scientists", "three friends",
+    ]
+    # (base_form, third_person_s)
+    verbs_i = [
+        ("run","runs"), ("walk","walks"), ("sleep","sleeps"), ("sing","sings"),
+        ("dance","dances"), ("jump","jumps"), ("swim","swims"), ("fly","flies"),
+        ("laugh","laughs"), ("smile","smiles"), ("think","thinks"), ("read","reads"),
+        ("play","plays"), ("work","works"), ("dream","dreams"), ("travel","travels"),
+    ]
+    verbs_t = [
+        ("see","sees"), ("like","likes"), ("love","loves"), ("find","finds"),
+        ("make","makes"), ("build","builds"), ("draw","draws"), ("cook","cooks"),
+        ("eat","eats"), ("carry","carries"), ("hold","holds"), ("open","opens"),
+    ]
+    objects = [
+        "a book", "the ball", "some food", "a letter", "the door", "a picture",
+        "the cake", "a flower", "the key", "a map", "the house", "a garden",
+    ]
+    locations = [
+        "in the park", "at home", "near the river", "on the hill", "by the lake",
+        "at school", "in the city", "on the farm", "at the library", "in the garden",
+    ]
+    adjectives = [
+        "big", "small", "red", "blue", "green", "old", "new", "fast", "slow",
+        "bright", "warm", "cold", "soft", "tall", "short", "heavy", "light",
+    ]
+    adverbs = ["quickly","slowly","carefully","happily","quietly","gently","always","often"]
+
+    def gen_sv():
+        if random.random() < 0.5:
+            s = random.choice(subjects_s); _, v = random.choice(verbs_i)
+        else:
+            s = random.choice(subjects_p); v, _ = random.choice(verbs_i)
+        return f"{s.capitalize()} {v} {random.choice(locations)}."
+
+    def gen_svo():
+        if random.random() < 0.5:
+            s = random.choice(subjects_s); _, v = random.choice(verbs_t)
+        else:
+            s = random.choice(subjects_p); v, _ = random.choice(verbs_t)
+        return f"{s.capitalize()} {v} {random.choice(objects)}."
+
+    def gen_adverb_sent():
+        s = random.choice(subjects_s); _, v = random.choice(verbs_i)
+        return f"{s.capitalize()} {random.choice(adverbs)} {v} {random.choice(locations)}."
+
+    def gen_compound_sent():
+        s1 = random.choice(subjects_s); _, v1 = random.choice(verbs_i)
+        s2 = random.choice(subjects_s); _, v2 = random.choice(verbs_i)
+        conj = random.choice(["and", "but", "so", "while"])
+        return f"{s1.capitalize()} {v1} {conj} {s2} {v2}."
 
     def gen_description():
-        subj = random.choice(subjects)
-        adjs = random.sample(adjectives, random.randint(1, 3))
-        return f"{subj} is {' and '.join(adjs)}."
+        s = random.choice(subjects_s)
+        a1, a2 = random.sample(adjectives, 2)
+        return f"{s.capitalize()} is {a1} and {a2}."
 
     def gen_possessive():
-        owner = random.choice(["my", "your", "his", "her", "their", "our"])
-        item = random.choice(["house", "car", "book", "garden", "friend", "dog", "idea", "plan"])
+        owner = random.choice(["My","Your","His","Her","Their","Our"])
+        item = random.choice(["house","car","book","garden","idea","plan","cat","dog"])
         adj = random.choice(adjectives)
-        return f"{owner.capitalize()} {item} is very {adj}."
+        return f"{owner} {item} is very {adj}."
 
     def gen_there_is():
-        n = random.randint(1, 10)
-        thing = random.choice(["cats", "birds", "trees", "houses", "books", "flowers", "stars", "clouds"])
+        n = random.randint(2, 10)
+        thing = random.choice(["cats","birds","trees","houses","books","flowers","stars"])
         loc = random.choice(locations)
         return f"There are {n} {thing} {loc}."
 
-    def gen_dialogue():
-        names = ["Alice", "Bob", "Sam", "Emma", "John", "Mary", "Tom", "Lisa"]
-        n1, n2 = random.sample(names, 2)
-        phrases = [
-            f'{n1} said "hello" to {n2}.',
-            f'{n1} asked {n2} to {random.choice(verbs_intransitive)}.',
-            f'{n1} and {n2} {random.choice(verbs_intransitive)} together.',
-            f'{n1} told {n2} about {random.choice(objects)}.',
-        ]
-        return random.choice(phrases)
+    def gen_list_sent():
+        items = random.sample(["apples","bread","milk","eggs","rice","cheese","tea","soup","fish","cake"], random.randint(3,5))
+        return f"I need {', '.join(items[:-1])} and {items[-1]}."
 
-    def gen_conditional():
-        return f"If {random.choice(subjects)} {random.choice(verbs_intransitive)}, then {random.choice(subjects)} will {random.choice(verbs_intransitive)} too."
+    # ============ WEIGHTED GENERATOR POOLS ============
 
-    def gen_sequence():
-        steps = random.randint(2, 4)
-        actions = random.sample(verbs_intransitive, steps)
-        subj = random.choice(subjects)
-        seq = ", then ".join(f"{a}s" for a in actions)
-        return f"First {subj} {seq}."
-
-    generators = [
-        gen_simple_svo, gen_simple_sv_loc, gen_adverb, gen_time,
-        gen_compound, gen_complex, gen_question, gen_imperative,
-        gen_comparison, gen_counting, gen_math, gen_list,
-        gen_description, gen_possessive, gen_there_is, gen_dialogue,
-        gen_conditional, gen_sequence,
+    math_gens = [
+        gen_addition, gen_subtraction, gen_multiplication, gen_division,
+        gen_word_math, gen_counting, gen_comparison_num, gen_even_odd,
+        gen_ordinal, gen_word_problem, gen_fraction, gen_percentage,
+        gen_sequence, gen_geometry, gen_time_math,
     ]
+
+    knowledge_gens = [
+        gen_science, gen_geography, gen_definition, gen_cause_effect, gen_qa,
+    ]
+
+    grammar_gens = [
+        gen_sv, gen_svo, gen_adverb_sent, gen_compound_sent,
+        gen_description, gen_possessive, gen_there_is, gen_list_sent,
+    ]
+
+    # Weighted: 40% math, 30% knowledge, 30% grammar
+    def pick_generator():
+        r = random.random()
+        if r < 0.4: return random.choice(math_gens)
+        elif r < 0.7: return random.choice(knowledge_gens)
+        else: return random.choice(grammar_gens)
+
+    generators = None  # Not used — we use pick_generator()
 
     sentences = set()
     while len(sentences) < count:
-        gen = random.choice(generators)
+        gen = pick_generator()
         sent = gen()
-        # Capitalize first letter, basic cleanup
-        sent = sent[0].upper() + sent[1:]
         sentences.add(sent)
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -608,16 +714,16 @@ def main():
         generate_audio_data(
             "data/audio/production_asr.csv",
             "data/audio/production_tts.csv",
-            "data/audio",
+            "data/audio/wav",
             texts,
             count
         )
 
     if args.all or args.images:
-        generate_images("data/images", "data/images/production_annotations.json", count)
+        generate_images("data/images/images", "data/images/production_annotations.json", count)
 
     if args.all or args.ocr:
-        generate_ocr_data("data/ocr/production_ocr.csv", "data/ocr", count)
+        generate_ocr_data("data/ocr/production_ocr.csv", "data/ocr/images", count)
 
     print("\nDone! Generated data summary:")
     for p in ["data/text/production_corpus.txt", "data/audio/production_asr.csv",
