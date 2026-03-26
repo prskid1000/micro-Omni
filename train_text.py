@@ -22,6 +22,10 @@ def main(cfg):
     device = setup_cuda()
     save_dir = cfg.get("save_dir", "checkpoints/thinker_tiny")
     os.makedirs(save_dir, exist_ok=True)
+    # Save config to checkpoint dir so it's self-contained
+    import json as _json
+    with open(os.path.join(save_dir, "config.json"), "w") as _f:
+        _json.dump(cfg, _f, indent=2)
     train_text = cfg.get("train_text", "data/text/production_corpus.txt")
     vocab_size = cfg.get("vocab_size", 32000)
     

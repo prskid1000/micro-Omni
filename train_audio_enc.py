@@ -16,6 +16,10 @@ def main(cfg):
     device = setup_cuda()
     save_dir = cfg.get("save_dir", "checkpoints/audio_enc_tiny")
     os.makedirs(save_dir, exist_ok=True)
+    # Save config to checkpoint dir so it's self-contained
+    import json as _json
+    with open(os.path.join(save_dir, "config.json"), "w") as _f:
+        _json.dump(cfg, _f, indent=2)
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("mel_bins", 128)
     downsample_factor = cfg.get("downsample_time", 8)  # 8x for 12.5 Hz (16000/160/8 = 12.5)

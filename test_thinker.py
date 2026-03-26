@@ -26,22 +26,17 @@ def load_model_and_tokenizer(checkpoint_dir, device="cuda"):
     
     print(f"Loading checkpoint from: {checkpoint_path}")
     
-    # Get config from checkpoint or load from config file
+    # Config must be in checkpoint dir (saved during training)
     if "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
-        # Load config from JSON file based on checkpoint directory
-        checkpoint_name = os.path.basename(checkpoint_dir)
-        config_path = f"configs/{checkpoint_name}.json"
-        
+        config_path = os.path.join(checkpoint_dir, "config.json")
         if os.path.exists(config_path):
             print(f"Loading config from: {config_path}")
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
         else:
-            raise FileNotFoundError(
-                f"Config not found in checkpoint and config file not found: {config_path}"
-            )
+            raise FileNotFoundError(f"Config not found: {config_path}. Re-run training to generate it.")
     
     # Load tokenizer
     tokenizer_path = os.path.join(checkpoint_dir, "tokenizer.model")

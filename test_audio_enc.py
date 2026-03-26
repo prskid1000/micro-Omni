@@ -203,13 +203,13 @@ def load_model_and_head(checkpoint_dir, device="cuda", config_path=None):
     elif "config" in checkpoint:
         cfg = checkpoint["config"]
     else:
-        # Load config from JSON file based on checkpoint directory
-        checkpoint_name = os.path.basename(checkpoint_dir)
-        candidates = [
-            f"configs/{checkpoint_name}.json",
-            os.path.join(checkpoint_dir, "config.json"),
-            "configs/audio_enc_tiny.json",
-        ]
+        config_path = os.path.join(checkpoint_dir, "config.json")
+        if os.path.exists(config_path):
+            print(f"Loading config from: {config_path}")
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+        else:
+            raise FileNotFoundError(f"Config not found: {config_path}. Re-run training to generate it.")
         cfg = None
         for candidate in candidates:
             if os.path.exists(candidate):
