@@ -20,6 +20,8 @@ import random
 import struct
 import wave
 from pathlib import Path
+import time
+import multiprocessing as mp
 
 # ============================================================
 # 1. TEXT CORPUS GENERATOR
@@ -481,54 +483,147 @@ def _init_tts_engine():
     return engine
 
 
-def generate_audio_data(asr_csv: str, tts_csv: str, audio_dir: str, texts: list, count: int = 5000):
-    """Generate real speech audio using pyttsx3 (Windows SAPI5 voices)."""
+def _tts_synthesize_one(
+    i: int,
+    text: str,
+    wav_path: str,
+    voice_ids: list[str],
+    volume: float,
+    base_rate: int,
+    rate_step: int,
+):
+    """Worker process: synthesize exactly one file via pyttsx3/SAPI5."""
+    import pyttsx3
+
+    # Skip if already generated (supports resume)
+    if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+        return
+
+    engine = pyttsx3.init()
+    engine.setProperty("volume", volume)
+
+    voice_id = voice_ids[i % len(voice_ids)]
+    engine.setProperty("voice", voice_id)
+
+    rate = base_rate + (i % 5) * rate_step
+    engine.setProperty("rate", rate)
+
+    engine.save_to_file(text, wav_path)
+    engine.runAndWait()
+
+    try:
+        engine.stop()
+    except Exception:
+        pass
+
+
+def generate_audio_data(
+    asr_csv: str,
+    tts_csv: str,
+    audio_dir: str,
+    texts: list,
+    count: int = 5000,
+    *,
+    per_file_timeout_sec: int = 30,
+):
+    """Generate speech audio using pyttsx3 (Windows SAPI5 voices), with hang-safe batching."""
     import pyttsx3
     print(f"Generating {count} audio samples with pyttsx3 TTS...")
 
     os.makedirs(audio_dir, exist_ok=True)
-    engine = pyttsx3.init()
-    voices = engine.getProperty('voices')
-    print(f"  Available voices: {len(voices)}")
-    for v in voices:
-        print(f"    {v.id.split(chr(92))[-1]}")
 
-    engine.setProperty('rate', 150)
-    engine.setProperty('volume', 0.9)
+    # Probe voices in main process (fast + reliable)
+    probe = pyttsx3.init()
+    voices = probe.getProperty("voices") or []
+    voice_ids = [v.id for v in voices]
+    print(f"  Available voices: {len(voice_ids)}")
+    for vid in voice_ids:
+        try:
+            print(f"    {vid.split(chr(92))[-1]}")
+        except Exception:
+            print(f"    {vid}")
+    try:
+        probe.stop()
+    except Exception:
+        pass
+
+    if not voice_ids:
+        raise RuntimeError("pyttsx3 returned no voices; cannot generate audio on this system.")
 
     # Use short sentences for audio (< 60 chars for reasonable duration)
     short_texts = [t for t in texts if 10 < len(t) < 60]
+    if not short_texts:
+        raise RuntimeError("No short texts (10<len<60) available for audio generation.")
     if len(short_texts) < count:
         short_texts = short_texts * (count // len(short_texts) + 1)
     random.shuffle(short_texts)
     short_texts = short_texts[:count]
 
-    asr_rows = []
-    tts_rows = []
-
+    # Prepare deterministic paths
+    items: list[tuple[int, str, str]] = []
     for i, text in enumerate(short_texts):
-        # Cycle through voices
-        voice_idx = i % len(voices)
-        engine.setProperty('voice', voices[voice_idx].id)
-
-        # Vary speaking rate slightly for diversity
-        rate = 130 + (i % 5) * 10  # 130-170 wpm
-        engine.setProperty('rate', rate)
-
         wav_path = os.path.join(audio_dir, f"audio_{i:05d}.wav")
-        engine.save_to_file(text, wav_path)
+        items.append((i, text, wav_path))
 
-        asr_rows.append((wav_path, text))
-        tts_rows.append((text, wav_path))
+    # Synthesize file-by-file in isolated processes so we can terminate on hangs
+    total = len(items)
+    start_t = time.time()
 
-        # pyttsx3 queues commands — run in batches to avoid memory buildup
-        if (i + 1) % 100 == 0:
-            engine.runAndWait()
-            print(f"  Generated {i + 1}/{count} audio files")
+    # Ensure spawn on Windows (safe with pyttsx3/COM)
+    try:
+        mp.set_start_method("spawn", force=False)
+    except RuntimeError:
+        pass
 
-    # Flush remaining
-    engine.runAndWait()
-    print(f"  Generated {count}/{count} audio files")
+    last_report_done = -1
+    hung = 0
+    for i, text, wav_path in items:
+        if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+            continue
+
+        p = mp.Process(
+            target=_tts_synthesize_one,
+            args=(i, text, wav_path, voice_ids, 0.9, 130, 10),
+            daemon=True,
+        )
+        p.start()
+        p.join(timeout=per_file_timeout_sec)
+
+        if p.is_alive():
+            hung += 1
+            p.terminate()
+            p.join(timeout=5)
+            # Leave a placeholder empty file only if it doesn't exist; helps spot gaps
+            try:
+                if not os.path.exists(wav_path):
+                    Path(wav_path).touch()
+            except Exception:
+                pass
+            if hung <= 5 or hung % 25 == 0:
+                print(
+                    f"  Warning: TTS hung on index {i} (killed after {per_file_timeout_sec}s). "
+                    f"Hung so far: {hung}"
+                )
+
+        # Live progress after each attempt (cheap scan)
+        done = 0
+        for _, _, wp in items:
+            if os.path.exists(wp) and os.path.getsize(wp) > 0:
+                done += 1
+        if done != last_report_done:
+            elapsed = int(time.time() - start_t)
+            print(f"  Generated {done}/{total} audio files (elapsed {elapsed}s)")
+            last_report_done = done
+
+    # Final progress
+    done = 0
+    for _, _, wav_path in items:
+        if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+            done += 1
+    elapsed = int(time.time() - start_t)
+    print(f"  Generated {done}/{total} audio files (elapsed {elapsed}s)")
+    if hung:
+        print(f"  Note: {hung} items hung and were skipped; rerun to retry those indices.")
 
     # Convert to 16kHz mono if needed (pyttsx3 may output 22050Hz)
     try:
@@ -567,17 +662,33 @@ def generate_audio_data(asr_csv: str, tts_csv: str, audio_dir: str, texts: list,
     with open(asr_csv, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["wav", "text"])
-        writer.writerows(asr_rows)
+        # Write rows for files that exist (supports partial runs/resume)
+        for i, text, wav_path in items:
+            if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+                writer.writerow([wav_path, text])
 
     # Write TTS CSV (text,wav)
     os.makedirs(os.path.dirname(tts_csv) or ".", exist_ok=True)
     with open(tts_csv, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["text", "wav"])
-        writer.writerows(tts_rows)
+        for i, text, wav_path in items:
+            if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+                writer.writerow([text, wav_path])
 
-    print(f"  ASR CSV: {asr_csv} ({len(asr_rows)} rows)")
-    print(f"  TTS CSV: {tts_csv} ({len(tts_rows)} rows)")
+    # Report counts from CSVs (excluding header)
+    try:
+        with open(asr_csv, encoding="utf-8") as f:
+            asr_n = sum(1 for _ in f) - 1
+    except Exception:
+        asr_n = "?"
+    try:
+        with open(tts_csv, encoding="utf-8") as f:
+            tts_n = sum(1 for _ in f) - 1
+    except Exception:
+        tts_n = "?"
+    print(f"  ASR CSV: {asr_csv} ({asr_n} rows)")
+    print(f"  TTS CSV: {tts_csv} ({tts_n} rows)")
 
 
 # ============================================================
