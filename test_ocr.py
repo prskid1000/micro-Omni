@@ -106,17 +106,7 @@ def load_model_and_vocab(checkpoint_dir, device="cuda", config_path=None):
                 cfg = json.load(f)
         else:
             raise FileNotFoundError(f"Config not found: {config_path}. Re-run training to generate it.")
-        cfg = None
-        for candidate in candidates:
-            if os.path.exists(candidate):
-                print(f"Loading config from: {candidate}")
-                with open(candidate, 'r') as f:
-                    cfg = json.load(f)
-                break
-        if cfg is None:
-            raise FileNotFoundError(
-                f"Config not found in checkpoint and no config file found. Tried: {candidates}"
-            )
+
     
     # Get vocabulary - try checkpoint first, then metadata file
     if "char_to_idx" in checkpoint and "idx_to_char" in checkpoint:

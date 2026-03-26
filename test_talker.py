@@ -41,17 +41,7 @@ def load_model_and_codec(checkpoint_dir, device="cuda", config_path=None):
                 cfg = json.load(f)
         else:
             raise FileNotFoundError(f"Config not found: {config_path}. Re-run training to generate it.")
-        cfg = None
-        for candidate in candidates:
-            if os.path.exists(candidate):
-                print(f"Loading config from: {candidate}")
-                with open(candidate, 'r') as f:
-                    cfg = json.load(f)
-                break
-        if cfg is None:
-            raise FileNotFoundError(
-                f"Config not found in checkpoint and no config file found. Tried: {candidates}"
-            )
+
     
     codebooks = cfg.get("codebooks", 2)
     codebook_size = cfg.get("codebook_size", 128)
