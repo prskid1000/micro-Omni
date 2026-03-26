@@ -52,22 +52,20 @@ The Talker is a **decoder-only transformer** that reuses the exact same `Block` 
 
 The difference is in what it predicts: instead of next-word tokens from a 32,000-word vocabulary, it predicts pairs of RVQ codebook indices from two codebooks of 128 entries each.
 
-### Configuration (from `configs/talker_tiny.json`)
+### Configuration (from `configs/synthetic_talker.json`)
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `d_model` | 384 | Hidden dimension (matches Thinker) |
-| `n_layers` | 8 | Transformer blocks |
-| `n_heads` | 6 | Attention heads |
-| `d_ff` | 1,536 | Feedforward dimension |
+| `d_model` | 128 | Hidden dimension |
+| `n_layers` | 4 | Transformer blocks |
+| `n_heads` | 4 | Attention heads |
+| `d_ff` | 344 | Feedforward dimension (8/3 x d_model) |
 | `codebooks` | 2 | Number of RVQ levels |
 | `codebook_size` | 128 | Entries per codebook |
-| `use_gqa` | true | Grouped Query Attention (3 KV groups) |
+| `use_gqa` | false | Grouped Query Attention (off by default in synthetic) |
 | `use_swiglu` | true | SwiGLU activation |
 | `frame_rate` | 12.5 | Output frames per second |
 | `rope_theta` | 10,000 | RoPE frequency base |
-
-**Parameters**: ~2.24M
 
 ### How It Works
 
@@ -343,11 +341,11 @@ The mel reconstruction weight starts at 45.0 and decays to 22.5 after 10,000 ste
 
 ## File Reference
 
-- **Talker**: `omni/talker.py` -- `TalkerTiny` class (~2.24M params)
+- **Talker**: `omni/talker.py` -- `TalkerTiny` class
 - **Codec**: `omni/codec.py` -- `RVQ` class (~49K params)
 - **Vocoder**: `omni/codec.py` -- `HiFiGANVocoder`, `GriffinLimVocoder`, `NeuralVocoder`
 - **Discriminators**: `omni/codec.py` -- `MultiPeriodDiscriminator`, `MultiScaleDiscriminator`
-- **Configs**: `configs/talker_tiny.json`, `configs/vocoder_tiny.json`
+- **Configs**: `configs/synthetic_talker.json`, `configs/synthetic_vocoder.json`
 
 ---
 

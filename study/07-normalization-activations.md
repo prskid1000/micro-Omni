@@ -91,7 +91,7 @@ RMSNorm skips the mean computation entirely.
 - No mean subtraction = fewer operations
 - **15-20% faster** than LayerNorm in practice
 - Empirically works just as well for transformers
-- Used by LLaMA, Gemma, and **micro-Omni**
+- Used by modern LLMs and **micro-Omni**
 
 **Analogy:** LayerNorm is like centering a seesaw *and* adjusting its scale. RMSNorm just adjusts the scale — and it turns out the seesaw is usually close enough to centered already.
 
@@ -254,7 +254,7 @@ Output
 
 ## SwiGLU: The Gated Powerhouse
 
-**SwiGLU** (Swish-Gated Linear Unit) is the activation used in modern LLMs (LLaMA, PaLM, Gemma) and **micro-Omni**.
+**SwiGLU** (Swish-Gated Linear Unit) is the activation used in modern LLMs and **micro-Omni**.
 
 ### The Idea: Two Parallel Pathways Merged
 
@@ -354,7 +354,7 @@ For x near 0:          smooth curve (unlike ReLU's sharp corner)
 | ReLU | max(0, x) | Simple, fast | Dead neurons, sharp corner | Early CNNs |
 | GELU | x * Phi(x) | Smooth, no dead neurons | Slightly slower than ReLU | BERT, GPT-2 |
 | Swish | x * sigmoid(x) | Smooth, slight negative values | Slightly slower than ReLU | Inside SwiGLU |
-| SwiGLU | Swish(xW_g) * (xW_u) | Best empirical performance | 3 weight matrices instead of 2 | LLaMA, micro-Omni |
+| SwiGLU | Swish(xW_g) * (xW_u) | Best empirical performance | 3 weight matrices instead of 2 | Modern LLMs, micro-Omni |
 
 ---
 

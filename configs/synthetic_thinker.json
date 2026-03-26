@@ -20,7 +20,7 @@
   "lr": 0.001,
   "wd": 0.0,
   "warmup_steps": 50,
-  "max_steps": 3400,
+  "max_steps": 8400,
 
   "batch_size": 32,
   "gradient_accumulation_steps": 1,

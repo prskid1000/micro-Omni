@@ -195,13 +195,13 @@ output = tokens[:, 0, :]             # (1, d) ← extract CLS only
 | Image size | 224 x 224 |
 | Patch size | 16 x 16 |
 | Number of patches | 196 |
-| Model dimension (d) | 192 |
-| Transformer layers | 8 |
-| Attention heads | 3 |
-| Head dimension | 64 (192 / 3) |
-| Output | CLS token: shape (1, 192) |
+| Model dimension (d) | 128 |
+| Transformer layers | 4 |
+| Attention heads | 4 |
+| Head dimension | 32 (128 / 4) |
+| Output | CLS token: shape (1, 128) |
 
-Total sequence: 197 tokens (1 CLS + 196 patches), each of dimension 192.
+Total sequence: 197 tokens (1 CLS + 196 patches), each of dimension 128.
 
 ---
 
@@ -296,10 +296,10 @@ Total sequence: 197 tokens (1 CLS + 196 patches), each of dimension 192.
 
 | Concept | What It Does | micro-Omni Setting |
 |---------|-------------|-------------------|
-| Patch embedding | Splits image into 16x16 patches, projects to vectors | Conv2d(3, 192, 16, 16) |
-| CLS token | Learnable summary token prepended to sequence | 1 token of dim 192 |
-| Position embeddings | Learned vectors added to each token | (197, 192) |
-| ViT backbone | 8 transformer layers process all tokens | 8 layers, 3 heads |
-| Output | CLS token extracted as image representation | (1, 192) |
+| Patch embedding | Splits image into 16x16 patches, projects to vectors | Conv2d(3, 128, 16, 16) |
+| CLS token | Learnable summary token prepended to sequence | 1 token of dim 128 |
+| Position embeddings | Learned vectors added to each token | (197, 128) |
+| ViT backbone | 4 transformer layers process all tokens | 4 layers, 4 heads |
+| Output | CLS token extracted as image representation | (1, 128) |
 
-**Key takeaway:** A Vision Transformer converts a 224x224 image (150K numbers) into a single 192-dimensional vector by treating image patches as tokens in a sequence — reusing the same transformer architecture that works for text.
+**Key takeaway:** A Vision Transformer converts a 224x224 image (150K numbers) into a single 128-dimensional vector by treating image patches as tokens in a sequence — reusing the same transformer architecture that works for text.

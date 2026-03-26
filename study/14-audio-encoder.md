@@ -18,22 +18,20 @@ The Audio Encoder (AuT-Tiny = Audio Transformer Tiny) has two jobs:
 
 ---
 
-## Configuration (from `configs/audio_enc_tiny.json`)
+## Configuration (from `configs/synthetic_audio_enc.json`)
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `d_model` | 384 | Hidden dimension |
-| `n_layers` | 8 | Transformer encoder layers |
-| `n_heads` | 6 | Attention heads |
-| `d_ff` | 1,536 | Feedforward dimension |
+| `d_model` | 128 | Hidden dimension |
+| `n_layers` | 4 | Transformer encoder layers |
+| `n_heads` | 4 | Attention heads |
+| `d_ff` | 344 | Feedforward dimension (8/3 x d_model) |
 | `mel_bins` | 128 | Mel spectrogram frequency bins |
 | `sample_rate` | 16,000 | Audio sample rate (16kHz) |
 | `frame_hop` | 160 | Hop length (10ms at 16kHz) |
 | `downsample_time` | 8 | Temporal downsampling factor |
 | `target_hz` | 12.5 | Output frame rate (100Hz / 8) |
 | `dropout` | 0.1 | Dropout rate |
-
-**Parameters**: ~2.05M
 
 ---
 
@@ -230,9 +228,8 @@ The Thinker's causal attention means each generated text token can attend to all
 ## File Reference
 
 - **Source**: `omni/audio_encoder.py`
-- **Config**: `configs/audio_enc_tiny.json`
+- **Config**: `configs/synthetic_audio_enc.json`
 - **Classes**: `AudioEncoderTiny`, `ConvDown`, `EncoderBlock`, `AttentionPooling`
-- **Parameters**: ~2.05M
 
 ---
 

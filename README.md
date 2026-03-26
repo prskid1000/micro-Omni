@@ -1,6 +1,6 @@
 # μOmni — Tiny Multimodal AI (fits 16GB VRAM)
 
-A from-scratch **multimodal AI** stack (text + image + speech in/out) trainable on a single GPU. Based on Qwen3 Omni's Thinker-Talker architecture.
+A from-scratch **multimodal AI** stack (text + image + speech in/out) trainable on a single GPU. Uses a Thinker-Talker architecture inspired by recent multimodal LLMs.
 
 ```
 Image ──→ ViT Encoder ──→ Projector ──┐
@@ -10,7 +10,7 @@ Text  ──→ Token Embeddings ───────────┤
                                        └──→ Talker ──→ RVQ ──→ Vocoder ──→ Speech
 ```
 
-> **~13.9M parameters** (synthetic config) | **16GB VRAM** (RTX 5070 Ti) | Reference learning repo — compact and readable | Production configs available in `.bak` files
+> **~13.9M parameters** (synthetic config) | **16GB VRAM** (RTX 5070 Ti) | Reference learning repo — compact and readable
 
 ## Benchmark Results (Synthetic Data, 2000 samples)
 
@@ -27,16 +27,16 @@ Text  ──→ Token Embeddings ───────────┤
 | | Top-5 Residual | **93.00%** | EXCELLENT |
 | **SFT** (Multimodal) | Val Loss | 1.078 | GOOD |
 
-**Architecture** (Qwen3.5-aligned, synthetic config):
+**Architecture** (synthetic config):
 | Feature | Setting |
 |---------|---------|
 | GQA | Enabled (kv_groups=2, 2:1 Q:KV ratio) |
-| FFN Ratio | 8/3 × d_model (344 for d=128) — Qwen standard |
-| Audio Downsample | 8x (12.5Hz) — matches Qwen3-Omni AuT |
+| FFN Ratio | 8/3 × d_model (344 for d=128) — standard SwiGLU convention |
+| Audio Downsample | 8x (12.5Hz) |
 | Multi-Token Prediction | 2 heads (predict t+2, t+3) |
 | Sliding Window Attention | Infrastructure ready (window_size=0 default) |
 | YaRN RoPE | Infrastructure ready (scaling_factor=1.0 default) |
-| Label Smoothing | 0.1 pretraining, 0.05 SFT |
+| Label Smoothing | 0.1 (all stages including SFT) |
 | Training Monitor | TrainingMonitor (LR spike + early stopping + best weights) |
 | Fused AdamW | `fused=True` on all CUDA optimizers |
 
@@ -64,14 +64,14 @@ Text  ──→ Token Embeddings ───────────┤
 pip install -r requirements.txt
 
 # 2. Generate synthetic data (for testing)
-python scripts/make_synthetic_datasets.py
+python scripts/generate_synthetic_data.py
 
 # 3. Train (any order for A/B/C, then D needs A, E needs all)
-python train_text.py --config configs/thinker_tiny.json       # Stage A: Thinker LLM
-python train_audio_enc.py --config configs/audio_enc_tiny.json # Stage B: Audio Encoder
-python train_vision.py --config configs/vision_tiny.json       # Stage C: Vision Encoder
-python train_talker.py --config configs/talker_tiny.json       # Stage D: Talker + RVQ
-python sft_omni.py --config configs/omni_sft_tiny.json         # Stage E: Multimodal SFT
+python train_text.py --config configs/synthetic_thinker.json       # Stage A: Thinker LLM
+python train_audio_enc.py --config configs/synthetic_audio_enc.json # Stage B: Audio Encoder
+python train_vision.py --config configs/synthetic_vision.json       # Stage C: Vision Encoder
+python train_talker.py --config configs/synthetic_talker.json       # Stage D: Talker + RVQ
+python sft_omni.py --config configs/synthetic_omni_sft.json         # Stage E: Multimodal SFT
 
 # 4. Inference
 python infer_chat.py --ckpt_dir checkpoints/thinker_tiny                                    # Text chat
@@ -137,8 +137,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 
 | File | Purpose |
 |------|---------|
-| `make_synthetic_datasets.py` | Generate synthetic data for all modalities (quick testing) |
-| `run_synthetic_full.py` | End-to-end: generate data → train all stages → test |
+| `generate_synthetic_data.py` | Generate synthetic data for all modalities (quick testing) |
 | `download_production_text.py` | Download real text corpus |
 | `download_production_audio.py` | Download real audio dataset (ASR + TTS) |
 | `download_production_image.py` | Download real image dataset + captions |
@@ -156,10 +155,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 
 ## Configuration
 
-Configs in `configs/` — one per training stage. Two variants:
-
-- **Production** (`*_tiny.json`): Full training with real datasets
-- **Synthetic** (`synthetic_*.json`): Quick runs with generated data (smaller vocab, fewer steps)
+Configs in `configs/` — one per training stage (`synthetic_*.json`). These use smaller vocab/steps for quick iteration.
 
 Key settings across all configs:
 
@@ -173,7 +169,7 @@ Key settings across all configs:
 | `use_mtp` | `false` | Multi-Token Prediction — predict t+2, t+3 during training |
 | `window_size` | `128` | Sliding Window Attention — O(n*w) for alternating layers |
 | `rope_scaling_factor` | `1.0` | YaRN RoPE — context extension beyond training length |
-| `label_smoothing` | `0.1` | Label smoothing (SFT uses 0.05) |
+| `label_smoothing` | `0.1` | Label smoothing (all stages including SFT) |
 | `use_early_stopping` | `false` | Early stopping on val plateau (true for SFT) |
 | `use_lr_spike` | `true` | LR spike to escape loss plateaus |
 | `use_spiking` | `false` | Arthemis spiking attention (experimental) |
@@ -185,9 +181,7 @@ Key settings across all configs:
 
 ### Option A: Synthetic (recommended for quick start)
 ```bash
-python scripts/make_synthetic_datasets.py
-# Full pipeline: create → train → test
-python scripts/run_synthetic_full.py --num-samples 1000
+python scripts/generate_synthetic_data.py
 ```
 
 ### Option B: Real datasets (each < 5GB)

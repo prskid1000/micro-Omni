@@ -14,21 +14,19 @@ The Vision Encoder (ViT-Tiny = Vision Transformer Tiny) converts images into emb
 
 ---
 
-## Configuration (from `configs/vision_tiny.json`)
+## Configuration (from `configs/synthetic_vision.json`)
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
 | `img_size` | 224 | Input image size (224x224 pixels) |
 | `patch` | 16 | Patch size (16x16 pixels) |
-| `d_model` | 192 | Vision encoder hidden dimension |
-| `n_layers` | 8 | Transformer encoder layers |
-| `n_heads` | 3 | Attention heads |
-| `d_ff` | 768 | Feedforward dimension (4x d_model) |
-| `embed_dim` | 256 | CLIP shared embedding dimension |
+| `d_model` | 128 | Vision encoder hidden dimension |
+| `n_layers` | 4 | Transformer encoder layers |
+| `n_heads` | 4 | Attention heads |
+| `d_ff` | 344 | Feedforward dimension (8/3 x d_model) |
+| `embed_dim` | 128 | CLIP shared embedding dimension |
 | `dropout` | 0.1 | Dropout rate |
 | `temperature` | 0.07 | Initial CLIP temperature (learnable) |
-
-**Parameters**: ~914K
 
 ---
 
@@ -244,9 +242,8 @@ Why does ViT use d=192 internally while the Thinker uses d=384? To save paramete
 ## File Reference
 
 - **Source**: `omni/vision_encoder.py`
-- **Config**: `configs/vision_tiny.json`
+- **Config**: `configs/synthetic_vision.json`
 - **Classes**: `ViTTiny`, `TransformerTextEncoder`, `AttentionPooling`
-- **Parameters**: ~914K (ViT only, excluding text encoder)
 
 ---
 

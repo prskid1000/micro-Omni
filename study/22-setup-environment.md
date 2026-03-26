@@ -114,9 +114,9 @@ micro-Omni/
 │   ├── tokenizer.py
 │   └── utils.py
 ├── configs/               # JSON config files
-│   ├── thinker_tiny.json
-│   ├── audio_enc.json
-│   ├── vision_tiny.json
+│   ├── synthetic_thinker.json
+│   ├── synthetic_audio_enc.json
+│   ├── synthetic_vision.json
 │   └── ...
 ├── data/                  # Training data
 │   ├── text/

@@ -19,27 +19,25 @@ This dual-input design is what makes the system multimodal. The Thinker does not
 
 ---
 
-## Configuration (from `configs/thinker_tiny.json`)
+## Configuration (from `configs/synthetic_thinker.json`)
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `vocab_size` | 32,000 | SentencePiece BPE vocabulary |
-| `d_model` | 384 | Hidden dimension throughout |
-| `n_layers` | 8 | Number of transformer blocks |
-| `n_heads` | 6 | Query attention heads |
-| `d_ff` | 1,536 | Feedforward intermediate dimension (4x d_model) |
-| `ctx_len` | 256 | Maximum context length (512 during SFT) |
-| `dropout` | 0.1 | Dropout rate |
+| `vocab_size` | 256 | Character-level vocabulary (synthetic) |
+| `d_model` | 128 | Hidden dimension throughout |
+| `n_layers` | 4 | Number of transformer blocks |
+| `n_heads` | 4 | Query attention heads |
+| `d_ff` | 344 | Feedforward intermediate dimension (8/3 x d_model) |
+| `ctx_len` | 64 | Maximum context length |
+| `dropout` | 0.0 | Dropout rate |
 | `rope_theta` | 10,000 | RoPE base frequency |
 | `use_gqa` | true | Grouped Query Attention enabled |
-| `kv_groups` | 3 | 3 KV groups shared across 6 query heads |
+| `kv_groups` | 2 | 2 KV groups shared across 4 query heads |
 | `use_swiglu` | true | SwiGLU activation in FFN |
 | `use_moe` | false | Mixture of Experts (optional, off by default) |
 | `use_mtp` | false | Multi-Token Prediction (2 auxiliary heads) |
 | `window_size` | 0 | Sliding window attention size (0 = disabled) |
 | `scaling_factor` | 1.0 | YaRN RoPE scaling factor (1.0 = no extension) |
-
-**Parameters**: ~20.32M
 
 ---
 
@@ -366,9 +364,8 @@ prompt tokens ──→ forward pass ──→ logits (32000)
 ## File Reference
 
 - **Source**: `omni/thinker.py`
-- **Config**: `configs/thinker_tiny.json`
+- **Config**: `configs/synthetic_thinker.json`
 - **Classes**: `ThinkerLM`, `Block`, `Attention`, `MLP`, `MoE`, `SwiGLU`, `SpikingNeuron`, `LiquidTimeConstant`, `RoPE` (in utils.py)
-- **Parameters**: ~20.32M
 
 ---
 

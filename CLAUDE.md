@@ -23,13 +23,13 @@ omni/utils.py         Utilities          —     RoPE (cached), RMSNorm, EMA, st
 ## Training Pipeline
 
 ```
-Stage A: python train_text.py      --config configs/thinker_tiny.json     # Thinker (cross-entropy)
-Stage B: python train_audio_enc.py --config configs/audio_enc_tiny.json   # Audio Encoder (CTC loss)
-Stage C: python train_vision.py    --config configs/vision_tiny.json      # Vision Encoder (InfoNCE)
-Stage D: python train_talker.py    --config configs/talker_tiny.json      # Talker + RVQ (cross-entropy on codes)
-Stage E: python sft_omni.py        --config configs/omni_sft_tiny.json    # Multimodal SFT (all modalities)
-Stage F: python train_vocoder.py   --config configs/vocoder_tiny.json     # HiFi-GAN vocoder (optional)
-Stage G: python train_ocr.py       --config configs/ocr_tiny.json         # OCR model (optional)
+Stage A: python train_text.py      --config configs/synthetic_thinker.json     # Thinker (cross-entropy)
+Stage B: python train_audio_enc.py --config configs/synthetic_audio_enc.json   # Audio Encoder (CTC loss)
+Stage C: python train_vision.py    --config configs/synthetic_vision.json      # Vision Encoder (InfoNCE)
+Stage D: python train_talker.py    --config configs/synthetic_talker.json      # Talker + RVQ (cross-entropy on codes)
+Stage E: python sft_omni.py        --config configs/synthetic_omni_sft.json    # Multimodal SFT (all modalities)
+Stage F: python train_vocoder.py   --config configs/synthetic_vocoder.json     # HiFi-GAN vocoder (optional)
+Stage G: python train_ocr.py       --config configs/synthetic_ocr.json         # OCR model (optional)
 ```
 
 Dependencies: A/B/C can run in parallel. D needs A. E needs A+B+C+D. F and G are independent.
@@ -95,11 +95,12 @@ python export/test_hf_multimodal.py                                             
 - RMSNorm everywhere (not LayerNorm), except ViT which uses nn.TransformerEncoderLayer
 - `register_buffer(..., persistent=False)` for non-saveable tensors (masks, RoPE caches)
 - Type hints on all model `__init__` and `forward` methods
-- Checkpoints: `{model_name}.pt` (dict with model + optimizer + scheduler + scaler + ema + lr_spike states)
+- Checkpoints: `{model_name}.pt` (dict with model + optimizer + scheduler + scaler + monitor states)
 - Metadata: `{model_name}_metadata.json` (step, epoch, dataset stats like char_to_idx, max_mel_length)
-- Config truth: JSON configs in `configs/` are authoritative — class defaults in .py files may differ
+- Config: `config.json` saved to checkpoint dir during training — test scripts read ONLY from checkpoint dir
+- Checkpoint dirs are self-contained: `config.json` + `{model_name}.pt` + `{model_name}_metadata.json` + tokenizer files
 - Streaming datasets: all training uses `IterableDataset` with hash-based train/val split and shuffle buffer
-- Two config variants: `*_tiny.json` (production) and `synthetic_*.json` (quick test with small vocab/steps)
+- Config files: `synthetic_*.json` in `configs/` (small vocab/steps for quick iteration)
 
 ## Data Formats
 - **Text** (Thinker): plain `.txt`, one sample per line → `data/text/production_corpus.txt`
@@ -109,13 +110,13 @@ python export/test_hf_multimodal.py                                             
 - **OCR**: CSV `image,text` → `data/ocr/production_ocr.csv`
 - Download scripts require `--combine` flag to produce production_* files
 
-## Key Config Values (production, RTX 5070 Ti)
-- Thinker: d=128, layers=8, heads=6, d_ff=344 (8/3 x d_model), ctx=256, vocab=32K, use_gqa=true kv_groups=2, use_mtp=true num_mtp_heads=2, batch=32, accum=2, label_smoothing=0.1
-- Audio Enc: d=384, layers=8, heads=6, downsample=8x (audio 8x), dropout=0.1, wd=0.01, batch=16, accum=2
-- Vision: d=192, layers=8, heads=3, embed_dim=256, temperature=0.07, batch=32, accum=8
-- Talker: d=384, layers=8, heads=6, codebooks=2×128, GQA kv_groups=3, batch=16, accum=2
+## Key Config Values (synthetic configs, RTX 5070 Ti)
+- Thinker: d=128, layers=4, heads=4, d_ff=344 (8/3 x d_model), ctx=64, vocab=256, use_gqa=true kv_groups=2, batch=32, accum=1
+- Audio Enc: d=128, layers=4, heads=4, d_ff=344, downsample=8x (12.5Hz), dropout=0.1, wd=0.01, batch=16, accum=1
+- Vision: d=128, layers=4, heads=4, d_ff=344, embed_dim=128, temperature=0.07, batch=64, accum=1
+- Talker: d=128, layers=4, heads=4, d_ff=344, codebooks=2x128, batch=16, accum=1
 - Vocoder: batch=2, accum=2, max_audio_percentile=50%, shuffle_buffer=1000
-- SFT: batch=4, accum=2, checkpoint_freq=500, lr=5e-5, proj_lr_mult=5.0, label_smoothing=0.05, encoders frozen
+- SFT: batch=4, accum=2, checkpoint_freq=500, lr=3e-5, proj_lr_mult=5.0, label_smoothing=0.1, encoders frozen
 
 ## Testing
 ```

@@ -345,7 +345,7 @@ learning_rate         = 5e-5      # low — we're fine-tuning, not training
 warmup_steps          = 50
 max_steps             = 50000
 gradient_accumulation = 2         # effective batch = 8
-label_smoothing       = 0.05      # gentler than pretraining's 0.1
+label_smoothing       = 0.1       # same as pretraining
 proj_lr_mult          = 5.0       # projectors learn 5x faster (randomly initialized)
 use_amp               = True
 ```
@@ -360,7 +360,7 @@ encoder representations trained in Stages B and C.
 buffer (`self._causal_mask[:, :, :T, :T]`) to avoid per-step GPU allocations,
 and a fused AdamW optimizer (`fused=True` on CUDA) for a free 10-20% speedup.
 
-**Loss function:** Joint cross-entropy (with label smoothing 0.05) across all
+**Loss function:** Joint cross-entropy (with label smoothing 0.1) across all
 modalities, with mixed-modality batches. Each batch may contain text-only,
 image+text, audio+text, or multimodal samples. The loss is averaged across all
 tokens regardless of modality.
@@ -406,8 +406,8 @@ The simplest variant. Train just the Thinker — no audio, no vision.
 python train_text.py --config configs/synthetic_thinker.json
 ```
 
-Use `configs/synthetic_thinker.json` for rapid iteration (`max_steps: 2000`,
-finishes in ~2 minutes). For production quality, use `configs/thinker_tiny.json`.
+Use `configs/synthetic_thinker.json` for rapid iteration (`max_steps: 8400`,
+finishes in ~15 minutes).
 Inference works immediately with `infer_chat.py --ckpt_dir checkpoints/thinker_tiny`.
 
 ### Text + Vision Model (Stages A + C + modified SFT)
@@ -460,11 +460,11 @@ The complete pipeline as documented in this chapter. All five stages, all
 modalities.
 
 ```bash
-python train_text.py --config configs/thinker_tiny.json         # Stage A
-python train_audio_enc.py --config configs/audio_enc_tiny.json  # Stage B
-python train_vision.py --config configs/vision_tiny.json        # Stage C
-python train_talker.py --config configs/talker_tiny.json        # Stage D
-python sft_omni.py --config configs/omni_sft_tiny.json          # Stage E
+python train_text.py --config configs/synthetic_thinker.json         # Stage A
+python train_audio_enc.py --config configs/synthetic_audio_enc.json  # Stage B
+python train_vision.py --config configs/synthetic_vision.json        # Stage C
+python train_talker.py --config configs/synthetic_talker.json        # Stage D
+python sft_omni.py --config configs/synthetic_omni_sft.json          # Stage E
 ```
 
 Remember: A, B, C can run in parallel. D requires A. E requires all four.
@@ -481,7 +481,29 @@ Remember: A, B, C can run in parallel. D requires A. E requires all four.
 
 ---
 
-## 19.9 Resume Logic
+## 19.9 Config Saving
+
+Every training script saves a copy of the training config to the checkpoint
+directory at the start of training:
+
+```
+checkpoints/thinker_tiny/
+  config.json              # Copy of training config, saved at start of training
+  thinker.pt               # model + optimizer + scheduler + scaler + monitor states
+  thinker_metadata.json    # step, epoch, dataset stats
+  tokenizer.model          # BPE tokenizer (if applicable)
+  tokenizer.vocab          # vocabulary (if applicable)
+```
+
+This ensures that the exact configuration used to train a model is always
+co-located with its weights. Test scripts and inference scripts load
+`config.json` exclusively from the checkpoint directory — they never read
+from the `configs/` directory. This eliminates a common class of bugs where
+the config on disk has drifted from the config used during training.
+
+---
+
+## 19.10 Resume Logic
 
 Every stage writes a `metadata.json` alongside each checkpoint:
 
@@ -511,7 +533,7 @@ mismatched hyperparameters.
 
 ---
 
-## 19.10 SFT Encoder Freezing
+## 19.11 SFT Encoder Freezing
 
 A common question: why not fine-tune the audio and vision encoders during SFT?
 
@@ -539,7 +561,7 @@ but `requires_grad` is `False` for all their parameters.
 
 ---
 
-## 19.11 Checkpoint Frequency
+## 19.12 Checkpoint Frequency
 
 How often to save depends on dataset size and how expensive a crash would be:
 
@@ -554,7 +576,7 @@ For the 25M Thinker, that is about 200MB per checkpoint.
 
 ---
 
-## 19.12 Full Training Timeline
+## 19.13 Full Training Timeline
 
 ```
 Day 1:  Start Stages A, B, C in parallel
@@ -581,7 +603,7 @@ A/B/C on separate GPUs, you can finish in under 2 days.
 
 ---
 
-## 19.13 Label Smoothing Across Stages
+## 19.14 Label Smoothing Across Stages
 
 Label smoothing is supported in all training scripts that use cross-entropy loss, controlled by the `label_smoothing` config parameter (default 0.1 for pretraining stages):
 
@@ -591,24 +613,24 @@ Label smoothing is supported in all training scripts that use cross-entropy loss
 | B (Audio) | CTC loss | N/A (CTC has its own alignment mechanism) |
 | C (Vision) | `train_vision.py` | Yes (applied to InfoNCE) |
 | D (Talker) | `train_talker.py` | No |
-| E (SFT) | `sft_omni.py` | Yes (0.05 — lower for better calibration) |
+| E (SFT) | `sft_omni.py` | Yes (0.1) |
 | OCR | `train_ocr.py` | Yes |
 
 See Chapter 20, Section 20.12 for a detailed explanation of how label smoothing works.
 
 ---
 
-## 19.14 Deterministic Synthetic Data
+## 19.15 Synthetic Data Generation
 
-For reproducible experiments and testing, use the deterministic data generation script:
+For reproducible experiments and testing, use the data generation script:
 
 ```bash
-python scripts/make_deterministic_data.py
+python scripts/generate_synthetic_data.py
 ```
 
-This generates synthetic training data with fixed random seeds, ensuring identical data across runs. Useful for debugging training pipelines and verifying that code changes do not affect model behavior.
+This generates synthetic training data for all modalities. Useful for debugging training pipelines and verifying that code changes do not affect model behavior.
 
-**Note:** Synthetic configs use smaller model dimensions (d=128, 4 layers) rather than the full production sizes (d=384, 8 layers). Production configs are backed up as `.bak` files.
+**Note:** Synthetic configs use d=128, 4 layers, 4 heads.
 
 **Next:** Chapter 20 covers the optimization techniques that make all of this
 fit in 16GB of VRAM.

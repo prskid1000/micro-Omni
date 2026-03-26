@@ -17,7 +17,7 @@ Appendices A-E                  — math, papers, config reference, code structu
 ## Writing Rules (for updating/adding chapters)
 - Every concept gets a real-life analogy (kitchen, library, orchestra, hospital, etc.)
 - ASCII diagrams for all data flows — include actual tensor shapes from μOmni
-- Use μOmni's real config values (d=384, layers=8, heads=6, etc.)
+- Use μOmni's real config values (d=128, layers=4, heads=4, etc. from synthetic configs)
 - No external links — everything explained in-place
 - No duplicate content — each concept explained in exactly ONE chapter
 - Reference other chapters with "As we saw in Chapter X..." not by re-explaining

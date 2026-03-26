@@ -103,15 +103,15 @@ In the same way, the system has:
 
 ## Component Summary Table
 
-| Component | Source File | Params | Dimension | Purpose |
-|-----------|------------|--------|-----------|---------|
-| Thinker (ThinkerLM) | `omni/thinker.py` | ~20.32M | d=384, 8 layers, 6 heads | Core language model; processes all modalities, generates text |
-| Audio Encoder (AuT-Tiny) | `omni/audio_encoder.py` | ~2.05M | d=384, 8 layers, 6 heads | Converts mel spectrograms to embeddings for ASR |
-| Vision Encoder (ViT-Tiny) | `omni/vision_encoder.py` | ~914K | d=192, 8 layers, 3 heads | Converts images to embeddings via CLIP training |
-| Talker (TalkerTiny) | `omni/talker.py` | ~2.24M | d=384, 8 layers, 6 heads | Predicts RVQ speech codes for TTS |
-| RVQ Codec | `omni/codec.py` | ~49K | d=64, 2 codebooks x 128 | Quantizes/reconstructs mel frames |
-| OCR Model | `omni/ocr_model.py` | varies | ViT d=192 + decoder d=384 | Reads text from images |
-| **Total (core)** | | **~25.58M** | | |
+| Component | Source File | Dimension (synthetic config) | Purpose |
+|-----------|------------|-----------|---------|
+| Thinker (ThinkerLM) | `omni/thinker.py` | d=128, 4 layers, 4 heads | Core language model; processes all modalities, generates text |
+| Audio Encoder (AuT-Tiny) | `omni/audio_encoder.py` | d=128, 4 layers, 4 heads | Converts mel spectrograms to embeddings for ASR |
+| Vision Encoder (ViT-Tiny) | `omni/vision_encoder.py` | d=128, 4 layers, 4 heads | Converts images to embeddings via CLIP training |
+| Talker (TalkerTiny) | `omni/talker.py` | d=128, 4 layers, 4 heads | Predicts RVQ speech codes for TTS |
+| RVQ Codec | `omni/codec.py` | d=64, 2 codebooks x 128 | Quantizes/reconstructs mel frames |
+| OCR Model | `omni/ocr_model.py` | ViT d=192 + decoder d=384 | Reads text from images |
+| **Total (core)** | | **~13.9M** (synthetic) | |
 
 ---
 
@@ -157,40 +157,37 @@ With a context length of 256 (Thinker training) or 512 (SFT), you can fit:
 
 ---
 
-## Total Parameter Count
+## Total Parameter Count (synthetic config)
 
 ```
-Thinker (ThinkerLM)         ~20,320,000   (78.8%)
-Audio Encoder (AuT-Tiny)     ~2,050,000   ( 8.0%)
-Talker (TalkerTiny)          ~2,240,000   ( 8.7%)
-Vision Encoder (ViT-Tiny)      ~914,000   ( 3.6%)
-RVQ Codec                       ~49,000   ( 0.2%)
-Vision Projection (192->384)    ~73,000   ( 0.3%)
-Vocoder (HiFi-GAN)*          ~1,000,000+  (separate)
+Thinker (ThinkerLM)         majority of params
+Audio Encoder (AuT-Tiny)    smaller
+Talker (TalkerTiny)         smaller
+Vision Encoder (ViT-Tiny)   smallest
+RVQ Codec                   ~49,000
+Vocoder (HiFi-GAN)*         ~1,000,000+  (separate)
 ────────────────────────────────────────
-Total (core, excl. vocoder)  ~25.65M
+Total (core, excl. vocoder) ~13.9M (synthetic config, d=128)
 ```
 
 *The HiFi-GAN vocoder is trained separately and is not counted in the core model size. Griffin-Lim requires no parameters at all.*
 
-*Production configs use d=384 (~25.65M params). Synthetic configs use d=128 (~13.9M params).*
+For context: this entire multimodal system fits in **~13.9M** parameters -- small enough to train on a single consumer GPU.
 
-For context: GPT-2 Small is 124M parameters, LLaMA-7B is 7,000M. This entire multimodal system fits in **25.65M** (production) or **13.9M** (synthetic) -- small enough to train on a single consumer GPU.
+### Architecture Techniques
 
-### Qwen3.5 Architecture Alignment
+The following techniques from modern multimodal LLMs are implemented:
 
-The following techniques from Qwen3/3.5 are implemented:
-
-| Technique | Qwen3.5 | μOmni |
-|-----------|---------|-------|
-| Grouped Query Attention | 7:1-8:1 ratio | 2:1 ratio (kv_groups=2) |
-| SwiGLU FFN | 8/3 × d_model | 8/3 × d_model (d_ff=344 for d=128) |
-| RMSNorm pre-norm | Yes | Yes |
-| RoPE | theta=10M, YaRN | theta=10K, YaRN ready |
-| Audio frame rate | 12.5Hz (8x downsample) | 12.5Hz (8x downsample) |
-| Multi-Token Prediction | Yes | Yes (2 heads, predict t+2, t+3) |
-| Sliding Window Attention | Yes (select layers) | Ready (window_size config) |
-| Thinker-Talker architecture | Yes | Yes |
+| Technique | μOmni |
+|-----------|-------|
+| Grouped Query Attention | 2:1 ratio (kv_groups=2) |
+| SwiGLU FFN | 8/3 × d_model (d_ff=344 for d=128) |
+| RMSNorm pre-norm | Yes |
+| RoPE | theta=10K, YaRN ready |
+| Audio frame rate | 12.5Hz (8x downsample) |
+| Multi-Token Prediction | Infrastructure ready (2 heads, predict t+2, t+3) |
+| Sliding Window Attention | Ready (window_size config) |
+| Thinker-Talker architecture | Yes |
 
 ---
 

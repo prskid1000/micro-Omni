@@ -4,8 +4,7 @@
 
 | Script | Purpose | Key Flags |
 |--------|---------|-----------|
-| `make_synthetic_datasets.py` | Generate synthetic data for all modalities (text, audio, images, OCR) for quick testing | `--num-samples 1000` |
-| `run_synthetic_full.py` | End-to-end pipeline: generate data → train all stages → test all components | `--skip-data`, `--stages A,B,C,D,E,G` |
+| `generate_synthetic_data.py` | Generate synthetic data for all modalities (text, audio, images, OCR) for quick testing | `--num-samples 1000` |
 | `download_production_text.py` | Download real text corpus (wikitext) | `--combine` (MANDATORY) |
 | `download_production_audio.py` | Download real audio datasets (Common Voice, LJSpeech) | `--combine` (MANDATORY) |
 | `download_production_image.py` | Download real image dataset (COCO) with captions | `--combine` (MANDATORY) |

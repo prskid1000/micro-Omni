@@ -178,8 +178,8 @@ looks for grammatical relationships, another for semantic similarity, a third fo
 positional patterns, and so on. Their findings are combined into a single comprehensive
 report.
 
-micro-Omni uses **6 heads** with a model dimension of 384, so each head works in a
-64-dimensional subspace (384 / 6 = 64).
+micro-Omni uses **4 heads** with a model dimension of 128, so each head works in a
+32-dimensional subspace (128 / 4 = 32).
 
 ---
 
@@ -297,24 +297,24 @@ then the meaning, then the implications.
 ### micro-Omni's Thinker
 
 The core reasoning engine of micro-Omni is called the **Thinker**. It is a stack of
-Transformer blocks with these specifications:
+Transformer blocks with these specifications (synthetic config):
 
 ```
   +------------------------------------------+
   |           micro-Omni Thinker             |
   +------------------------------------------+
-  |  Blocks:          8                      |
-  |  Attention heads:  6 per block           |
-  |  Model dimension: 384 (d_model)          |
-  |  Head dimension:  64  (384 / 6)          |
-  |  FFN inner dim:   1536 (4 * 384)         |
-  |  Activation:      GELU                   |
-  |  Norm:            LayerNorm (pre-norm)   |
+  |  Blocks:          4                      |
+  |  Attention heads:  4 per block           |
+  |  Model dimension: 128 (d_model)          |
+  |  Head dimension:  32  (128 / 4)          |
+  |  FFN inner dim:   344 (8/3 * 128)        |
+  |  Activation:      SwiGLU                 |
+  |  Norm:            RMSNorm (pre-norm)     |
   +------------------------------------------+
 
   Data flow through the complete Thinker:
 
-  Input embeddings (d=384)
+  Input embeddings (d=128)
        |
        v
   +-----------+
@@ -330,20 +330,20 @@ Transformer blocks with these specifications:
       ...
        v
   +-----------+
-  |  Block 8  | ---+
+  |  Block 4  | ---+
   +-----------+    |
        |<----------+
        v
-  Final LayerNorm
+  Final RMSNorm
        |
        v
-  Output (d=384)
+  Output (d=128)
        |
        +---> Text head (vocabulary logits)
        +---> Audio head (audio features)
 ```
 
-Eight blocks, six heads each, dimension 384. Small enough to train on one GPU, deep
+Four blocks, four heads each, dimension 128. Small enough to train on one GPU, deep
 enough to understand the interplay of text, images, and audio. In the coming chapters,
 we will see how the different modalities are encoded and fed into this Thinker, and
 what advanced techniques (like Grouped Query Attention and Mixture of Experts) can

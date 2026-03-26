@@ -120,8 +120,8 @@ Quality: best            Quality: near-MHA       Quality: slight loss    Quality
 
 micro-Omni uses GQA in both Thinker and Talker when enabled:
 
-- **Thinker**: 8 query heads, `kv_groups` configurable (default: `heads // 2 = 4`)
-- **Talker**: 6 query heads, `kv_groups` configurable (default: `heads // 2 = 3`)
+- **Thinker**: 4 query heads, `kv_groups=2` (2 query heads share each KV group)
+- **Talker**: 4 query heads, `kv_groups` configurable (GQA disabled by default in synthetic config)
 
 The `kv_groups` parameter is set in the model config. When `use_gqa=True`, separate Q, K, V projections are created:
 

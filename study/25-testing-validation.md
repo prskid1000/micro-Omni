@@ -23,10 +23,17 @@ export/test_hf_multimodal.py   Validate HuggingFace multimodal export
 ```
 
 All test scripts follow the same pattern:
-1. Load the component checkpoint
-2. Run inference on sample inputs
-3. Compute and report metrics
-4. Exit with pass/fail status
+1. Load `config.json` from the checkpoint directory (never from `configs/`)
+2. Reconstruct the model from that config and load weights
+3. Run inference on sample inputs
+4. Compute and report metrics
+5. Exit with pass/fail status
+
+**Important:** Test scripts load configuration exclusively from
+`checkpoint_dir/config.json`. This file is saved by the training script at
+the start of training, ensuring the test always uses the exact config that
+produced the weights. The `configs/` directory is never consulted during
+testing.
 
 ---
 

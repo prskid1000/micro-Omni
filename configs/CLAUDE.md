@@ -2,26 +2,17 @@
 
 JSON configs that control all training hyperparameters. **These are the source of truth** — model class defaults in .py files may differ.
 
-## Two Variants Per Stage
-
-| Production (`*_tiny.json`) | Synthetic (`synthetic_*.json`) |
-|---|---|
-| Real datasets, full training | Generated toy data, quick validation |
-| `vocab_size: 32000` | `vocab_size: 1024` |
-| `max_steps: 100K-3.8M` | `max_steps: 2K` |
-| Hours to train | Minutes to train |
-
 ## File → Training Script Mapping
 
 | Config | Script | Stage |
 |--------|--------|-------|
-| `thinker_tiny.json` | `train_text.py` | A — Thinker LLM |
-| `audio_enc_tiny.json` | `train_audio_enc.py` | B — Audio Encoder |
-| `vision_tiny.json` | `train_vision.py` | C — Vision Encoder |
-| `talker_tiny.json` | `train_talker.py` | D — Talker + RVQ |
-| `vocoder_tiny.json` | `train_vocoder.py` | F — HiFi-GAN (optional) |
-| `ocr_tiny.json` | `train_ocr.py` | G — OCR (optional) |
-| `omni_sft_tiny.json` | `sft_omni.py` | E — Multimodal SFT |
+| `synthetic_thinker.json` | `train_text.py` | A — Thinker LLM |
+| `synthetic_audio_enc.json` | `train_audio_enc.py` | B — Audio Encoder |
+| `synthetic_vision.json` | `train_vision.py` | C — Vision Encoder |
+| `synthetic_talker.json` | `train_talker.py` | D — Talker + RVQ |
+| `synthetic_vocoder.json` | `train_vocoder.py` | F — HiFi-GAN (optional) |
+| `synthetic_ocr.json` | `train_ocr.py` | G — OCR (optional) |
+| `synthetic_omni_sft.json` | `sft_omni.py` | E — Multimodal SFT |
 
 ## Key Parameters (RTX 5070 Ti optimized)
 
@@ -36,7 +27,7 @@ JSON configs that control all training hyperparameters. **These are the source o
 | `use_mtp` / `num_mtp_heads` | Multi-token prediction | `true` / `2` |
 | `window_size` | Sliding window attention size | `null` (full) or integer |
 | `rope_scaling_factor` | RoPE frequency scaling for context extension | `1.0` (default) |
-| `label_smoothing` | Label smoothing in cross-entropy loss | `0.1` (SFT: `0.05`) |
+| `label_smoothing` | Label smoothing in cross-entropy loss | `0.1` (including SFT) |
 | `proj_lr_mult` | Projector LR multiplier vs thinker (SFT only) | `5.0` |
 | `gradient_accumulation_steps` | Effective batch multiplier | 2-8 depending on stage |
 | `num_workers` | DataLoader parallelism | `2` |
@@ -48,7 +39,7 @@ JSON configs that control all training hyperparameters. **These are the source o
 | `val_loss_threshold` | Max spike above checkpoint before reload | Per-stage: 0.3-10.0 |
 
 ## FFN Dimension
-The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=128`, this gives `d_ff=344` (rounded to nearest even). This follows the SwiGLU convention from LLaMA.
+The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=128`, this gives `d_ff=344` (rounded to nearest even). This follows the standard SwiGLU convention used by modern LLMs.
 
 ## Common Gotchas
 - Audio encoder `dropout` should be `0.1` not `0.3` (kills learning)
@@ -59,8 +50,9 @@ The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=
 - SFT `checkpoint_freq: 30` causes massive disk I/O — use `500+`
 - SFT audio/vision encoders are **frozen** — they're pretrained, not in optimizer
 - SFT projectors need higher LR (`proj_lr_mult: 5.0`) — they're randomly initialized
-- SFT `label_smoothing: 0.1` is too aggressive — use `0.05` for better calibration
+- SFT `label_smoothing` is set to `0.1` in the actual config
 - All optimizers must use `fused=True` on CUDA — free 10-20% speedup
 - Use `setup_cuda()` not manual `torch.backends` lines — centralized in `omni/utils.py`
 - Use `TrainingMonitor(cfg)` not separate `LRSpike()` — handles spike + early stop + best weights
 - Synthetic configs: `val_loss_threshold: 999.0` disables reload (small data noise); production uses real thresholds
+- Training scripts copy config.json to checkpoint dir — test scripts read ONLY from there, never `configs/`

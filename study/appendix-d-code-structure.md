@@ -19,12 +19,13 @@ micro-Omni/
 │   └── utils.py                   # Shared utilities
 │
 ├── configs/                       # JSON configuration files
-│   ├── thinker_tiny.json
-│   ├── audio_enc.json
-│   ├── vision_tiny.json
-│   ├── talker.json
-│   ├── vocoder.json
-│   └── ocr.json
+│   ├── synthetic_thinker.json
+│   ├── synthetic_audio_enc.json
+│   ├── synthetic_vision.json
+│   ├── synthetic_talker.json
+│   ├── synthetic_vocoder.json
+│   ├── synthetic_omni_sft.json
+│   └── synthetic_ocr.json
 │
 ├── train_text.py                  # Train the Thinker LM
 ├── train_audio_enc.py             # Train audio encoder
@@ -58,6 +59,12 @@ micro-Omni/
 │   └── ocr/
 │
 ├── checkpoints/                   # Saved during training
+│   └── <component>/              # e.g. thinker_tiny/
+│       ├── config.json           # Training config (saved at start)
+│       ├── <model>.pt            # Model + optimizer + scheduler + monitor states
+│       ├── <model>_metadata.json # Step, epoch, dataset stats
+│       ├── tokenizer.model       # BPE tokenizer (if applicable)
+│       └── tokenizer.vocab       # Vocabulary (if applicable)
 └── exported/                      # Merged model for deployment
 ```
 
@@ -271,17 +278,17 @@ Shared utilities used across all components.
 
 | Script              | Trains            | Key Config               |
 |---------------------|-------------------|--------------------------|
-| `train_text.py`     | ThinkerLM         | `thinker_tiny.json`      |
-| `train_audio_enc.py`| AudioEncoderTiny  | `audio_enc.json`         |
-| `train_vision.py`   | ViTTiny           | `vision_tiny.json`       |
-| `train_talker.py`   | TalkerTiny        | `talker.json`            |
-| `train_vocoder.py`  | HiFiGANVocoder    | `vocoder.json`           |
-| `train_ocr.py`      | OCRModel          | `ocr.json`               |
+| `train_text.py`     | ThinkerLM         | `synthetic_thinker.json`    |
+| `train_audio_enc.py`| AudioEncoderTiny  | `synthetic_audio_enc.json`  |
+| `train_vision.py`   | ViTTiny           | `synthetic_vision.json`     |
+| `train_talker.py`   | TalkerTiny        | `synthetic_talker.json`     |
+| `train_vocoder.py`  | HiFiGANVocoder    | `synthetic_vocoder.json`    |
+| `train_ocr.py`      | OCRModel          | `synthetic_ocr.json`        |
 | `sft_omni.py`       | All components    | Combined config          |
 
 All training scripts follow the same pattern:
 1. Call `setup_cuda()` for CUDA/TF32/cudnn configuration
-2. Load config JSON
+2. Load config JSON and save a copy as `config.json` in the checkpoint directory
 3. Build model and datasets
 4. Create `monitor = TrainingMonitor(cfg)` for LR spike + early stopping + best weight tracking
 5. Training loop with AMP, gradient clipping, cosine LR

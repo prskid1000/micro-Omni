@@ -372,17 +372,11 @@ In practice, label smoothing:
 
 The 0.1 default is used in pre-training scripts: `train_text.py`, `train_vision.py`, and `train_ocr.py`. This is the same value used by most production language models.
 
-The SFT stage (`sft_omni.py`) uses a reduced value of `label_smoothing=0.05`.
-Multimodal fine-tuning benefits from less smoothing because the model must learn
-precise cross-modal alignments (e.g., matching audio tokens to text tokens). Too
-much smoothing blurs these distinctions and hurts calibration on multimodal data.
+The SFT stage (`sft_omni.py`) also uses `label_smoothing=0.1`.
 
 ```python
-# Pre-training stages:
+# All stages including SFT:
 criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-
-# SFT stage (reduced for better multimodal calibration):
-criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
 ```
 
 ---
@@ -549,12 +543,12 @@ The following results were measured on synthetic/deterministic test data to vali
 | Talker | Top-5 accuracy | 92-93% | Improved from 90% with FFN 8/3 |
 | SFT | Val Loss | 1.078 | Multimodal integration |
 
-**Qwen3.5-aligned config changes that produced these results:**
+**Architecture changes that produced these results:**
 - GQA enabled (kv_groups=2) — 2x KV cache savings
 - FFN ratio changed from 4x to 8/3 × d_model — fewer params, same quality
-- Audio 8x downsample (12.5Hz) — matches Qwen3-Omni, halves sequence length
+- Audio 8x downsample (12.5Hz) — halves sequence length
 - Multi-Token Prediction (2 heads) — richer training signal
 
-These are on deterministic synthetic data (2000 samples, generated via `scripts/make_deterministic_data.py`) and represent pipeline verification. Real-world performance will improve significantly with natural data and larger model sizes.
+These are on synthetic data (2000 samples, generated via `scripts/generate_synthetic_data.py`) and represent pipeline verification. Real-world performance will improve significantly with natural data and larger model sizes.
 
 **Next:** Chapter 21 covers what to do when things go wrong.

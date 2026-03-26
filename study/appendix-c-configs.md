@@ -67,7 +67,7 @@ micro-Omni training scripts.
 | `batch_size`                 | int   | 32       | Batch size per step (SFT uses 4; was 2) |
 | `gradient_accumulation_steps`| int   | 1        | Gradient accumulation factor         |
 | `max_grad_norm`              | float | 1.0      | Gradient clipping norm               |
-| `label_smoothing`            | float | 0.1      | Label smoothing factor (SFT uses 0.05; other stages use 0.1) |
+| `label_smoothing`            | float | 0.1      | Label smoothing factor (all stages including SFT use 0.1) |
 | `proj_lr_mult`               | float | 5.0      | Projector LR multiplier (SFT only — scales LR for projection layers) |
 | `seed`                       | int   | 42       | Random seed                          |
 | `save_every`                 | int   | 1000     | Save checkpoint every N steps        |
@@ -195,38 +195,38 @@ Notes:
 - Stage D (talker) requires a trained thinker from Stage A.
 - Stage E (SFT) requires all prior stages to be complete.
 - Stages F (vocoder) and G (OCR) are optional and independent.
-- Synthetic configs use `max_steps: 2000` for quick iteration; swap to production configs (`*_tiny.json`) for real training at 50K+ steps.
+- Synthetic configs use smaller model dimensions and moderate step counts for quick iteration.
 
 ---
 
 ## Example Config File
 
-`configs/thinker_tiny.json`:
+`configs/synthetic_thinker.json`:
 
 ```json
 {
-  "d_model": 512,
-  "n_layers": 8,
-  "n_heads": 8,
-  "d_ff": 1376,
-  "vocab_size": 32000,
-  "ctx_len": 2048,
-  "use_gqa": false,
+  "vocab_size": 256,
+  "n_layers": 4,
+  "d_model": 128,
+  "d_ff": 344,
+  "n_heads": 4,
+  "ctx_len": 64,
+  "use_gqa": true,
+  "kv_groups": 2,
   "use_swiglu": true,
   "use_moe": false,
-  "use_spiking": false,
-  "use_ltc": false,
   "use_flash": true,
   "use_amp": true,
-  "lr": 3e-4,
-  "wd": 0.1,
-  "warmup_steps": 500,
-  "max_steps": 50000,
+  "use_compile": false,
+  "lr": 0.001,
+  "wd": 0.0,
+  "warmup_steps": 50,
+  "max_steps": 8400,
   "batch_size": 32,
   "gradient_accumulation_steps": 1,
-  "val_split": 0.05,
-  "val_freq": 500,
-  "save_every": 1000,
+  "val_split": 0.1,
+  "val_freq": 100,
+  "checkpoint_freq": 500,
   "seed": 42
 }
 ```

@@ -17,7 +17,7 @@ The papers that underpin micro-Omni's architecture and training methods.
 | Learning Transferable Visual Models From Natural Language Supervision | Radford et al. | 2021 | CLIP-style contrastive image-text training |
 | HiFi-GAN: Generative Adversarial Networks for Efficient and High Fidelity Speech Synthesis | Kong et al. | 2020 | Neural vocoder (waveform generation) |
 | Connectionist Temporal Classification: Labelling Unsegmented Sequence Data with Recurrent Neural Networks | Graves et al. | 2006 | CTC loss for audio encoder training |
-| Qwen2.5-Omni Technical Report        | Qwen Team             | 2024 | Thinker-Talker dual-model architecture |
+| Thinker-Talker Architecture (multimodal LLM research) | Various teams | 2024 | Thinker-Talker dual-model architecture |
 | FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness | Dao et al. | 2022 | Efficient attention computation |
 
 ---
@@ -115,12 +115,13 @@ without pre-aligned labels. Uses a blank token and dynamic programming
 to marginalize over all valid alignments. Standard for speech
 recognition training.
 
-### Qwen2.5-Omni (Qwen Team 2024)
+### Thinker-Talker Architecture (Multimodal LLM Research, 2024)
 
-Introduced the Thinker-Talker architecture: a "thinker" LLM reasons
+The Thinker-Talker architecture uses a "thinker" LLM that reasons
 over all modalities and generates text tokens plus audio token
 placeholders; a "talker" model converts those placeholders into audio
-codec codes in streaming fashion.
+codec codes in streaming fashion. This approach was introduced by
+recent multimodal LLM research.
 
 ### FlashAttention (Dao 2022)
 

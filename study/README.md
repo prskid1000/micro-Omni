@@ -37,7 +37,7 @@ See [00-INDEX.md](00-INDEX.md) for the full table of contents.
 
 - Each chapter is self-contained — you can skip around
 - ASCII diagrams show data flow with actual tensor shapes from μOmni
-- Config values shown are the real production values
+- Config values shown are from the synthetic configs
 - Commands shown are copy-paste ready for Windows (bash syntax)
 
 ## What You'll Be Able to Do After
@@ -53,9 +53,9 @@ See [00-INDEX.md](00-INDEX.md) for the full table of contents.
 
 | | |
 |---|---|
-| **Total parameters** | ~25.65 million |
+| **Total parameters** | ~13.9 million (synthetic config) |
 | **GPU requirement** | 12-16GB VRAM (e.g., RTX 3060, 4070, 5070 Ti) |
 | **Modalities** | Text + Images + Audio (in and out) |
 | **Architecture** | Thinker (LLM) + Talker (speech) + encoders |
 | **Training time** | Hours per stage on a single GPU |
-| **Based on** | Qwen3 Omni architecture (simplified) |
+| **Based on** | Thinker-Talker architecture (inspired by modern multimodal LLMs) |

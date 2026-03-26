@@ -350,24 +350,10 @@ micro-Omni uses a weight decay of 0.01 through AdamW.
 
 ### micro-Omni's Parameter Count
 
-micro-Omni has approximately **25.65 million** trainable parameters. Here is where they
-live:
-
-```
-  Component                   Approx. Parameters
-  ---------                   ------------------
-  Text Embedding + Output     ~5.2M
-  Audio Encoder (Conv+Proj)   ~1.5M
-  Audio Decoder               ~2.4M
-  Thinker (8 Transformer      ~14.8M
-    blocks, d=384)
-  Image Encoder (Patch+Proj)  ~1.2M
-  Special tokens + misc       ~0.55M
-  -----------------------------------------
-  TOTAL                       ~25.65M
-```
+micro-Omni (synthetic config) has approximately **13.9 million** trainable parameters,
+distributed across the Thinker (core LLM), Audio Encoder, Vision Encoder, Talker,
+and RVQ codec. The Thinker holds the majority of parameters.
 
 For reference, this fits comfortably in the memory of a single consumer GPU. The entire
-model's weights file is roughly 100 MB -- small enough to email. Yet as you will see in
-the coming chapters, careful architecture design makes these 25 million parameters
-surprisingly capable.
+model's weights file is small enough to email. Yet as you will see in the coming
+chapters, careful architecture design makes these parameters surprisingly capable.

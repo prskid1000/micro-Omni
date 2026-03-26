@@ -116,8 +116,8 @@ on a CPU takes hours on a GPU.
 **3. Transformers.** In 2017, a new architecture called the Transformer replaced older
 designs (RNNs, LSTMs). Transformers process all words in a sentence simultaneously
 instead of one-by-one, making them faster and better at capturing long-range patterns.
-Nearly every modern AI -- GPT, BERT, Whisper, Stable Diffusion -- is built on
-Transformers.
+Nearly every modern AI system -- large language models, speech recognition,
+image generation -- is built on Transformers.
 
 ```
 Before 2012          2012-2016             2017-present
@@ -136,9 +136,9 @@ datasets         |   CNNs for images   |   Scales to billions
 
 micro-Omni is a **tiny multimodal AI**. Let's unpack those words:
 
-- **Tiny:** only ~25 million parameters. For comparison, GPT-3 has 175 *billion*.
-  micro-Omni is roughly 7,000x smaller. It is designed to train and run on a single
-  consumer GPU.
+- **Tiny:** only ~13.9 million parameters (synthetic config). For comparison, large
+  language models have billions of parameters. micro-Omni is designed to train and
+  run on a single consumer GPU.
 
 - **Multimodal:** it handles multiple types of data -- text, images, and audio -- in
   one unified model. Most AIs specialize in just one modality. micro-Omni weaves them
@@ -155,8 +155,8 @@ micro-Omni is a **tiny multimodal AI**. Let's unpack those words:
   |             |                        |
   |  Image ----+--->  Transformer  ---> Output
   |             |     ("Thinker")       (text,
-  |  Audio ----+      8 blocks           audio,
-  |                   ~25M params        or both)
+  |  Audio ----+      4 blocks           audio,
+  |                   ~13.9M params     or both)
   +--------------------------------------+
          Runs on 1 GPU, trains in hours
 ```

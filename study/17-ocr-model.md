@@ -260,7 +260,7 @@ Output: "ABC 1234"
 ## File Reference
 
 - **Source**: `omni/ocr_model.py`
-- **Config**: `configs/ocr_tiny.json`
+- **Config**: `configs/synthetic_ocr.json`
 - **Classes**: `OCRModel`, `OCRDecoder`, `OCRDecoderBlock`
 - **Dependencies**: Reuses `ViTTiny` from `omni/vision_encoder.py`, `Attention` and `MLP` from `omni/thinker.py`
 
