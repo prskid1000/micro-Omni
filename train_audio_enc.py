@@ -5,7 +5,7 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.audio_encoder import AudioEncoderTiny
-from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata, LRSpike
+from omni.utils import set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, ASRDataset, EMA, load_checkpoint, setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext, collate_mel_text_fn, analyze_asr_dataset, save_training_metadata, load_training_metadata, TrainingMonitor, setup_cuda
 from tqdm import tqdm
 
 def main(cfg):
@@ -13,10 +13,7 @@ def main(cfg):
     seed = cfg.get("seed", 42)
     set_seed(seed)
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.fp32_precision = 'tf32'
-    torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    device = setup_cuda()
     save_dir = cfg.get("save_dir", "checkpoints/audio_enc_tiny")
     os.makedirs(save_dir, exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
@@ -189,16 +186,7 @@ def main(cfg):
     max_steps = cfg.get("max_steps", 5000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
-    # LR spike mechanism for validation loss increases
-    use_lr_spike = cfg.get("use_lr_spike", True)
-    lr_spike = None
-    if use_lr_spike:
-        lr_spike = LRSpike(
-            spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
-            spike_duration=cfg.get("lr_spike_duration", 50),
-            consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
-        )
-        print(f"LR spike enabled: multiplier={lr_spike.spike_multiplier}x, duration={lr_spike.spike_duration} steps, trigger after {lr_spike.consecutive_increases} consecutive val loss increases")
+    monitor = TrainingMonitor(cfg)
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
@@ -285,7 +273,7 @@ def main(cfg):
         "scheduler": (scheduler, scheduler.load_state_dict),
         "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
         "ema": (ema, ema.load_state_dict) if ema is not None else None,
-        "lr_spike": (lr_spike, lr_spike.load_state_dict) if lr_spike is not None else None
+        "monitor": (monitor, monitor.load_state_dict)
     }
     if head is not None:
         state_dict_loaders["head"] = (head, head.load_state_dict)
@@ -477,9 +465,8 @@ def main(cfg):
                 if ema is not None:
                     ema.update()
                 
-                # Update LR spike (countdown if active)
-                if lr_spike is not None:
-                    lr_spike.step(opt, logger)
+                # Update training monitor (LR spike countdown if active)
+                monitor.step(opt, logger)
                 
                 opt.zero_grad(set_to_none=True)  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
@@ -505,8 +492,7 @@ def main(cfg):
                     model_data["scaler"] = scaler.state_dict()
                 if ema is not None:
                     model_data["ema"] = ema.state_dict()
-                if lr_spike is not None:
-                    model_data["lr_spike"] = lr_spike.get_state_dict()
+                model_data["monitor"] = monitor.get_state_dict()
                 torch.save(model_data, model_path)
                 
                 # Save training metadata (step, calculated values, etc.)
@@ -600,9 +586,10 @@ def main(cfg):
                     if ema is not None:
                         ema.restore()
                     
-                    # Check for LR spike trigger
-                    if lr_spike is not None:
-                        lr_spike.check_and_spike(avg_val_loss, opt, logger)
+                    # Check for LR spike trigger / early stopping
+                    monitor.on_val_end(avg_val_loss, opt, {"model": model, "head": head}, logger)
+                    if monitor.should_stop:
+                        break
                     
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):

@@ -18,9 +18,9 @@
   "ema_decay": 0.999,
 
   "lr": 0.001,
-  "wd": 0.01,
+  "wd": 0.0,
   "warmup_steps": 50,
-  "max_steps": 2000,
+  "max_steps": 1700,
 
   "batch_size": 32,
   "gradient_accumulation_steps": 1,
@@ -32,12 +32,12 @@
   "num_workers": 2,
   "drop_last": true,
 
-  "print_freq": 100,
-  "max_epochs": 100,
+  "print_freq": 50,
+  "max_epochs": 30,
 
-  "val_loss_threshold": 5.0,
+  "val_loss_threshold": 1.0,
   "val_split": 0.1,
-  "val_freq": 200,
+  "val_freq": 100,
   "val_batches": 20,
   "val_batches_epoch_end": 50,
 
@@ -54,5 +54,11 @@
   "ctx_len_sample_size": 100000,
   "ctx_len_percentile": 95.0,
 
-  "use_lr_spike": false
+  "use_early_stopping": false,
+  "early_stopping_patience": 5,
+  "early_stopping_min_delta": 0.001,
+  "use_lr_spike": true,
+  "lr_spike_multiplier": 5.0,
+  "lr_spike_duration": 50,
+  "lr_spike_consecutive_increases": 3
 }

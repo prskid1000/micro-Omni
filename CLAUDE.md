@@ -34,6 +34,26 @@ Stage G: python train_ocr.py       --config configs/ocr_tiny.json         # OCR 
 
 Dependencies: A/B/C can run in parallel. D needs A. E needs A+B+C+D. F and G are independent.
 
+## Running Training (CLI / Claude Code)
+- Always use `.venv/Scripts/python.exe` (not system `python`) — torch is in the venv
+- Always set `PYTHONIOENCODING=utf-8` — Windows cp1252 breaks emoji in print statements
+- **Never pipe output through `tail`** — it buffers everything and you can't monitor progress
+- Write output to a log file and `tail -f` it, or just let it stream:
+```bash
+# CORRECT — output streams live, can check progress anytime with: tail -5 logs/stage_a.log
+export PYTHONIOENCODING=utf-8
+.venv/Scripts/python.exe train_text.py --config configs/synthetic_thinker.json 2>&1 | tee logs/stage_a.log
+
+# CORRECT for background — output goes to file, check with: tail -5 logs/stage_a.log
+export PYTHONIOENCODING=utf-8
+.venv/Scripts/python.exe train_text.py --config configs/synthetic_thinker.json > logs/stage_a.log 2>&1
+
+# WRONG — buffers all output, can't see progress until finished
+.venv/Scripts/python.exe train_text.py --config configs/synthetic_thinker.json 2>&1 | tail -20
+```
+- Kill all training: `taskkill //F //IM python.exe //T`
+- Check running: `tasklist //FI "IMAGENAME eq python.exe" //FO TABLE`
+
 ## Inference
 
 ```
@@ -53,9 +73,10 @@ python export/test_hf_multimodal.py                                             
 - `model.safetensors` uses HF flat keys; `model_full.safetensors` has all components prefixed
 
 ## Performance Rules (MUST follow)
+- `device = setup_cuda()` at top of every training script — sets cudnn.benchmark + TF32 in one call
 - `use_amp: true` always — halves VRAM, 2x throughput
 - `AdamW(fused=True)` on all CUDA training — fuses optimizer into single kernel (~15% faster)
-- TF32 precision enabled globally (PyTorch 2.9+ API): `torch.backends.cuda.matmul.fp32_precision = 'tf32'` and `torch.backends.cudnn.conv.fp32_precision = 'tf32'`
+- `TrainingMonitor(cfg)` replaces separate LRSpike/early-stopping — one object handles LR spike + early stopping + best weight tracking
 - `opt.zero_grad(set_to_none=True)` not `opt.zero_grad()` — frees gradient memory
 - `pin_memory=True` on all DataLoaders (except vocoder)
 - `torch.backends.cudnn.benchmark = True` in all training scripts

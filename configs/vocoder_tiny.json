@@ -27,7 +27,7 @@
   "mel_weight_decay_factor": 0.5,
   "discriminator_update_interval": 2,
   "discriminator_lr_warmup_steps": 500,
-  "val_loss_threshold": 0.05,
+  "val_loss_threshold": 3.0,
   "val_split": 0.1,
   "print_freq": 50,
   "checkpoint_freq": 1000,

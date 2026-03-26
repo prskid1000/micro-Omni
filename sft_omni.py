@@ -16,7 +16,7 @@ from omni.utils import (
     reload_from_last_checkpoint, MixDataset,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, load_audio, save_training_metadata, load_training_metadata,
-    LRSpike
+    TrainingMonitor, setup_cuda
 )
 
 def mix_collate_fn(batch):
@@ -52,10 +52,7 @@ def main(cfg):
     seed = cfg.get("seed", 42)
     set_seed(seed)
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.fp32_precision = 'tf32'
-    torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    device = setup_cuda()
     save_dir = cfg.get("save_dir", "checkpoints/omni_sft_tiny")
     os.makedirs(save_dir, exist_ok=True)
     
@@ -167,16 +164,8 @@ def main(cfg):
     max_steps = cfg.get("max_steps", 2000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
-    # LR spike mechanism for validation loss increases
-    use_lr_spike = cfg.get("use_lr_spike", True)
-    lr_spike = None
-    if use_lr_spike:
-        lr_spike = LRSpike(
-            spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
-            spike_duration=cfg.get("lr_spike_duration", 50),
-            consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
-        )
-        print(f"LR spike enabled: multiplier={lr_spike.spike_multiplier}x, duration={lr_spike.spike_duration} steps, trigger after {lr_spike.consecutive_increases} consecutive val loss increases")
+    # Training monitor (LR spike, early stopping, etc.)
+    monitor = TrainingMonitor(cfg)
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
@@ -467,7 +456,7 @@ def main(cfg):
             "optimizer": (opt, opt.load_state_dict),
             "scheduler": (scheduler, scheduler.load_state_dict),
             "scaler": (scaler, scaler.load_state_dict) if scaler is not None else None,
-            "lr_spike": (lr_spike, lr_spike.load_state_dict) if lr_spike is not None else None
+            "monitor": (monitor, monitor.load_state_dict)
         }
     )
     
@@ -686,9 +675,7 @@ def main(cfg):
                     opt.step()
                 scheduler.step()
                 
-                # Update LR spike (countdown if active)
-                if lr_spike is not None:
-                    lr_spike.step(opt, logger)
+                monitor.step(opt, logger)
                 
                 opt.zero_grad(set_to_none=True)  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
@@ -784,9 +771,10 @@ def main(cfg):
                     avg_val_loss = val_loss_sum / max(val_count, 1)
                     logger.val_step(step, avg_val_loss, epoch)
                     
-                    # Check for LR spike trigger
-                    if lr_spike is not None:
-                        lr_spike.check_and_spike(avg_val_loss, opt, logger)
+                    # Check for LR spike trigger / early stopping
+                    monitor.on_val_end(avg_val_loss, opt, {"thinker": think, "proj_a": proj_a, "proj_v": proj_v}, logger)
+                    if monitor.should_stop:
+                        break
                     
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):
@@ -851,8 +839,7 @@ def main(cfg):
                 }
                 if scaler is not None:
                     checkpoint_data["scaler"] = scaler.state_dict()
-                if lr_spike is not None:
-                    checkpoint_data["lr_spike"] = lr_spike.get_state_dict()
+                checkpoint_data["monitor"] = monitor.get_state_dict()
                 torch.save(checkpoint_data, model_path)
                 
                 # Save training metadata

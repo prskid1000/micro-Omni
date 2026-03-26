@@ -36,7 +36,7 @@
   "print_freq": 100,
   "max_epochs": 500,
 
-  "val_loss_threshold": 0.1,
+  "val_loss_threshold": 0.3,
   "val_split": 0.05,
   "val_freq": 500,
   "val_batches": 50,

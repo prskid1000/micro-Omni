@@ -39,7 +39,7 @@
 
   "use_amp": true,
 
-  "val_loss_threshold": 0.1,
+  "val_loss_threshold": 0.3,
   "val_split": 0.1,
 
   "print_freq": 50,

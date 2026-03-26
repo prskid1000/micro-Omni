@@ -36,7 +36,9 @@ Text  ──→ Token Embeddings ───────────┤
 | Multi-Token Prediction | 2 heads (predict t+2, t+3) |
 | Sliding Window Attention | Infrastructure ready (window_size=0 default) |
 | YaRN RoPE | Infrastructure ready (scaling_factor=1.0 default) |
-| Label Smoothing | 0.1 across all training |
+| Label Smoothing | 0.1 pretraining, 0.05 SFT |
+| Training Monitor | TrainingMonitor (LR spike + early stopping + best weights) |
+| Fused AdamW | `fused=True` on all CUDA optimizers |
 
 **Training time** (RTX 5070 Ti Laptop GPU, synthetic 2000 samples):
 | Stage | Clean Run | Epochs |
@@ -171,7 +173,9 @@ Key settings across all configs:
 | `use_mtp` | `false` | Multi-Token Prediction — predict t+2, t+3 during training |
 | `window_size` | `128` | Sliding Window Attention — O(n*w) for alternating layers |
 | `rope_scaling_factor` | `1.0` | YaRN RoPE — context extension beyond training length |
-| `label_smoothing` | `0.1` | Label smoothing across all training for better calibration |
+| `label_smoothing` | `0.1` | Label smoothing (SFT uses 0.05) |
+| `use_early_stopping` | `false` | Early stopping on val plateau (true for SFT) |
+| `use_lr_spike` | `true` | LR spike to escape loss plateaus |
 | `use_spiking` | `false` | Arthemis spiking attention (experimental) |
 | `use_ltc` | `false` | Arthemis liquid time constants (experimental) |
 

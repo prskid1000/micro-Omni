@@ -522,6 +522,8 @@ VRAM usage by stage (16GB budget):
 [x] Pre-allocated causal masks         (register_buffer)
 [x] num_workers = 2                    (keep GPU fed)
 [x] EMA for validation model           (smoother weights)
+[x] TrainingMonitor                    (LR spike + early stopping + best weights)
+[x] setup_cuda()                       (centralized CUDA/TF32/cudnn setup)
 [x] SFT: frozen encoders               (save ~3M params of gradients)
 [x] SFT: separate projector LR (5x)   (faster alignment)
 ```

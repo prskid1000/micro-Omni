@@ -2,64 +2,51 @@
   "save_dir": "checkpoints/ocr_tiny",
   "train_csv": "data/ocr/production_ocr.csv",
   "image_root": "data/ocr",
-
   "img_size": 224,
   "patch": 16,
-
   "vision_d_model": 192,
   "vision_layers": 2,
   "vision_heads": 3,
   "vision_d_ff": 768,
-
   "decoder_d_model": 384,
   "decoder_layers": 3,
   "decoder_heads": 6,
   "decoder_d_ff": 1536,
-
   "dropout": 0.1,
   "use_gqa": true,
   "use_swiglu": true,
   "use_flash": true,
-  "rope_theta": 10000.0,
+  "use_compile": false,
   "use_spiking": false,
   "use_ltc": false,
-
-  "batch_size": 32,
-  "num_workers": 2,
-  "drop_last": true,
-
   "lr": 0.001,
   "wd": 0.01,
-  "warmup_steps": 100,
-  "max_steps": 3000,
-  "max_epochs": 50,
-
+  "warmup_steps": 50,
+  "max_steps": 1700,
+  "batch_size": 32,
   "gradient_accumulation_steps": 1,
-  "max_grad_norm": 1.0,
-
   "use_amp": true,
-
-  "val_loss_threshold": 0.1,
-  "val_split": 0.1,
-
+  "num_workers": 2,
+  "drop_last": true,
   "print_freq": 50,
-  "checkpoint_freq": 1000,
-  "val_freq": 200,
+  "max_epochs": 30,
+  "val_loss_threshold": 1.0,
+  "val_split": 0.1,
+  "val_freq": 100,
   "val_batches": 20,
   "val_batches_epoch_end": 50,
-
+  "checkpoint_freq": 500,
+  "max_grad_norm": 1.0,
   "seed": 42,
   "shuffle_buffer_size": 10000,
-
   "use_ema": true,
-  "ema_decay": 0.9995,
-
-  "use_compile": false,
-
-  "max_text_length_percentile": 95.0,
-
+  "ema_decay": 0.999,
+  "use_early_stopping": false,
+  "early_stopping_patience": 5,
+  "early_stopping_min_delta": 0.001,
   "use_lr_spike": true,
-  "lr_spike_multiplier": 8.0,
-  "lr_spike_duration": 150,
-  "lr_spike_consecutive_increases": 2
+  "lr_spike_multiplier": 5.0,
+  "lr_spike_duration": 50,
+  "lr_spike_consecutive_increases": 3,
+  "label_smoothing": 0.1
 }

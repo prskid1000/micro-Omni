@@ -374,8 +374,9 @@ tokens regardless of modality.
 | Converged | 0.8-1.5 | |
 
 Expect **validation loss spikes** when the batch composition changes (e.g.,
-a run of audio samples followed by vision samples). This is normal. The LR
-spike mechanism (Chapter 21) handles this automatically.
+a run of audio samples followed by vision samples). This is normal. The
+`TrainingMonitor` (Chapter 21) handles this automatically via LR spikes,
+and optionally triggers early stopping if loss fails to recover.
 
 **Output files:**
 

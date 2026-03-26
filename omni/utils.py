@@ -676,6 +676,16 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def setup_cuda():
+    """Standard CUDA setup for all training scripts. Call once at start of main()."""
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    return device
+
+
 class LRSpike:
     """
     Learning Rate Spike mechanism for when validation loss increases successively.
@@ -786,6 +796,116 @@ class LRSpike:
         self.spike_active = state_dict.get('spike_active', False)
         self.spike_steps_remaining = state_dict.get('spike_steps_remaining', 0)
         self.original_lrs = state_dict.get('original_lrs', [])
+
+class TrainingMonitor:
+    """
+    Unified training monitor: LR spike + early stopping + val_loss threshold.
+    Combines all validation-based training decisions into one class.
+
+    Flow on each val check:
+      1. Track best val_loss, save best weights
+      2. If val_loss spiked above threshold → reload checkpoint (existing behavior)
+      3. If consecutive val increases → LR spike to escape plateau
+      4. If no improvement for patience evals → early stop & restore best weights
+
+    Config keys:
+      use_lr_spike, lr_spike_multiplier, lr_spike_duration, lr_spike_consecutive_increases
+      use_early_stopping, early_stopping_patience, early_stopping_min_delta
+    """
+
+    def __init__(self, cfg: dict):
+        # LR Spike
+        self.use_lr_spike = cfg.get("use_lr_spike", False)
+        self.spike = LRSpike(
+            spike_multiplier=cfg.get("lr_spike_multiplier", 5.0),
+            spike_duration=cfg.get("lr_spike_duration", 50),
+            consecutive_increases=cfg.get("lr_spike_consecutive_increases", 3),
+        ) if self.use_lr_spike else None
+
+        # Early stopping
+        self.use_early_stopping = cfg.get("use_early_stopping", False)
+        self.es_patience = cfg.get("early_stopping_patience", 5)
+        self.es_min_delta = cfg.get("early_stopping_min_delta", 0.001)
+        self.es_counter = 0
+        self.should_stop = False
+
+        # Best model tracking (shared by early stopping + general best-model saving)
+        self.best_val_loss = float('inf')
+        self.best_state_dicts = {}
+
+    def on_val_end(self, val_loss: float, optimizer, models: dict = None, logger=None) -> bool:
+        """
+        Call after each validation. Returns True if training should stop.
+
+        Args:
+            val_loss: Current validation loss
+            optimizer: PyTorch optimizer (for LR spike)
+            models: Dict of {name: model} for best-weight tracking
+            logger: Optional logger
+        Returns:
+            True if training should stop (early stopping triggered)
+        """
+        improved = val_loss < self.best_val_loss - self.es_min_delta
+
+        # Track best
+        if improved:
+            self.best_val_loss = val_loss
+            self.es_counter = 0
+            if models:
+                self.best_state_dicts = {n: {k: v.clone() for k, v in m.state_dict().items()} for n, m in models.items()}
+        else:
+            self.es_counter += 1
+
+        # LR spike
+        if self.spike is not None:
+            self.spike.check_and_spike(val_loss, optimizer, logger)
+
+        # Early stopping
+        if self.use_early_stopping and not improved:
+            if logger:
+                logger.info(f"EarlyStopping: no improvement ({self.es_counter}/{self.es_patience}), best={self.best_val_loss:.4f}, current={val_loss:.4f}")
+            if self.es_counter >= self.es_patience:
+                self.should_stop = True
+                if logger:
+                    logger.info("EarlyStopping: patience exhausted. Stopping training.")
+
+        return self.should_stop
+
+    def step(self, optimizer, logger=None):
+        """Call every training step (for LR spike countdown)."""
+        if self.spike is not None:
+            self.spike.step(optimizer, logger)
+
+    def restore_best(self, models: dict, logger=None):
+        """Restore best weights after early stopping."""
+        if self.best_state_dicts:
+            for name, model in models.items():
+                if name in self.best_state_dicts:
+                    model.load_state_dict(self.best_state_dicts[name])
+            if logger:
+                logger.info(f"Restored best weights (val_loss={self.best_val_loss:.4f})")
+
+    def get_state_dict(self):
+        state = {
+            'best_val_loss': self.best_val_loss,
+            'es_counter': self.es_counter,
+            'should_stop': self.should_stop,
+        }
+        if self.spike is not None:
+            state['lr_spike'] = self.spike.get_state_dict()
+        return state
+
+    def load_state_dict(self, state_dict):
+        self.best_val_loss = state_dict.get('best_val_loss', float('inf'))
+        self.es_counter = state_dict.get('es_counter', 0)
+        self.should_stop = state_dict.get('should_stop', False)
+        if self.spike is not None and 'lr_spike' in state_dict:
+            self.spike.load_state_dict(state_dict['lr_spike'])
+
+
+# Keep EarlyStopping as a standalone alias for backward compatibility
+EarlyStopping = TrainingMonitor
+
 
 def get_lr_scheduler(optimizer, warmup_steps, max_steps, min_lr_ratio=0.1):
     """

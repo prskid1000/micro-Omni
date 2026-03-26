@@ -13,7 +13,7 @@ All neural network modules for μOmni. Imported by training scripts, inference, 
 | `codec.py` | RVQ, HiFiGANVocoder, GriffinLimVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator, ResBlock, NeuralVocoder | Speech codec (2 codebooks × 128) + vocoders (neural + classical) |
 | `ocr_model.py` | OCRModel, OCRDecoder, OCRDecoderBlock | ViT encoder + cross-attention decoder for text extraction from images |
 | `tokenizer.py` | BPETokenizer | SentencePiece BPE wrapper (train_new, encode, decode) |
-| `utils.py` | RoPE, RMSNorm, EMA, LRFinder, LRSpike, ProjectionHead, LearnableTemperature, TextDataset, ASRDataset, TTSDataset, VocoderDataset, ImgCapDataset, MixDataset, OCRDataset | Shared utilities — positional encoding, normalization, training helpers, all streaming datasets, checkpoint management, collate functions |
+| `utils.py` | RoPE, RMSNorm, EMA, LRFinder, LRSpike, TrainingMonitor (wraps LRSpike + early stopping + best weight tracking), EarlyStopping (alias for TrainingMonitor), setup_cuda(), ProjectionHead, LearnableTemperature, TextDataset, ASRDataset, TTSDataset, VocoderDataset, ImgCapDataset, MixDataset, OCRDataset | Shared utilities — positional encoding, normalization, training helpers, all streaming datasets, checkpoint management, collate functions |
 
 ## Key Additions
 - **ThinkerLM.generate()**: Autoregressive text generation with temperature, top-k, top-p, repetition penalty support

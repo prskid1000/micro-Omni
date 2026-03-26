@@ -21,8 +21,8 @@ from omni.utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
-    save_training_metadata, load_training_metadata, analyze_vocoder_dataset, LRSpike,
-    validate_loss
+    save_training_metadata, load_training_metadata, analyze_vocoder_dataset, TrainingMonitor,
+    setup_cuda, validate_loss
 )
 from tqdm import tqdm
 
@@ -112,8 +112,9 @@ def mel_loss(mel_real, mel_fake, mel_lengths=None):
         valid_elements = (mel_lengths * n_mels).float().sum().clamp(min=1)
         loss = masked_loss.sum() / valid_elements
     else:
-        # Fallback: average over all frames (includes padding)
-        loss = torch.mean(torch.abs(mel_real - mel_fake))
+        # Fallback: truncate to shorter length to handle generator output size mismatch
+        min_len = min(mel_real.shape[-1], mel_fake.shape[-1])
+        loss = torch.mean(torch.abs(mel_real[..., :min_len] - mel_fake[..., :min_len]))
     return loss
 
 
@@ -122,7 +123,7 @@ def main(cfg):
     seed = cfg.get("seed", 42)
     set_seed(seed)
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = setup_cuda()
     save_dir = cfg.get("save_dir", "checkpoints/vocoder_tiny")
     os.makedirs(save_dir, exist_ok=True)
     
@@ -230,25 +231,6 @@ def main(cfg):
         num_scales=cfg.get("msd_num_scales", 2)
     ).to(device)
     
-    # CNN-specific optimizations
-    if device == "cuda":
-        # Enable cuDNN autotuner for faster convolutions (finds best algorithms)
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cuda.matmul.fp32_precision = 'tf32'
-        torch.backends.cudnn.conv.fp32_precision = 'tf32'
-        
-        # Use channels_last memory format for better performance on modern GPUs
-        # Provides 10-30% speedup for convolutional networks
-        # Note: HiFiGAN uses 1D convolutions, so channels_last (NHWC) might not apply or be beneficial compared to contiguous
-        # try:
-        #     generator = generator.to(memory_format=torch.channels_last)
-        #     print("✓ Generator using channels_last memory format")
-        # except:
-        #     print("⚠ channels_last not supported for generator")
-        
-        # Note: Discriminators use 1D convolutions, channels_last is for 2D/3D only
-        print("✓ cuDNN benchmark mode enabled for faster convolutions")
-    
     # Optimizers
     opt_g = torch.optim.AdamW(
         generator.parameters(),
@@ -279,12 +261,8 @@ def main(cfg):
     scheduler_g = get_lr_scheduler(opt_g, warmup_steps, max_steps)
     scheduler_d = get_lr_scheduler(opt_d, warmup_steps, max_steps)
     
-    # LR Spike mechanism
-    lr_spike = LRSpike(
-        spike_multiplier=cfg.get("lr_spike_multiplier", 5.0), 
-        spike_duration=cfg.get("lr_spike_duration", 50),
-        consecutive_increases=cfg.get("lr_spike_consecutive_increases", 2)
-    )
+    # Training monitor (LR spike, early stopping, etc.)
+    monitor = TrainingMonitor(cfg)
     
     # Mixed precision (FP16) - saves ~50% memory, 2x faster
     use_amp = cfg.get("use_amp", True) and device == "cuda"
@@ -786,7 +764,7 @@ def main(cfg):
                     scaler_g.step(opt_g)
                     scaler_g.update()
                     scheduler_g.step()
-                    lr_spike.step(opt_g, logger)
+                    monitor.step(opt_g, logger)
                     
                     # Update EMA after generator optimizer step
                     if ema is not None:
@@ -874,7 +852,7 @@ def main(cfg):
                     
                     opt_g.step()
                     scheduler_g.step()
-                    lr_spike.step(opt_g, logger)
+                    monitor.step(opt_g, logger)
                     opt_g.zero_grad(set_to_none=True)
                     step += 1  # Increment step counter only when optimizer step occurs
             
@@ -958,8 +936,10 @@ def main(cfg):
                     val_loss_d /= val_samples
                     logger.info(f"Step {step} | val_loss_g={val_loss_g:.4f} | val_loss_d={val_loss_d:.4f}")
                     
-                    # Check for LR spike trigger
-                    lr_spike.check_and_spike(val_loss_g, opt_g, logger)
+                    # Check for LR spike trigger / early stopping
+                    monitor.on_val_end(val_loss_g, opt_g, {"generator": generator}, logger)
+                    if monitor.should_stop:
+                        break
                     
                     # Restore original weights after validation
                     if ema is not None:

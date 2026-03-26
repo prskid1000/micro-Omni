@@ -41,6 +41,11 @@ JSON configs that control all training hyperparameters. **These are the source o
 | `gradient_accumulation_steps` | Effective batch multiplier | 2-8 depending on stage |
 | `num_workers` | DataLoader parallelism | `2` |
 | `temperature` | CLIP contrastive temperature | `0.07` (vision only) |
+| `use_lr_spike` | Enable LR spike on val plateau | `true` (via TrainingMonitor) |
+| `use_early_stopping` | Stop when val loss plateaus | `true` for SFT, `false` for pretraining |
+| `early_stopping_patience` | Evals without improvement before stop | `5` |
+| `early_stopping_min_delta` | Min improvement to count as progress | `0.001` |
+| `val_loss_threshold` | Max spike above checkpoint before reload | Per-stage: 0.3-10.0 |
 
 ## FFN Dimension
 The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=128`, this gives `d_ff=344` (rounded to nearest even). This follows the SwiGLU convention from LLaMA.
@@ -56,4 +61,6 @@ The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=
 - SFT projectors need higher LR (`proj_lr_mult: 5.0`) — they're randomly initialized
 - SFT `label_smoothing: 0.1` is too aggressive — use `0.05` for better calibration
 - All optimizers must use `fused=True` on CUDA — free 10-20% speedup
-- TF32: use PyTorch 2.9+ API (`fp32_precision = 'tf32'`), not deprecated `allow_tf32`
+- Use `setup_cuda()` not manual `torch.backends` lines — centralized in `omni/utils.py`
+- Use `TrainingMonitor(cfg)` not separate `LRSpike()` — handles spike + early stop + best weights
+- Synthetic configs: `val_loss_threshold: 999.0` disables reload (small data noise); production uses real thresholds

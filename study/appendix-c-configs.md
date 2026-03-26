@@ -116,6 +116,9 @@ giving ~3x throughput with negligible accuracy loss.
 | `val_freq`         | int   | 500     | Run validation every N steps           |
 | `val_batches`      | int   | 20      | Number of batches per validation run   |
 | `val_loss_threshold`| float| 10.0    | Skip checkpoints above this val loss   |
+| `use_early_stopping`| bool | false   | Enable early stopping via TrainingMonitor |
+| `early_stopping_patience`| int | 5  | Consecutive val checks without improvement before stopping |
+| `early_stopping_min_delta`| float | 0.001 | Minimum val loss improvement to count as progress |
 
 ---
 

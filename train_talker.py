@@ -11,7 +11,7 @@ from omni.utils import (
     TTSDataset, EMA,
     load_checkpoint, setup_resume_data_loading, calculate_resume_position,
     ValidationSkipSamplesContext, collate_mel_fn, analyze_tts_dataset,
-    save_training_metadata, load_training_metadata, LRSpike
+    save_training_metadata, load_training_metadata, TrainingMonitor, setup_cuda
 )
 from tqdm import tqdm
 
@@ -20,10 +20,7 @@ def main(cfg):
     seed = cfg.get("seed", 42)
     set_seed(seed)
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.fp32_precision = 'tf32'
-    torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    device = setup_cuda()
     save_dir = cfg.get("save_dir", "checkpoints/talker_tiny")
     os.makedirs(save_dir, exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
@@ -78,16 +75,8 @@ def main(cfg):
     max_steps = cfg.get("max_steps", 5000)
     scheduler = get_lr_scheduler(opt, warmup_steps, max_steps)
     
-    # LR Spike mechanism
-    use_lr_spike = cfg.get("use_lr_spike", False)
-    lr_spike = None
-    if use_lr_spike:
-        lr_spike = LRSpike(
-            spike_multiplier=cfg.get("lr_spike_multiplier", 2.0),
-            spike_duration=cfg.get("lr_spike_duration", 50),
-            consecutive_increases=cfg.get("lr_spike_consecutive_increases", 3)
-        )
-        print(f"✓ LR Spike enabled: {cfg.get('lr_spike_multiplier')}x for {cfg.get('lr_spike_duration')} steps")
+    # Training monitor (LR spike, early stopping, etc.)
+    monitor = TrainingMonitor(cfg)
     
     # Gradient clipping
     max_grad_norm = cfg.get("max_grad_norm", 1.0)
@@ -451,8 +440,7 @@ def main(cfg):
                 else:
                     opt.step()
                 scheduler.step()
-                if lr_spike is not None:
-                    lr_spike.step(opt, logger)
+                monitor.step(opt, logger)
                 opt.zero_grad(set_to_none=True)  # Clear gradients after stepping
                 step += 1  # This is the "effective" step for logging
 
@@ -586,9 +574,10 @@ def main(cfg):
                     if ema is not None:
                         ema.restore()
                     
-                    # Check for LR spike trigger
-                    if lr_spike is not None:
-                        lr_spike.check_and_spike(avg_val_loss, opt, logger)
+                    # Check for LR spike trigger / early stopping
+                    monitor.on_val_end(avg_val_loss, opt, {"rvq": rvq, "talker": talker}, logger)
+                    if monitor.should_stop:
+                        break
                     
                     # Check for loss spike
                     if last_checkpoint_val_loss is not None and val_loss_threshold < float('inf'):

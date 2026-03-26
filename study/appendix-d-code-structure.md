@@ -252,6 +252,10 @@ Shared utilities used across all components.
 | `RMSNorm`             | Root Mean Square Layer Normalization                 |
 | `EMA`                 | Exponential Moving Average of model parameters       |
 | `CosineScheduler`     | Learning rate schedule with warmup + cosine decay    |
+| `LRSpike`             | LR spike on consecutive val loss increases (low-level)|
+| `TrainingMonitor`     | Unified wrapper: LR spike + early stopping + best weight tracking. Constructed with `TrainingMonitor(cfg)`. |
+| `EarlyStopping`       | Alias for `TrainingMonitor` (backward compatibility) |
+| `setup_cuda()`        | Centralized CUDA setup: seeds, TF32, cudnn.benchmark, matmul precision. Replaces per-script boilerplate. |
 | `TextDataset`         | Dataset for text training (tokenized chunks)         |
 | `AudioTextDataset`    | Dataset for audio-text pairs                         |
 | `ImageTextDataset`    | Dataset for image-text pairs                         |
@@ -276,10 +280,13 @@ Shared utilities used across all components.
 | `sft_omni.py`       | All components    | Combined config          |
 
 All training scripts follow the same pattern:
-1. Load config JSON
-2. Build model and datasets
-3. Training loop with AMP, gradient clipping, cosine LR
-4. Periodic validation and checkpoint saving
+1. Call `setup_cuda()` for CUDA/TF32/cudnn configuration
+2. Load config JSON
+3. Build model and datasets
+4. Create `monitor = TrainingMonitor(cfg)` for LR spike + early stopping + best weight tracking
+5. Training loop with AMP, gradient clipping, cosine LR
+6. Call `monitor.step(opt, logger)` each step; `monitor.on_val_end(val_loss, opt, models_dict, logger)` after validation
+7. If `monitor.should_stop`, call `monitor.restore_best(models_dict)` and exit
 
 ---
 

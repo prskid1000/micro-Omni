@@ -20,7 +20,7 @@ for your specific issue.
 | `triton` / `ptxas` / `sm_120` errors | torch.compile on RTX 50xx | Set `use_compile = False` |
 | `_orig_mod.` prefix in state dict | Compiled model checkpoint | Use `strip_orig_mod()` utility |
 | Buzzy/metallic audio output | Vocoder undertrained | Increase `max_audio_length_percentile`, train longer |
-| Loss spikes during SFT | Modality transitions in batch | Normal — LR spike mechanism handles it |
+| Loss spikes during SFT | Modality transitions in batch | Normal — `TrainingMonitor` handles it (LR spike + optional early stopping) |
 | Training hangs on Windows | DataLoader multiprocessing | Add `if __name__ == '__main__':` guard |
 | File not found on Windows | Backslash paths | Use forward slashes in all configs |
 | Beam search CTC duplicates | Duplicate chars in output | Fixed in beam search decoder -- was a known bug |
@@ -301,10 +301,37 @@ training.
 
 ---
 
-## 21.11 LR Spike Mechanism
+## 21.11 TrainingMonitor (LR Spike + Early Stopping + Best Weights)
 
-The training scripts include an automatic LR adjustment for when validation
-loss increases:
+Training scripts use `TrainingMonitor(cfg)` from `omni/utils.py` to unify
+three training-stability features in one class. The underlying `LRSpike`
+class still exists for standalone use, but all scripts now go through the
+monitor.
+
+### Setup
+
+```python
+from omni.utils import TrainingMonitor, setup_cuda
+
+setup_cuda()                          # replaces per-script CUDA boilerplate
+monitor = TrainingMonitor(cfg)        # reads config for all three features
+```
+
+### Per-step call
+
+```python
+monitor.step(opt, logger)            # replaces lr_spike.step(opt, logger)
+```
+
+### After validation
+
+```python
+monitor.on_val_end(val_loss, opt, models_dict, logger)
+# replaces lr_spike.check_and_spike(...)
+# also tracks best weights and early-stopping counter
+```
+
+### LR spike behavior (unchanged from before)
 
 ```
 Validation losses over time:
@@ -315,9 +342,9 @@ Validation losses over time:
                          → LR spike triggered!
 ```
 
-When validation loss increases for 2+ consecutive evaluations, the LR spike
-mechanism temporarily boosts the learning rate to escape a bad region of the
-loss landscape.
+When validation loss increases for 2+ consecutive evaluations, the monitor
+temporarily boosts the learning rate to escape a bad region of the loss
+landscape.
 
 ```
 Normal LR:  |---------|
@@ -327,13 +354,40 @@ LR Spike:             |--*--|
 Back to normal:             |---------|
 ```
 
+### Early stopping (new)
+
+When `use_early_stopping: true` in the config, the monitor also watches for
+prolonged stagnation:
+
+```
+Config keys:
+  "use_early_stopping": true,
+  "early_stopping_patience": 5,       # consecutive checks without improvement
+  "early_stopping_min_delta": 0.001   # minimum improvement to reset counter
+```
+
+If `monitor.should_stop` becomes `True`, the training loop should call
+`monitor.restore_best(models_dict)` to load the best weights seen so far,
+then exit cleanly.
+
+### Best weight tracking (new)
+
+The monitor automatically snapshots model weights whenever validation loss
+improves. Call `monitor.restore_best(models_dict)` at the end of training
+(or on early stop) to revert all models to their best checkpoint in memory.
+
+### Backward compatibility
+
+`EarlyStopping` is an alias for `TrainingMonitor` so old code that imports
+`EarlyStopping` still works.
+
 This is especially important during SFT (Stage E), where switching between
 modalities in the batch can cause temporary loss increases that look like
 divergence but are actually just the model readjusting.
 
-**Do not disable the LR spike mechanism** unless you have a specific reason.
-If you see "LR spike triggered" in the logs, it means the mechanism is working
-as intended.
+**Do not disable the TrainingMonitor** unless you have a specific reason.
+If you see "LR spike triggered" in the logs, it means the mechanism is
+working as intended.
 
 ---
 
