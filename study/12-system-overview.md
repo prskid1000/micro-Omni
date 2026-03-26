@@ -40,42 +40,35 @@ In the same way, the system has:
          v                 v                 v
   +-------------+   +-------------+   +-------------+
   |  ViT-Tiny   |   |  AuT-Tiny   |   | tok_emb     |
-  |  d=192      |   |  d=384      |   | (32000,384) |
-  |  8 layers   |   |  8 layers   |   |             |
+  |  d=128      |   |  d=128      |   | (256, 128)  |
+  |  4 layers   |   |  4 layers   |   |             |
   +-------------+   +-------------+   +-------------+
          |                 |                 |
-         | CLS (1,192)     | (T/8,384)       | (T,384)
-         v                 |                 |
-  +-------------+          |                 |
-  | proj 192->  |          |                 |
-  |   384       |          |                 |
-  +-------------+          |                 |
-         |                 |                 |
-         | (1,384)         | (T/8,384)       | (T,384)
+         | CLS (1,128)     | (T/8,128)       | (T,128)
          v                 v                 v
   +----------------------------------------------+
   |          CONCATENATE along sequence dim       |
-  |  => (B, 1 + T/8 + T_text, 384)               |
+  |  => (B, 1 + T/8 + T_text, 128)               |
   +----------------------------------------------+
                        |
                        v
             +--------------------+
             |      THINKER       |
-            |   d=384, 8 layers  |
-            |   6 heads, ff=1536 |
+            |   d=128, 4 layers  |
+            |   4 heads, ff=344  |
             |   Causal Attention |
             +--------------------+
                        |
                        v
-              text logits (B, T, 32000)
+              text logits (B, T, 256)
                        |
               +--------+--------+
               |                 |
               v                 v
         Text Response      +----------+
         (decoded via       |  TALKER  |
-         tokenizer)        |  d=384   |
-                           |  8 layers|
+         tokenizer)        |  d=128   |
+                           |  4 layers|
                            +----------+
                                 |
                                 v
@@ -134,7 +127,7 @@ There are three classical approaches to combining modalities:
 Why hybrid is the best of both worlds:
 
 - Each encoder is optimized for its modality (convolutions for audio, patches for images, learned embeddings for text)
-- The shared 384-dimensional space lets the Thinker attend across modalities -- an image token can attend to a text token and vice versa
+- The shared embedding space (d_model dimensions) lets the Thinker attend across modalities -- an image token can attend to a text token and vice versa
 - Any subset of modalities works: text-only, image+text, audio+text, or all three
 
 ---
@@ -145,15 +138,15 @@ Every input modality is converted to a sequence of 384-dimensional vectors. The 
 
 | Modality | Token Rate | Example |
 |----------|-----------|---------|
-| **Image** | 1 token (CLS) | One 224x224 image = 1 token of size 384 (after projection from 192) |
+| **Image** | 1 token (CLS) | One 224x224 image = 1 token of size 128 |
 | **Audio** | 12.5 tokens/sec | 8x conv downsample from 100Hz mel frames. 10 seconds of audio = 125 tokens |
-| **Text** | 1 token/subword | SentencePiece BPE with vocab=32000. "Hello world" = ~2 tokens |
+| **Text** | 1 token/subword | BPE tokenizer. "Hello world" = ~2 tokens |
 
-With a context length of 256 (Thinker training) or 512 (SFT), you can fit:
+With a context length of 64 (Thinker synthetic) or 128 (SFT synthetic), you can fit:
 
-- Pure text: 256 tokens (~200 words)
-- Image + text question: 1 + ~50 = 51 tokens (plenty of room)
-- 10s audio + text prompt: 125 + ~20 = 145 tokens
+- Pure text: 64 tokens (synthetic) or longer with larger ctx_len
+- Image + text question: 1 + ~20 = 21 tokens (plenty of room)
+- A few seconds of audio + text prompt: fits within context
 
 ---
 
@@ -258,7 +251,7 @@ User sends: image.jpg + "What is this?"
 
 1. **Single CLS token for images**: Rather than sending all 196 patches (14x14) to the Thinker, we compress each image to 1 token. This saves context length but loses spatial detail. The OCR model uses full patch sequences when spatial detail matters.
 
-2. **Shared dimension (384)**: All modality encoders project to the same 384-dimensional space. The Vision Encoder internally uses d=192 but projects up to 384 before concatenation.
+2. **Shared dimension (d_model)**: All modality encoders project to the same d_model-dimensional space (128 in synthetic config). All encoders use the same d_model, so no projection is needed between them.
 
 3. **Frozen encoders during SFT**: During supervised fine-tuning (Stage E), the audio and vision encoders are loaded from pretrained checkpoints. Only the Thinker and projection layers are fine-tuned.
 

@@ -88,7 +88,7 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 
 | File | Component | Params | Purpose |
 |------|-----------|--------|---------|
-| `thinker.py` | ThinkerLM | ~13.9M* | Decoder-only LLM — processes all modalities, generates text. Includes Block, Attention (RoPE, GQA, Sliding Window), MLP (SwiGLU), MoE, MTP, YaRN RoPE, Arthemis extensions. *13.9M for synthetic config; production configs in `.bak` files |
+| `thinker.py` | ThinkerLM | ~13.9M | Decoder-only LLM — processes all modalities, generates text. Includes Block, Attention (RoPE, GQA, Sliding Window), MLP (SwiGLU), MoE, MTP, YaRN RoPE, Arthemis extensions |
 | `audio_encoder.py` | AudioEncoderTiny | ~2.0M | Mel spectrogram → transformer encoder. CTC mode (ASR) or contrastive mode (CLAP) |
 | `vision_encoder.py` | ViTTiny | ~914K | Image patches → transformer encoder → CLS token. Also contains TransformerTextEncoder for CLIP training |
 | `talker.py` | TalkerTiny | ~2.2M | Autoregressive speech code predictor — predicts RVQ codebook indices frame by frame |

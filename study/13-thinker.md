@@ -154,15 +154,15 @@ As covered in Chapters 4 and 9, the Thinker uses:
 
 **RoPE (Rotary Position Embeddings)**: Position information is injected by rotating Q and K vectors based on their position index. This allows the model to generalize to unseen positions and naturally encodes relative distances.
 
-**GQA (Grouped Query Attention)**: With 6 query heads and 3 KV groups, every 2 query heads share the same key/value head. This cuts KV cache memory by 50% while maintaining nearly the same quality as full multi-head attention.
+**GQA (Grouped Query Attention)**: With 4 query heads and 2 KV groups, every 2 query heads share the same key/value head. This cuts KV cache memory by 50% while maintaining nearly the same quality as full multi-head attention.
 
 ```
-Query heads:    Q0  Q1  Q2  Q3  Q4  Q5     (6 heads)
-                 \  /    \  /    \  /
-KV groups:       KV0     KV1     KV2        (3 groups)
+Query heads:    Q0  Q1  Q2  Q3     (4 heads)
+                 \  /    \  /
+KV groups:       KV0     KV1       (2 groups)
 ```
 
-Head dimension: d_model / n_heads = 384 / 6 = **64** per head.
+Head dimension: d_model / n_heads = 128 / 4 = **32** per head.
 
 ---
 
@@ -254,7 +254,7 @@ Layer 3 (full): full attention again
 ...
 ```
 
-This alternating pattern gives the best of both worlds: SWA layers handle local patterns efficiently (O(T*W) instead of O(T^2)), while full attention layers maintain long-range dependencies. This is the same strategy used by Mistral and other production models.
+This alternating pattern gives the best of both worlds: SWA layers handle local patterns efficiently (O(T*W) instead of O(T^2)), while full attention layers maintain long-range dependencies. This is the same strategy used by several production LLMs.
 
 ### YaRN RoPE Extension
 

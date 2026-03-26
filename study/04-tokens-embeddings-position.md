@@ -326,9 +326,9 @@ Each pair of dimensions uses a different base frequency `theta`, creating a spec
 
 | Concept | What It Does | micro-Omni Setting |
 |---------|-------------|-------------------|
-| BPE Tokenizer | Splits text into subword tokens | SentencePiece, 32K vocab |
+| BPE Tokenizer | Splits text into subword tokens | SentencePiece BPE (32K for production, 256 for synthetic) |
 | Special tokens | PAD, BOS, EOS, UNK | IDs 0, 1, 2, 3 |
-| nn.Embedding | Maps token ID to dense vector | 32000 x 384 |
+| nn.Embedding | Maps token ID to dense vector | vocab_size x d_model |
 | RoPE | Encodes position via rotation | Applied in attention layers |
 
 **Key takeaway:** The tokenization pipeline transforms arbitrary text into a sequence of dense, position-aware vectors — the universal language that transformers understand.

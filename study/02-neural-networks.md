@@ -70,7 +70,8 @@ with the probability based on how negative they are.
 ```
 
 Like a dimmer switch instead of an on/off switch -- smoother gradients during training.
-micro-Omni uses GELU in its feed-forward layers because it trains more stably.
+micro-Omni uses SwiGLU (which internally uses the Swish activation) in its feed-forward
+layers because it trains more stably and produces better results.
 
 ---
 

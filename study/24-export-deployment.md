@@ -114,26 +114,26 @@ HuggingFace how to discover the custom model class:
     "AutoModelForCausalLM": "modeling_muomni.MuOmniForCausalLM"
   },
   "thinker": {
-    "vocab_size": 32000,
+    "vocab_size": 256,
     "d_model": 128,
-    "n_layers": 8,
-    "n_heads": 6,
+    "n_layers": 4,
+    "n_heads": 4,
     "d_ff": 344,
-    "ctx_len": 256
+    "ctx_len": 64
   },
   "audio_enc": {
     "n_mels": 128,
-    "d_model": 384,
-    "n_layers": 8
+    "d_model": 128,
+    "n_layers": 4
   },
   "vision": {
     "img_size": 224,
     "patch": 16,
-    "embed_dim": 256
+    "embed_dim": 128
   },
   "talker": {
-    "d_model": 384,
-    "n_layers": 8
+    "d_model": 128,
+    "n_layers": 4
   }
 }
 ```

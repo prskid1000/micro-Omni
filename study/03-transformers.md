@@ -47,8 +47,8 @@ The result was the **Transformer** -- an architecture that is:
   apart. No telephone game.
 - **Scalable:** performance improves predictably as you add data and parameters.
 
-Every major AI model since 2018 -- BERT, GPT, T5, Whisper, Stable Diffusion, and
-micro-Omni -- is built on Transformers.
+Every major AI model since 2018 -- language models, speech recognition, image
+generation, and micro-Omni -- is built on Transformers.
 
 ---
 

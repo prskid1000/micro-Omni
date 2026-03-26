@@ -6,18 +6,18 @@
 - `torch.compile()` does NOT work (Triton/Inductor lacks Blackwell support) — keep `use_compile: false`
 - BFloat16 is supported and preferred over float16
 
-## Architecture (Thinker-Talker, ~25.65M params)
+## Architecture (Thinker-Talker, ~13.9M params with synthetic config)
 
 ```
-omni/thinker.py       ThinkerLM       ~20.3M   Decoder-only LLM (RoPE, GQA, SwiGLU, optional MoE/Arthemis), generate() with temperature/top-k/top-p/repetition_penalty
-omni/audio_encoder.py AudioEncoderTiny ~2.0M   Mel → Conv2D 8x downsample → Transformer → CTC/CLAP
-omni/vision_encoder.py ViTTiny          ~914K   Image patches → Transformer → CLS token (CLIP training)
-omni/talker.py        TalkerTiny       ~2.2M   AR speech code predictor (2 codebooks × 128 codes)
-omni/codec.py         RVQ + Vocoders    ~49K   RVQ codec, HiFi-GAN (generator+discriminators), Griffin-Lim
-omni/ocr_model.py     OCRModel         ~2.1M   ViT encoder + cross-attention decoder → character output
-omni/tokenizer.py     BPETokenizer       —     SentencePiece BPE (32K vocab for production)
-omni/utils.py         Utilities          —     RoPE (cached), RMSNorm, EMA, streaming datasets, collate fns,
-                                                checkpoint mgmt, LR scheduler, LR finder, gradient utilities
+omni/thinker.py       ThinkerLM          Decoder-only LLM (RoPE, GQA, SwiGLU, optional MoE/Arthemis), generate() with temperature/top-k/top-p/repetition_penalty
+omni/audio_encoder.py AudioEncoderTiny   Mel → Conv2D 8x downsample → Transformer → CTC/CLAP
+omni/vision_encoder.py ViTTiny           Image patches → Transformer → CLS token (CLIP training)
+omni/talker.py        TalkerTiny         AR speech code predictor (2 codebooks × 128 codes)
+omni/codec.py         RVQ + Vocoders     RVQ codec (~49K), HiFi-GAN (generator+discriminators), Griffin-Lim
+omni/ocr_model.py     OCRModel           ViT encoder + cross-attention decoder → character output
+omni/tokenizer.py     BPETokenizer       SentencePiece BPE (256 vocab synthetic, 32K production)
+omni/utils.py         Utilities          RoPE (cached), RMSNorm, EMA, streaming datasets, collate fns,
+                                         checkpoint mgmt, LR scheduler, LR finder, gradient utilities
 ```
 
 ## Training Pipeline

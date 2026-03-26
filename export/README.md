@@ -111,5 +111,5 @@ The exported model uses the "tiny" configuration:
 - **Vision Encoder**: d_model=512, n_layers=8, n_heads=8
 - **Talker**: d_model=384, n_layers=8, n_heads=6
 
-See `configs/*_tiny.json` for full component configurations.
+See `configs/synthetic_*.json` for full component configurations.
 

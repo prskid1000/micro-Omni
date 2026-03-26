@@ -235,7 +235,7 @@ image -> ViT-Tiny -> CLS token (1, 192) -> Linear(192, 384) -> (1, 384)
 
 This single 384-dim vector is concatenated with text embeddings and fed to the Thinker. The projection from 192 to 384 is a simple linear layer added during SFT (Chapter 19).
 
-Why does ViT use d=192 internally while the Thinker uses d=384? To save parameters. The vision encoder only needs to capture visual features; the heavier reasoning happens in the Thinker. A linear projection bridges the dimension gap.
+In the synthetic config, all encoders and the Thinker use the same d_model=128, so no projection is needed. In larger configurations, the vision encoder may use a smaller internal dimension with a linear projection to bridge the gap.
 
 ---
 

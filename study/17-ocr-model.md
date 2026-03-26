@@ -53,7 +53,7 @@ logits: (B, T, vocab_size)    character predictions
 
 ---
 
-## Configuration (from `configs/ocr_tiny.json`)
+## Configuration (from `configs/synthetic_ocr.json`)
 
 ### Vision Encoder (inside OCR)
 
