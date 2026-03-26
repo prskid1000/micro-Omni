@@ -63,14 +63,36 @@ micro-Omni training scripts.
 | `lr`                         | float | 3e-4     | Peak learning rate                   |
 | `wd`                         | float | 0.1      | Weight decay (AdamW)                 |
 | `warmup_steps`               | int   | 500      | Linear warmup steps                  |
-| `max_steps`                  | int   | 50000    | Total training steps                 |
-| `batch_size`                 | int   | 32       | Batch size per step                  |
+| `max_steps`                  | int   | 50000    | Total training steps (synthetic configs use 2000; production uses 50K+) |
+| `batch_size`                 | int   | 32       | Batch size per step (SFT uses 4; was 2) |
 | `gradient_accumulation_steps`| int   | 1        | Gradient accumulation factor         |
 | `max_grad_norm`              | float | 1.0      | Gradient clipping norm               |
-| `label_smoothing`            | float | 0.1      | Label smoothing factor (0 = off)     |
+| `label_smoothing`            | float | 0.1      | Label smoothing factor (SFT uses 0.05; other stages use 0.1) |
+| `proj_lr_mult`               | float | 5.0      | Projector LR multiplier (SFT only — scales LR for projection layers) |
 | `seed`                       | int   | 42       | Random seed                          |
 | `save_every`                 | int   | 1000     | Save checkpoint every N steps        |
 | `log_every`                  | int   | 100      | Log metrics every N steps            |
+
+---
+
+## Optimizer
+
+All training scripts use AdamW with `fused=True` on CUDA devices, which fuses
+the optimizer step into a single kernel for better performance:
+
+```python
+optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=wd, fused=True)
+```
+
+TF32 precision is enabled via the PyTorch 2.9+ API for faster float32 matmuls
+on Ampere+ GPUs:
+
+```python
+torch.set_float32_matmul_precision('high')
+```
+
+This allows CUDA cores to use TF32 (19-bit) internally for float32 operations,
+giving ~3x throughput with negligible accuracy loss.
 
 ---
 
@@ -151,6 +173,26 @@ micro-Omni training scripts.
 | `decoder_heads`| int   | 4       | OCR decoder attention heads               |
 | `decoder_dim`  | int   | 256     | OCR decoder hidden dimension              |
 | `char_vocab`   | int   | 8000    | Character-level vocabulary size           |
+
+---
+
+## Quick Reference: Model Variants
+
+Which configs and training scripts to use for each deployment target:
+
+| Variant         | Configs Needed                                          | Training Scripts (in order)                          |
+|-----------------|---------------------------------------------------------|------------------------------------------------------|
+| Text-only       | `synthetic_thinker.json`                                | `train_text.py`                                      |
+| Text+Vision     | `synthetic_thinker.json`, `synthetic_vision.json`, modified `synthetic_omni_sft.json` | `train_text.py`, `train_vision.py`, `sft_omni.py` |
+| Text+Audio      | `synthetic_thinker.json`, `synthetic_audio_enc.json`, modified `synthetic_omni_sft.json` | `train_text.py`, `train_audio_enc.py`, `sft_omni.py` |
+| Full Multimodal | All `synthetic_*.json` configs                          | `train_text.py`, `train_audio_enc.py`, `train_vision.py`, `train_talker.py`, `sft_omni.py` |
+
+Notes:
+- Stages A/B/C (text, audio encoder, vision) can run in parallel.
+- Stage D (talker) requires a trained thinker from Stage A.
+- Stage E (SFT) requires all prior stages to be complete.
+- Stages F (vocoder) and G (OCR) are optional and independent.
+- Synthetic configs use `max_steps: 2000` for quick iteration; swap to production configs (`*_tiny.json`) for real training at 50K+ steps.
 
 ---
 

@@ -1,3 +1,5 @@
+[← Previous: 16-talker-speech](16-talker-speech.md) | [Index](00-INDEX.md) | [Next: 18-data-preparation →](18-data-preparation.md)
+
 # Chapter 17: OCR Model -- Reading Text from Images
 
 The OCR (Optical Character Recognition) model extracts text from images. While the main vision pipeline (Chapter 15) compresses an entire image into a single CLS token for general understanding, the OCR model preserves **spatial detail** -- it needs to know where individual characters are, not just what the image "means."

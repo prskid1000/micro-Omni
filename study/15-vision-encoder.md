@@ -1,3 +1,5 @@
+[← Previous: 14-audio-encoder](14-audio-encoder.md) | [Index](00-INDEX.md) | [Next: 16-talker-speech →](16-talker-speech.md)
+
 # Chapter 15: Vision Encoder (ViT-Tiny)
 
 The Vision Encoder is the system's eye. It takes an image and produces a compact embedding that the Thinker can reason about. Unlike the audio encoder which outputs a sequence of frames, the vision encoder compresses an entire image into a **single CLS token** -- one 192-dimensional vector that captures the image's semantic meaning.

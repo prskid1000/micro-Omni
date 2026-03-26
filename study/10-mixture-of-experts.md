@@ -1,6 +1,6 @@
-# Chapter 10: Mixture of Experts
+[← Previous: 09-efficient-attention](09-efficient-attention.md) | [Index](00-INDEX.md) | [Next: 11-vector-quantization →](11-vector-quantization.md)
 
-[← Back to Index](00-INDEX.md) | [Previous: Efficient Attention](09-efficient-attention.md) | [Next: Vector Quantization →](11-vector-quantization.md)
+# Chapter 10: Mixture of Experts
 
 ---
 

@@ -63,6 +63,9 @@ def main(cfg):
     set_seed(seed)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
+    torch.backends.cudnn.conv.fp32_precision = 'tf32'
     save_dir = cfg.get("save_dir", "checkpoints/ocr_tiny")
     os.makedirs(save_dir, exist_ok=True)
     
@@ -160,7 +163,8 @@ def main(cfg):
     opt = torch.optim.AdamW(
         model.parameters(),
         lr=cfg.get("lr", 3e-4),
-        weight_decay=cfg.get("wd", 0.01)
+        weight_decay=cfg.get("wd", 0.01),
+        fused=device=="cuda"
     )
     
     # EMA for improved model quality (optional)

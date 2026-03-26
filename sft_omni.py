@@ -54,6 +54,8 @@ def main(cfg):
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
+    torch.backends.cudnn.conv.fp32_precision = 'tf32'
     save_dir = cfg.get("save_dir", "checkpoints/omni_sft_tiny")
     os.makedirs(save_dir, exist_ok=True)
     
@@ -136,13 +138,28 @@ def main(cfg):
         vision_state = strip_orig_mod(vision_state)
         vis.load_state_dict(vision_state)
 
+    # Freeze encoders — they are pretrained and not optimized; avoids wasted gradient compute
+    aud.eval()
+    for p in aud.parameters():
+        p.requires_grad = False
+    vis.eval()
+    for p in vis.parameters():
+        p.requires_grad = False
+
     # simple projectors - use actual model dimensions
     audio_dim = audio_cfg.get("d_model", 192) if os.path.exists(audio_cfg_path) else 384
     vision_dim = vision_cfg.get("d_model", 128) if os.path.exists(vision_cfg_path) else 192
     thinker_d_model = thinker_cfg.get("d_model", 256)
     proj_a = torch.nn.Linear(audio_dim, thinker_d_model).to(device)
     proj_v = torch.nn.Linear(vision_dim, thinker_d_model).to(device)
-    opt = torch.optim.AdamW(list(think.parameters())+list(proj_a.parameters())+list(proj_v.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
+    # Separate param groups: higher LR for randomly-initialized projectors
+    proj_lr_mult = cfg.get("proj_lr_mult", 5.0)
+    base_lr = cfg.get("lr", 3e-4)
+    use_fused = device == "cuda"
+    opt = torch.optim.AdamW([
+        {"params": think.parameters(), "lr": base_lr},
+        {"params": list(proj_a.parameters()) + list(proj_v.parameters()), "lr": base_lr * proj_lr_mult},
+    ], weight_decay=cfg.get("wd", 0.01), fused=use_fused)
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0, label_smoothing=cfg.get("label_smoothing", 0.0))
     
     # Learning rate scheduler with warmup
@@ -182,6 +199,10 @@ def main(cfg):
     tok_model = os.path.join(thinker_ckpt, "tokenizer.model")
     from omni.tokenizer import BPETokenizer
     tok = BPETokenizer(tok_model)
+
+    # Pre-allocate causal mask and image transform (avoid re-creating each step)
+    _causal_mask = torch.tril(torch.ones(ctx_len, ctx_len, device=device))
+    img_transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
 
     def pack_text(prompt, answer, ctx):
         ids = [1] + tok.encode(prompt + " " + answer)
@@ -260,7 +281,6 @@ def main(cfg):
             
             if valid_images:
                 # Load and process all images at once
-                img_transform = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
                 img_tensors = []
                 for img_path in valid_images:
                     img = img_transform(Image.open(img_path).convert("RGB"))
@@ -268,14 +288,19 @@ def main(cfg):
                 
                 if img_tensors:
                     img_batch = torch.stack(img_tensors).to(device)  # (N, 3, 224, 224)
+                    # Vision encoder is frozen — always no_grad; projector needs grad when training
+                    with torch.no_grad():
+                        if use_amp_flag:
+                            with autocast(device_type='cuda'):
+                                cls_batch, _ = vis(img_batch)
+                        else:
+                            cls_batch, _ = vis(img_batch)
                     with torch.set_grad_enabled(is_training):
                         if use_amp_flag and is_training:
                             with autocast(device_type='cuda'):
-                                cls_batch, _ = vis(img_batch)  # (N, 1, d_vision)
-                                img_emb_batch = proj_v(cls_batch)  # (N, 1, thinker_d_model)
+                                img_emb_batch = proj_v(cls_batch)
                         else:
-                            cls_batch, _ = vis(img_batch)  # (N, 1, d_vision)
-                            img_emb_batch = proj_v(cls_batch)  # (N, 1, thinker_d_model)
+                            img_emb_batch = proj_v(cls_batch)
                     
                     # Store embeddings for valid indices
                     for idx, emb in zip(valid_indices, img_emb_batch):
@@ -313,14 +338,19 @@ def main(cfg):
                         mel_batch.append(m.squeeze(0))
                     mel_batch = torch.stack(mel_batch)  # (N, T, 128)
                     
+                    # Audio encoder is frozen — always no_grad; projector needs grad when training
+                    with torch.no_grad():
+                        if use_amp_flag:
+                            with autocast(device_type='cuda'):
+                                audio_emb_batch = aud(mel_batch)
+                        else:
+                            audio_emb_batch = aud(mel_batch)
                     with torch.set_grad_enabled(is_training):
                         if use_amp_flag and is_training:
                             with autocast(device_type='cuda'):
-                                audio_emb_batch = aud(mel_batch)  # (N, T', d_audio)
-                                audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
+                                audio_emb_batch = proj_a(audio_emb_batch)
                         else:
-                            audio_emb_batch = aud(mel_batch)  # (N, T', d_audio)
-                            audio_emb_batch = proj_a(audio_emb_batch)  # (N, T', thinker_d_model)
+                            audio_emb_batch = proj_a(audio_emb_batch)
                     
                     # Limit audio length and store
                     max_audio_tokens = ctx_len // 4
@@ -503,7 +533,8 @@ def main(cfg):
         think.train()
         proj_a.train()
         proj_v.train()
-        
+        # aud and vis stay in eval() — they are frozen
+
         # Create progress bar with correct starting position when resuming mid-epoch
         remaining_epochs = max_epochs - epoch - 1
         pbar_desc = f"epoch{epoch}/{max_epochs-1} (remaining:{remaining_epochs}) step{step}"
@@ -544,9 +575,7 @@ def main(cfg):
                         # Create causal attention mask combined with padding mask
                         B, T = batch_mask.shape
                         attn_mask = batch_mask.unsqueeze(1) * batch_mask.unsqueeze(2)  # (B, T, T) - both must be 1
-                        # Apply causal mask (lower triangular)
-                        causal_mask = torch.tril(torch.ones(T, T, device=device))
-                        attn_mask = attn_mask * causal_mask.unsqueeze(0)  # (B, T, T)
+                        attn_mask = attn_mask * _causal_mask[:T, :T].unsqueeze(0)  # (B, T, T)
                         
                         logits = think(embeddings=batch_emb, attn_mask=attn_mask)  # (B, T, vocab)
                         # Calculate loss (ignore_index=0 handles padding in targets)
@@ -557,8 +586,7 @@ def main(cfg):
                     # Convert attention mask to (B, T, T) format for ThinkerLM
                     B, T = batch_mask.shape
                     attn_mask = batch_mask.unsqueeze(1) * batch_mask.unsqueeze(2)  # (B, T, T)
-                    causal_mask = torch.tril(torch.ones(T, T, device=device))
-                    attn_mask = attn_mask * causal_mask.unsqueeze(0)  # (B, T, T)
+                    attn_mask = attn_mask * _causal_mask[:T, :T].unsqueeze(0)  # (B, T, T)
                     
                     logits = think(embeddings=batch_emb, attn_mask=attn_mask)  # (B, T, vocab)
                     # Calculate loss (ignore_index=0 handles padding in targets)
@@ -883,8 +911,7 @@ def main(cfg):
                     # Convert attention mask to (B, T, T) format for ThinkerLM
                     val_B, val_T = val_mask.shape
                     val_attn_mask = val_mask.unsqueeze(1) * val_mask.unsqueeze(2)  # (B, T, T)
-                    val_causal_mask = torch.tril(torch.ones(val_T, val_T, device=device))
-                    val_attn_mask = val_attn_mask * val_causal_mask.unsqueeze(0)  # (B, T, T)
+                    val_attn_mask = val_attn_mask * _causal_mask[:val_T, :val_T].unsqueeze(0)  # (B, T, T)
                     
                     try:
                         if use_amp:

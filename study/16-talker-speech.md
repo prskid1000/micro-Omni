@@ -1,3 +1,5 @@
+[← Previous: 15-vision-encoder](15-vision-encoder.md) | [Index](00-INDEX.md) | [Next: 17-ocr-model →](17-ocr-model.md)
+
 # Chapter 16: Talker & Speech Generation
 
 The Talker is the system's voice. While the Thinker generates text responses, the Talker converts those responses into speech by predicting sequences of RVQ (Residual Vector Quantization) codes -- discrete tokens that represent audio frames. These codes are then decoded back to a mel spectrogram and finally to an audible waveform by a vocoder.

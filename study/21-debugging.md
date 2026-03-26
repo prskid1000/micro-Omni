@@ -1,3 +1,5 @@
+[← Previous: 20-performance-optimization](20-performance-optimization.md) | [Index](00-INDEX.md) | [Next: 22-setup-environment →](22-setup-environment.md)
+
 # Chapter 21: Debugging & Troubleshooting
 
 Things will go wrong during training. This chapter is a reference you come back

@@ -1,3 +1,5 @@
+[← Previous: 23-inference-chat](23-inference-chat.md) | [Index](00-INDEX.md) | [Next: 25-testing-validation →](25-testing-validation.md)
+
 # Chapter 24: Export & Deployment
 
 Merging trained component checkpoints into a single deployable file.
@@ -113,24 +115,25 @@ HuggingFace how to discover the custom model class:
   },
   "thinker": {
     "vocab_size": 32000,
-    "d_model": 512,
+    "d_model": 128,
     "n_layers": 8,
-    "n_heads": 8,
-    "ctx_len": 2048
+    "n_heads": 6,
+    "d_ff": 344,
+    "ctx_len": 256
   },
   "audio_enc": {
-    "n_mels": 80,
-    "d_model": 256,
-    "n_layers": 4
+    "n_mels": 128,
+    "d_model": 384,
+    "n_layers": 8
   },
   "vision": {
     "img_size": 224,
     "patch": 16,
-    "embed_dim": 384
+    "embed_dim": 256
   },
   "talker": {
-    "d_model": 256,
-    "n_layers": 4
+    "d_model": 384,
+    "n_layers": 8
   }
 }
 ```

@@ -22,6 +22,8 @@ def main(cfg):
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
+    torch.backends.cudnn.conv.fp32_precision = 'tf32'
     save_dir = cfg.get("save_dir", "checkpoints/talker_tiny")
     os.makedirs(save_dir, exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
@@ -51,7 +53,7 @@ def main(cfg):
         use_ltc=cfg.get("use_ltc", False),
         compile_model=use_compile
     ).to(device)
-    opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01))
+    opt = torch.optim.AdamW(list(rvq.parameters())+list(talker.parameters()), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.01), fused=device=="cuda")
     
     # EMA for improved model quality (optional)
     use_ema = cfg.get("use_ema", False)

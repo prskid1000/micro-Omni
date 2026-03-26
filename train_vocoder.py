@@ -234,6 +234,8 @@ def main(cfg):
     if device == "cuda":
         # Enable cuDNN autotuner for faster convolutions (finds best algorithms)
         torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
         
         # Use channels_last memory format for better performance on modern GPUs
         # Provides 10-30% speedup for convolutional networks
@@ -252,13 +254,15 @@ def main(cfg):
         generator.parameters(),
         lr=cfg.get("lr_g", 2e-4),
         betas=(0.8, 0.99),
-        weight_decay=cfg.get("wd", 1e-6)
+        weight_decay=cfg.get("wd", 1e-6),
+        fused=device=="cuda"
     )
     opt_d = torch.optim.AdamW(
         list(mpd.parameters()) + list(msd.parameters()),
         lr=cfg.get("lr_d", 2e-4),
         betas=(0.8, 0.99),
-        weight_decay=cfg.get("wd", 1e-6)
+        weight_decay=cfg.get("wd", 1e-6),
+        fused=device=="cuda"
     )
     
     # EMA for generator (optional, improves quality)

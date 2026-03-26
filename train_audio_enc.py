@@ -15,6 +15,8 @@ def main(cfg):
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
+    torch.backends.cudnn.conv.fp32_precision = 'tf32'
     save_dir = cfg.get("save_dir", "checkpoints/audio_enc_tiny")
     os.makedirs(save_dir, exist_ok=True)
     sr = cfg.get("sample_rate", 16000)
@@ -143,7 +145,7 @@ def main(cfg):
     head = nn.Linear(d_model, vocab).to(device) if not use_attention_pooling else None
     ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True) if not use_attention_pooling else None
     
-    opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()) if head else model.parameters(), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.1))
+    opt = torch.optim.AdamW(list(model.parameters())+list(head.parameters()) if head else model.parameters(), lr=cfg.get("lr", 3e-4), weight_decay=cfg.get("wd", 0.1), fused=device=="cuda")
     
     # EMA for improved model quality (optional)
     use_ema = cfg.get("use_ema", False)

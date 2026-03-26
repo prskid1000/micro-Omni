@@ -1,3 +1,5 @@
+[← Previous: 11-vector-quantization](11-vector-quantization.md) | [Index](00-INDEX.md) | [Next: 13-thinker →](13-thinker.md)
+
 # Chapter 12: System Overview & Multimodal Fusion
 
 You have now learned every building block individually -- transformers, attention, tokenization, mel spectrograms, vision patches, vector quantization, and more. It is time to see how they all fit together inside a single system.

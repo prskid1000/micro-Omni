@@ -1,3 +1,5 @@
+[← Previous: 19-training-pipeline](19-training-pipeline.md) | [Index](00-INDEX.md) | [Next: 21-debugging →](21-debugging.md)
+
 # Chapter 20: Performance & Optimization
 
 A 25M-parameter multimodal model should fit comfortably on a 16GB GPU — but
@@ -35,6 +37,40 @@ With AMP:        Model (100MB) + Activations (200MB) = 300MB
                                                         40% less
 ```
 
+### Fused AdamW
+
+Standard AdamW launches multiple CUDA kernels per parameter group — one for each
+of the momentum update, variance update, weight decay, and parameter step. Fused
+AdamW combines all of these into a single CUDA kernel per parameter group:
+
+```python
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=1e-4,
+    fused=(device == "cuda")   # only works on CUDA tensors
+)
+```
+
+The single-kernel approach eliminates kernel launch overhead and reduces memory
+round-trips. In practice this yields a **10-20% training speedup** with no
+effect on convergence or model quality — the math is identical, just executed
+more efficiently.
+
+```
+Standard AdamW (per parameter group):
+  [kernel 1: exp_avg update] → [kernel 2: exp_avg_sq update] →
+  [kernel 3: weight decay]   → [kernel 4: param step]
+
+Fused AdamW:
+  [single kernel: all four operations]
+  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  Fewer kernel launches = less overhead
+```
+
+The `fused=True` flag only works when all parameters are on CUDA. Guard it with
+a device check so the same code runs on CPU during testing. Now enabled in all
+training scripts.
+
 ---
 
 ## 20.2 BFloat16 on Ampere+ GPUs
@@ -57,6 +93,30 @@ bfloat16:  1 sign | 8 exponent  | 7 mantissa    → range: +-3.4e38
 BFloat16 has the same exponent range as float32, so it never overflows during
 training. Float16 can overflow when loss values or gradients exceed 65504,
 causing NaN. With bfloat16, the GradScaler becomes unnecessary.
+
+### TF32 (Tensor Float 32)
+
+On Ampere (RTX 30xx), Ada (RTX 40xx), and Blackwell (RTX 50xx) GPUs, the tensor
+cores support TF32 — a format that uses 19 bits (1 sign + 8 exponent + 10
+mantissa) internally for matmul accumulation. This gives float32-level range
+with float16-level speed, at no code changes required.
+
+PyTorch 2.9+ deprecates the old boolean flags in favor of explicit precision
+strings:
+
+```python
+# Old API (deprecated):
+# torch.backends.cuda.matmul.allow_tf32 = True
+# torch.backends.cudnn.allow_tf32 = True
+
+# New API (PyTorch 2.9+):
+torch.backends.cuda.matmul.fp32_precision = 'tf32'
+torch.backends.cudnn.conv.fp32_precision = 'tf32'
+```
+
+TF32 is transparent — no model changes, no loss scaling, no accuracy
+degradation in practice. It gives a free 2-3x speedup on all float32 matmuls
+and convolutions running on compatible tensor cores.
 
 ---
 
@@ -310,15 +370,84 @@ In practice, label smoothing:
 - **Improves calibration**: Predicted probabilities better match actual correctness rates
 - **Acts as regularization**: Slightly penalizes the model for being too sure, reducing overfitting
 
-The 0.1 default is used across all training scripts that use cross-entropy loss: `train_text.py`, `train_vision.py`, `train_ocr.py`, and `sft_omni.py`. This is the same value used by most production language models.
+The 0.1 default is used in pre-training scripts: `train_text.py`, `train_vision.py`, and `train_ocr.py`. This is the same value used by most production language models.
+
+The SFT stage (`sft_omni.py`) uses a reduced value of `label_smoothing=0.05`.
+Multimodal fine-tuning benefits from less smoothing because the model must learn
+precise cross-modal alignments (e.g., matching audio tokens to text tokens). Too
+much smoothing blurs these distinctions and hurts calibration on multimodal data.
 
 ```python
+# Pre-training stages:
 criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+
+# SFT stage (reduced for better multimodal calibration):
+criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
 ```
 
 ---
 
-## 20.13 VRAM Budget Guide (16GB GPU — RTX 5070 Ti)
+## 20.13 SFT-Specific Optimizations
+
+The multimodal SFT stage (Stage E) has unique optimization opportunities because
+it combines pre-trained encoders with a trainable core. Here are the key
+techniques used in `sft_omni.py`:
+
+### Frozen Encoders
+
+The audio encoder (~2M params) and vision encoder (~914K params) are loaded from
+their pre-trained checkpoints and frozen with `requires_grad=False`. This saves
+~3M parameters worth of gradient computation, optimizer states, and backward-pass
+memory:
+
+```python
+for p in audio_encoder.parameters():
+    p.requires_grad = False
+for p in vision_encoder.parameters():
+    p.requires_grad = False
+```
+
+The model still runs forward passes through these encoders to produce embeddings,
+but no gradients flow back through them.
+
+### Separate Parameter Groups with Higher Projector LR
+
+The projection layers that bridge encoders to the thinker need to learn faster
+than the pre-trained thinker weights. Using separate parameter groups with a 5x
+higher learning rate for projectors accelerates alignment without destabilizing
+the language model:
+
+```python
+param_groups = [
+    {"params": thinker_params,    "lr": base_lr},
+    {"params": projector_params,  "lr": base_lr * 5},
+]
+optimizer = torch.optim.AdamW(param_groups, fused=True)
+```
+
+### Pre-Allocated Causal Mask
+
+As covered in 20.9, the causal mask is registered as a buffer. In SFT this is
+especially important because the multimodal forward pass is already heavier —
+allocating a new mask tensor every step would add unnecessary overhead to an
+already memory-constrained pipeline.
+
+### Image Transform Hoisted Outside Batch Loop
+
+Image preprocessing (resize, normalize, tensor conversion) is applied once when
+building the batch, not inside the training loop. This avoids redundant CPU work
+on every gradient accumulation micro-step:
+
+```python
+# Done once during collation:
+image_tensor = transform(image)
+
+# NOT repeated inside the training loop
+```
+
+---
+
+## 20.14 VRAM Budget Guide (16GB GPU — RTX 5070 Ti)
 
 Here is what fits in 16GB with all optimizations enabled:
 
@@ -376,10 +505,12 @@ VRAM usage by stage (16GB budget):
 
 ---
 
-## 20.14 Optimization Checklist
+## 20.15 Optimization Checklist
 
 ```
 [x] use_amp = True                     (or bfloat16 on Ampere+)
+[x] Fused AdamW                        (10-20% optimizer speedup)
+[x] TF32 precision on Ampere+          (free 2-3x matmul speedup)
 [x] Flash Attention via SDPA           (automatic in PyTorch 2.0+)
 [x] gradient_accumulation_steps set    (effective batch >= 32)
 [x] max_grad_norm = 1.0               (gradient clipping)
@@ -391,6 +522,8 @@ VRAM usage by stage (16GB budget):
 [x] Pre-allocated causal masks         (register_buffer)
 [x] num_workers = 2                    (keep GPU fed)
 [x] EMA for validation model           (smoother weights)
+[x] SFT: frozen encoders               (save ~3M params of gradients)
+[x] SFT: separate projector LR (5x)   (faster alignment)
 ```
 
 Every optimization here is already implemented in the training scripts. This
@@ -399,7 +532,7 @@ when tuning for your specific hardware.
 
 ---
 
-## 20.15 Benchmark Results (Synthetic Data)
+## 20.16 Benchmark Results (Synthetic Data)
 
 The following results were measured on synthetic/deterministic test data to validate pipeline correctness:
 

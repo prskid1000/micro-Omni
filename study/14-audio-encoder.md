@@ -1,3 +1,5 @@
+[← Previous: 13-thinker](13-thinker.md) | [Index](00-INDEX.md) | [Next: 15-vision-encoder →](15-vision-encoder.md)
+
 # Chapter 14: Audio Encoder (AuT-Tiny)
 
 The Audio Encoder is the system's ear. It takes raw speech -- represented as a mel spectrogram -- and converts it into a sequence of 384-dimensional embeddings that the Thinker can process alongside text and image tokens.

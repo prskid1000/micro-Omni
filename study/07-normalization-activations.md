@@ -1,3 +1,5 @@
+[← Previous: 06-image-processing](06-image-processing.md) | [Index](00-INDEX.md) | [Next: 08-decoder-llm-kv-cache →](08-decoder-llm-kv-cache.md)
+
 # Chapter 07: Normalization & Activations
 
 ## Why Normalization? Taming Exploding Values

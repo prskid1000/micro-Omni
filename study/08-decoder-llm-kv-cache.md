@@ -1,6 +1,6 @@
-# Chapter 08: Decoder-Only LLMs & KV Caching
+[← Previous: 07-normalization-activations](07-normalization-activations.md) | [Index](00-INDEX.md) | [Next: 09-efficient-attention →](09-efficient-attention.md)
 
-[← Back to Index](00-INDEX.md) | [Next: Efficient Attention →](09-efficient-attention.md)
+# Chapter 08: Decoder-Only LLMs & KV Caching
 
 ---
 
@@ -247,9 +247,10 @@ Each layer stores K and V tensors. For a model with L layers, H heads, sequence 
 ```
 Cache size = 2 (K and V) x L (layers) x H (heads) x T (tokens) x d_k (head dim) x bytes_per_element
 
-Example for micro-Omni Thinker (d=512, heads=8, 16 layers, fp16):
-  2 x 16 x 8 x T x 64 x 2 bytes = 262,144 x T bytes
-  At T=1024: ~256 MB
+Example for micro-Omni Thinker (d=128, heads=6, 8 layers, fp16):
+  d_k = 128 // 6 = 21
+  2 x 8 x 6 x T x 21 x 2 bytes = 4,032 x T bytes
+  At T=256: ~1 MB  (with GQA kv_groups=2, only 2 KV heads cached → ~672 x T → ~168 KB)
 ```
 
 This grows linearly with sequence length -- manageable but worth monitoring for very long sequences.

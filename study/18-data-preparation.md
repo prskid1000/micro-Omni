@@ -1,3 +1,5 @@
+[← Previous: 17-ocr-model](17-ocr-model.md) | [Index](00-INDEX.md) | [Next: 19-training-pipeline →](19-training-pipeline.md)
+
 # Chapter 18: Data Preparation
 
 Training a multimodal model means feeding five different pipelines with five

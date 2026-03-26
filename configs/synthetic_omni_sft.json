@@ -7,8 +7,9 @@
   "lr": 5e-05,
   "wd": 0.01,
   "warmup_steps": 50,
-  "max_steps": 50000,
-  "batch_size": 2,
+  "max_steps": 2000,
+  "batch_size": 4,
+  "proj_lr_mult": 5.0,
   "gradient_accumulation_steps": 2,
   "use_amp": true,
   "use_flash": true,
@@ -17,7 +18,7 @@
   "drop_last": true,
   "print_freq": 50,
   "max_epochs": 50,
-  "val_loss_threshold": 0.05,
+  "val_loss_threshold": 5.0,
   "val_split": 0.1,
   "val_freq": 100,
   "checkpoint_freq": 500,
@@ -32,10 +33,11 @@
     "n_layers": 4,
     "d_model": 128,
     "n_heads": 4,
-    "d_ff": 512,
+    "d_ff": 344,
     "dropout": 0.05,
     "rope_theta": 10000,
-    "use_gqa": false,
+    "use_gqa": true,
+    "kv_groups": 2,
     "use_swiglu": true,
     "use_moe": false,
     "use_spiking": false,
@@ -49,5 +51,6 @@
     "asr_csv": "data/audio/production_asr.csv"
   },
   "save_dir": "checkpoints/omni_sft_tiny",
-  "use_lr_spike": false
+  "use_lr_spike": false,
+  "label_smoothing": 0.05
 }

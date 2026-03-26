@@ -1,3 +1,5 @@
+[← Previous: 22-setup-environment](22-setup-environment.md) | [Index](00-INDEX.md) | [Next: 24-export-deployment →](24-export-deployment.md)
+
 # Chapter 23: Inference & Chat
 
 Running the trained micro-Omni model for text chat, image QA, audio

@@ -1,3 +1,5 @@
+[← Previous: Index](00-INDEX.md) | [Index](00-INDEX.md) | [Next: 02-neural-networks →](02-neural-networks.md)
+
 # Chapter 01: What is AI?
 
 ### What AI Actually Means

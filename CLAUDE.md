@@ -54,6 +54,8 @@ python export/test_hf_multimodal.py                                             
 
 ## Performance Rules (MUST follow)
 - `use_amp: true` always — halves VRAM, 2x throughput
+- `AdamW(fused=True)` on all CUDA training — fuses optimizer into single kernel (~15% faster)
+- TF32 precision enabled globally (PyTorch 2.9+ API): `torch.backends.cuda.matmul.fp32_precision = 'tf32'` and `torch.backends.cudnn.conv.fp32_precision = 'tf32'`
 - `opt.zero_grad(set_to_none=True)` not `opt.zero_grad()` — frees gradient memory
 - `pin_memory=True` on all DataLoaders (except vocoder)
 - `torch.backends.cudnn.benchmark = True` in all training scripts
@@ -92,7 +94,7 @@ python export/test_hf_multimodal.py                                             
 - Vision: d=192, layers=8, heads=3, embed_dim=256, temperature=0.07, batch=32, accum=8
 - Talker: d=384, layers=8, heads=6, codebooks=2×128, GQA kv_groups=3, batch=16, accum=2
 - Vocoder: batch=2, accum=2, max_audio_percentile=50%, shuffle_buffer=1000
-- SFT: batch=2, accum=4, checkpoint_freq=500, lr=5e-5
+- SFT: batch=4, accum=2, checkpoint_freq=500, lr=5e-5, proj_lr_mult=5.0, label_smoothing=0.05, encoders frozen
 
 ## Testing
 ```

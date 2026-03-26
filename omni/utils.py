@@ -22,8 +22,8 @@ try:
     torch._dynamo.config.suppress_errors = True
     # Enable nvFuser for CUDA kernel fusion optimization
     if torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
         # print("✓ nvFuser optimizations enabled (TF32 for matmul and cuDNN)")
 except Exception as e:
     print(f"⚠ Warning: Could not configure nvFuser/dynamo optimizations: {e}")

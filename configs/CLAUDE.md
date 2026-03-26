@@ -8,7 +8,7 @@ JSON configs that control all training hyperparameters. **These are the source o
 |---|---|
 | Real datasets, full training | Generated toy data, quick validation |
 | `vocab_size: 32000` | `vocab_size: 1024` |
-| `max_steps: 100K-3.8M` | `max_steps: 2K-5K` |
+| `max_steps: 100K-3.8M` | `max_steps: 2K` |
 | Hours to train | Minutes to train |
 
 ## File → Training Script Mapping
@@ -36,7 +36,8 @@ JSON configs that control all training hyperparameters. **These are the source o
 | `use_mtp` / `num_mtp_heads` | Multi-token prediction | `true` / `2` |
 | `window_size` | Sliding window attention size | `null` (full) or integer |
 | `rope_scaling_factor` | RoPE frequency scaling for context extension | `1.0` (default) |
-| `label_smoothing` | Label smoothing in cross-entropy loss | `0.1` |
+| `label_smoothing` | Label smoothing in cross-entropy loss | `0.1` (SFT: `0.05`) |
+| `proj_lr_mult` | Projector LR multiplier vs thinker (SFT only) | `5.0` |
 | `gradient_accumulation_steps` | Effective batch multiplier | 2-8 depending on stage |
 | `num_workers` | DataLoader parallelism | `2` |
 | `temperature` | CLIP contrastive temperature | `0.07` (vision only) |
@@ -51,3 +52,8 @@ The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=
 - `max_audio_length_percentile: 30` discards 70% of data — use `50+`
 - Vision `temperature: 0.3` makes contrastive loss trivial — use `0.07` (CLIP standard)
 - SFT `checkpoint_freq: 30` causes massive disk I/O — use `500+`
+- SFT audio/vision encoders are **frozen** — they're pretrained, not in optimizer
+- SFT projectors need higher LR (`proj_lr_mult: 5.0`) — they're randomly initialized
+- SFT `label_smoothing: 0.1` is too aggressive — use `0.05` for better calibration
+- All optimizers must use `fused=True` on CUDA — free 10-20% speedup
+- TF32: use PyTorch 2.9+ API (`fp32_precision = 'tf32'`), not deprecated `allow_tf32`

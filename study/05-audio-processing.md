@@ -1,3 +1,5 @@
+[← Previous: 04-tokens-embeddings-position](04-tokens-embeddings-position.md) | [Index](00-INDEX.md) | [Next: 06-image-processing →](06-image-processing.md)
+
 # Chapter 05: Audio — From Sound Waves to Tokens
 
 ## Sound = Air Pressure Over Time

@@ -1,6 +1,6 @@
-# Chapter 11: Vector Quantization & Speech Codes
+[← Previous: 10-mixture-of-experts](10-mixture-of-experts.md) | [Index](00-INDEX.md) | [Next: 12-system-overview →](12-system-overview.md)
 
-[← Back to Index](00-INDEX.md) | [Previous: Mixture of Experts](10-mixture-of-experts.md) | [Next: System Overview →](12-system-overview.md)
+# Chapter 11: Vector Quantization & Speech Codes
 
 ---
 

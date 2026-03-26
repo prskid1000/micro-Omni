@@ -1,3 +1,5 @@
+[← Previous: 12-system-overview](12-system-overview.md) | [Index](00-INDEX.md) | [Next: 14-audio-encoder →](14-audio-encoder.md)
+
 # Chapter 13: The Thinker -- Core Language Model
 
 The Thinker is the brain of the system. Every modality passes through it. Every text response originates from it. If you understand the Thinker, you understand the heart of the architecture.

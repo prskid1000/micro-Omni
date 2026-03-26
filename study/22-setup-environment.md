@@ -1,3 +1,5 @@
+[← Previous: 21-debugging](21-debugging.md) | [Index](00-INDEX.md) | [Next: 23-inference-chat →](23-inference-chat.md)
+
 # Chapter 22: Setup & Environment
 
 Getting your machine ready to train and run micro-Omni.

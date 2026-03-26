@@ -1,3 +1,5 @@
+[← Previous: 05-audio-processing](05-audio-processing.md) | [Index](00-INDEX.md) | [Next: 07-normalization-activations →](07-normalization-activations.md)
+
 # Chapter 06: Images — From Pixels to Patches
 
 ## Digital Images: Height x Width x 3

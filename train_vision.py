@@ -22,6 +22,8 @@ def main(cfg):
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
+    torch.backends.cudnn.conv.fp32_precision = 'tf32'
     save_dir = cfg.get("save_dir", "checkpoints/vision_tiny")
     os.makedirs(save_dir, exist_ok=True)
     train_manifest = cfg.get("train_manifest", "data/images/production_annotations.json")
@@ -176,7 +178,7 @@ def main(cfg):
         opt_params += list(text_encoder.parameters())
         print(f"✓ Optimizer includes text_encoder parameters")
     # CLIP optimizer settings
-    opt = torch.optim.AdamW(opt_params, lr=cfg.get("lr", 5e-4), weight_decay=cfg.get("wd", 0.2), betas=(0.9, 0.98))
+    opt = torch.optim.AdamW(opt_params, lr=cfg.get("lr", 5e-4), weight_decay=cfg.get("wd", 0.2), betas=(0.9, 0.98), fused=device=="cuda")
     
     # EMA for improved model quality (optional)
     use_ema = cfg.get("use_ema", False)

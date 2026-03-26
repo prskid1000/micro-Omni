@@ -1,6 +1,6 @@
-# Chapter 09: Efficient Attention -- GQA & Flash
+[← Previous: 08-decoder-llm-kv-cache](08-decoder-llm-kv-cache.md) | [Index](00-INDEX.md) | [Next: 10-mixture-of-experts →](10-mixture-of-experts.md)
 
-[← Back to Index](00-INDEX.md) | [Previous: Decoder-Only LLMs](08-decoder-llm-kv-cache.md) | [Next: Mixture of Experts →](10-mixture-of-experts.md)
+# Chapter 09: Efficient Attention -- GQA & Flash
 
 ---
 

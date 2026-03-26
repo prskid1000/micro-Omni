@@ -1,3 +1,5 @@
+[← Previous: 01-what-is-ai](01-what-is-ai.md) | [Index](00-INDEX.md) | [Next: 03-transformers →](03-transformers.md)
+
 # Chapter 02: Neural Networks & How They Learn
 
 ### What a Neuron Does

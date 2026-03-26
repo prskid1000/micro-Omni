@@ -8,8 +8,9 @@
   "wd": 0.01,
   "warmup_steps": 50,
   "max_steps": 50000,
-  "batch_size": 2,
+  "batch_size": 4,
   "gradient_accumulation_steps": 2,
+  "proj_lr_mult": 5.0,
   "use_amp": true,
   "use_flash": true,
   "use_compile": false,
@@ -51,5 +52,5 @@
   },
   "save_dir": "checkpoints/omni_sft_tiny",
   "use_lr_spike": false,
-  "label_smoothing": 0.1
+  "label_smoothing": 0.05
 }
