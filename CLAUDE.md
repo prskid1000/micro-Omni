@@ -136,8 +136,26 @@ python -m export.test_hf_multimodal                              # HF multimodal
 ```
 All tests use `torch.inference_mode()` and `torch.set_float32_matmul_precision('high')`.
 
+## Unified Dashboard Server
+```bash
+python -m server                    # http://127.0.0.1:8000 — full dashboard
+python -m server --port 9000        # Custom port
+```
+The dashboard provides: live metrics charts (ECharts), pipeline management (start/stop/clear stages A-G),
+3 inference modes (normal/standalone/HuggingFace with full multimodal), testing, export, config editing,
+HP tuning (Optuna), GPU monitoring, checkpoint inventory. See `server/CLAUDE.md` for API reference.
+
+## HP Tuning (Optuna)
+```bash
+python -m train.tune --stage A --n_trials 30 --max_steps 2000         # Tune thinker
+python -m train.tune --stage E --n_trials 20 --max_steps 1000         # Tune SFT
+python -m train.tune --stage F --n_trials 15 --params '["lr_g","lr_d","lambda_mel"]'  # Tune vocoder subset
+```
+- 51 unique tunable params across all stages (TPE sampler + ASHA pruning)
+- Results: `logs/hp_tuning_<stage>.db` (SQLite). Best config: `configs/tuned_<config>.json`
+- Also launchable from dashboard: HP Tuning panel
+
 ## Metrics Logging
 - Train/test scripts (except `test/infer_chat.py`) write structured JSONL to `logs/metrics/`.
 - Upsert key (resume-safe): `(run_id, phase, epoch, batch, step, split, metric_name)`.
-- Run `python -m server` for the unified dashboard (metrics, training control, inference, export).
 - Legacy: `scripts/metrics_viewer.html` still works but is deprecated.

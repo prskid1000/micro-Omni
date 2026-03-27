@@ -2,6 +2,11 @@
 
 JSON configs that control all training hyperparameters. **These are the source of truth** — model class defaults in .py files may differ.
 
+All `cfg.get()` params from training scripts are now explicitly listed in configs (no hidden defaults).
+HP tuning via `python -m train.tune` reads search spaces from `server/api/tuning.py`.
+Tuned configs saved as `tuned_<original>.json` after Optuna runs.
+Configs are editable from the dashboard: Config Editor tab.
+
 ## File → Training Script Mapping
 
 | Config | Script | Stage |
