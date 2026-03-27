@@ -1421,6 +1421,19 @@ async function setupTuning() {
     }
   });
 
+  // Clear tuning data
+  $("#tuneClearBtn").addEventListener("click", async () => {
+    const stage = stageSel.value;
+    if (!confirm(`Delete ALL tuning data for stage ${stage}? (DB, trial checkpoints, tuned config)`)) return;
+    const res = await api.post("/api/tuning/clear", { stage });
+    if (res.ok) {
+      showToast(`Cleared ${res.count} items for stage ${stage}`, "success");
+      pollTuningProgress();
+    } else {
+      showToast(res.error || "Failed to clear", "error");
+    }
+  });
+
   window._pollTuningProgress = pollTuningProgress;
   stageSel.addEventListener("change", () => { renderParams(); pollTuningProgress(); });
   renderParams();

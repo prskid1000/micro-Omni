@@ -284,6 +284,48 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
         handler.send_json({"ok": True, "stage": stage, "stopped": stopped})
         return
 
+    if path == "/api/tuning/clear":
+        stage = str(body.get("stage", "")).upper()
+        if stage not in STAGE_MAP:
+            handler.send_error_json(400, f"Unknown stage: {stage}")
+            return
+
+        removed = []
+
+        # 1. Delete Optuna DB
+        db_path = f"logs/hp_tuning_{stage}.db"
+        if os.path.exists(db_path):
+            try:
+                os.remove(db_path)
+                removed.append(db_path)
+            except Exception as e:
+                handler.send_error_json(500, f"Failed to delete {db_path}: {e}")
+                return
+
+        # 2. Delete tuning checkpoint dirs (checkpoints/tune_<stage>/trial_*)
+        import shutil
+        tune_dir = os.path.join("checkpoints", f"tune_{stage}")
+        if os.path.exists(tune_dir):
+            try:
+                shutil.rmtree(tune_dir)
+                removed.append(tune_dir)
+            except Exception as e:
+                handler.send_error_json(500, f"Failed to delete {tune_dir}: {e}")
+                return
+
+        # 3. Delete tuned config if exists
+        config_name = STAGE_MAP[stage]["config"]
+        tuned_path = os.path.join("configs", f"tuned_{config_name}")
+        if os.path.exists(tuned_path):
+            try:
+                os.remove(tuned_path)
+                removed.append(tuned_path)
+            except Exception as e:
+                pass  # non-critical
+
+        handler.send_json({"ok": True, "stage": stage, "removed": removed, "count": len(removed)})
+        return
+
     if path == "/api/tuning/apply":
         stage = str(body.get("stage", "")).upper()
         if stage not in STAGE_MAP:
