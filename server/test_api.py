@@ -536,14 +536,14 @@ class APITester:
         # Bad script
         self.check("Run bad script -> 400", self.post("/api/testing/run", {"script": "nonexistent"}), expect_ok=False)
 
-        # Run actual test with minimal samples
-        r = self.check("Run test_thinker (5 samples)", self.post("/api/testing/run", {"script": "test_thinker", "num_samples": 5}))
+        # Run actual test — use 100 samples so it runs long enough for GPU lock test
+        r = self.check("Run test_thinker (100 samples)", self.post("/api/testing/run", {"script": "test_thinker", "num_samples": 100}))
         if r.get("ok"):
             test_pid = r.get("pid")
             self.assert_true("Got test PID", test_pid is not None and test_pid > 0)
 
-            # Wait briefly then check GPU lock
-            time.sleep(2)
+            # Check GPU lock immediately (test should still be running with 100 samples)
+            time.sleep(1)
             r2 = self.get("/api/testing/status")
             test_still_running = any(p.get("status") == "running" for p in r2.get("processes", {}).values())
             if test_still_running:
@@ -643,7 +643,7 @@ class APITester:
     def test_export_api(self):
         self.check("GET /api/export/status", self.get("/api/export/status"))
 
-        self.wait_gpu_free()
+        self.wait_gpu_free(timeout=60)
 
         # Start export
         r = self.check("Start export", self.post("/api/export/run", {}))

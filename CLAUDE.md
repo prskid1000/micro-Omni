@@ -155,6 +155,17 @@ python -m train.tune --stage F --n_trials 15 --params '["lr_g","lr_d","lambda_me
 - Results: `logs/hp_tuning_<stage>.db` (SQLite). Best config: `configs/tuned_<config>.json`
 - Also launchable from dashboard: HP Tuning panel
 
+## Server API Tests
+```bash
+python -m server --no-open &                     # Start server first
+python server/test_api.py                        # Full suite (~3 min, tests all stages)
+python server/test_api.py --skip-slow            # Quick suite (~5s, skips process lifecycle)
+```
+15 test sections, 270+ assertions: static files, metrics API, system API, config roundtrip,
+pipeline status (all 7 stages), training lifecycle (start/stop/resume/clear), GPU lock
+(single-GPU enforcement across training/testing/tuning/export/inference), all-stage start/stop,
+testing lifecycle, inference API (3 modes), tuning API, export API, error handling, CORS, content types.
+
 ## Metrics Logging
 - Train/test scripts (except `test/infer_chat.py`) write structured JSONL to `logs/metrics/`.
 - Upsert key (resume-safe): `(run_id, phase, epoch, batch, step, split, metric_name)`.

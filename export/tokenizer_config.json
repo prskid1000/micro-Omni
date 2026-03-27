@@ -1,7 +1,7 @@
 {
   "tokenizer_class": "SentencePieceTokenizer",
   "model_type": "muomni",
-  "vocab_size": 256,
+  "vocab_size": 32000,
   "model_file": "tokenizer.model",
   "bos_token": "<BOS>",
   "eos_token": "<EOS>",
