@@ -12,7 +12,7 @@ import torch
 from torch import nn
 from typing import Optional, Tuple
 from omni.vision_encoder import ViTTiny
-from omni.utils import RMSNorm, make_positions
+from omni.nn_utils import RMSNorm, make_positions
 from omni.thinker import Attention, MLP
 import warnings
 

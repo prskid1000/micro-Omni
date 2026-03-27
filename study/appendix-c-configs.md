@@ -185,10 +185,10 @@ Which configs and training scripts to use for each deployment target:
 
 | Variant         | Configs Needed                                          | Training Scripts (in order)                          |
 |-----------------|---------------------------------------------------------|------------------------------------------------------|
-| Text-only       | `synthetic_thinker.json`                                | `train_text.py`                                      |
-| Text+Vision     | `synthetic_thinker.json`, `synthetic_vision.json`, modified `synthetic_omni_sft.json` | `train_text.py`, `train_vision.py`, `sft_omni.py` |
-| Text+Audio      | `synthetic_thinker.json`, `synthetic_audio_enc.json`, modified `synthetic_omni_sft.json` | `train_text.py`, `train_audio_enc.py`, `sft_omni.py` |
-| Full Multimodal | All `synthetic_*.json` configs                          | `train_text.py`, `train_audio_enc.py`, `train_vision.py`, `train_talker.py`, `sft_omni.py` |
+| Text-only       | `synthetic_thinker.json`                                | `train_thinker.py`                                      |
+| Text+Vision     | `synthetic_thinker.json`, `synthetic_vision.json`, modified `synthetic_omni_sft.json` | `train_thinker.py`, `train_vision.py`, `sft_omni.py` |
+| Text+Audio      | `synthetic_thinker.json`, `synthetic_audio_enc.json`, modified `synthetic_omni_sft.json` | `train_thinker.py`, `train_audio_enc.py`, `sft_omni.py` |
+| Full Multimodal | All `synthetic_*.json` configs                          | `train_thinker.py`, `train_audio_enc.py`, `train_vision.py`, `train_talker.py`, `sft_omni.py` |
 
 Notes:
 - Stages A/B/C (text, audio encoder, vision) can run in parallel.

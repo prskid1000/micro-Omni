@@ -42,12 +42,12 @@ testing.
 ### General Syntax
 
 ```bash
-python test_thinker.py --checkpoint checkpoints/thinker_tiny
-python test_audio_enc.py --checkpoint checkpoints/audio_enc
-python test_vision.py --checkpoint checkpoints/vision_tiny
-python test_talker.py --checkpoint checkpoints/talker
-python test_vocoder.py --checkpoint checkpoints/vocoder
-python test_ocr.py --checkpoint checkpoints/ocr
+python test/test_thinker.py --checkpoint checkpoints/thinker_tiny
+python test/test_audio_enc.py --checkpoint checkpoints/audio_enc
+python test/test_vision.py --checkpoint checkpoints/vision_tiny
+python test/test_talker.py --checkpoint checkpoints/talker
+python test/test_vocoder.py --checkpoint checkpoints/vocoder
+python test/test_ocr.py --checkpoint checkpoints/ocr
 ```
 
 ### Common Flags
@@ -67,7 +67,7 @@ python test_ocr.py --checkpoint checkpoints/ocr
 ### Thinker (Language Model)
 
 ```bash
-python test_thinker.py --checkpoint checkpoints/thinker_tiny --num_samples 500
+python test/test_thinker.py --checkpoint checkpoints/thinker_tiny --num_samples 500
 ```
 
 | Metric              | Target     | Description                          |
@@ -82,7 +82,7 @@ on held-out text. Sample outputs are printed for manual inspection.
 ### Audio Encoder
 
 ```bash
-python test_audio_enc.py --checkpoint checkpoints/audio_enc --num_samples 200
+python test/test_audio_enc.py --checkpoint checkpoints/audio_enc --num_samples 200
 ```
 
 | Metric | Target  | Description                                   |
@@ -104,7 +104,7 @@ CER = 1/22 = 4.5%    (1 char substitution)
 ### Vision Encoder
 
 ```bash
-python test_vision.py --checkpoint checkpoints/vision_tiny --num_samples 1000
+python test/test_vision.py --checkpoint checkpoints/vision_tiny --num_samples 1000
 ```
 
 | Metric              | Target | Description                             |
@@ -121,7 +121,7 @@ varied representations (not mode-collapsed).
 ### Talker
 
 ```bash
-python test_talker.py --checkpoint checkpoints/talker --num_samples 100
+python test/test_talker.py --checkpoint checkpoints/talker --num_samples 100
 ```
 
 | Metric                | Target | Description                          |
@@ -135,7 +135,7 @@ generated audio tokens match expected targets.
 ### Vocoder (HiFi-GAN)
 
 ```bash
-python test_vocoder.py --checkpoint checkpoints/vocoder --num_samples 50
+python test/test_vocoder.py --checkpoint checkpoints/vocoder --num_samples 50
 ```
 
 | Metric       | Target  | Description                              |
@@ -149,7 +149,7 @@ ground-truth audio. Sample outputs are saved to disk for listening.
 ### OCR
 
 ```bash
-python test_ocr.py --checkpoint checkpoints/ocr --num_samples 200
+python test/test_ocr.py --checkpoint checkpoints/ocr --num_samples 200
 ```
 
 | Metric        | Target | Description                              |
@@ -190,31 +190,31 @@ Create a simple test-all script:
 set -e
 
 echo "=== Testing Thinker ==="
-python test_thinker.py --checkpoint checkpoints/thinker_tiny --device cuda
+python test/test_thinker.py --checkpoint checkpoints/thinker_tiny --device cuda
 
 echo "=== Testing Audio Encoder ==="
-python test_audio_enc.py --checkpoint checkpoints/audio_enc --device cuda
+python test/test_audio_enc.py --checkpoint checkpoints/audio_enc --device cuda
 
 echo "=== Testing Vision Encoder ==="
-python test_vision.py --checkpoint checkpoints/vision_tiny --device cuda
+python test/test_vision.py --checkpoint checkpoints/vision_tiny --device cuda
 
 echo "=== Testing Talker ==="
-python test_talker.py --checkpoint checkpoints/talker --device cuda
+python test/test_talker.py --checkpoint checkpoints/talker --device cuda
 
 echo "=== Testing Vocoder ==="
-python test_vocoder.py --checkpoint checkpoints/vocoder --device cuda
+python test/test_vocoder.py --checkpoint checkpoints/vocoder --device cuda
 
 echo "=== Testing OCR ==="
-python test_ocr.py --checkpoint checkpoints/ocr --device cuda
+python test/test_ocr.py --checkpoint checkpoints/ocr --device cuda
 
 echo "=== Testing Multimodal SFT ==="
-python test_sft.py --checkpoint checkpoints/ --device cuda
+python test/test_sft.py --checkpoint checkpoints/ --device cuda
 
 echo "=== Testing HF Text Export ==="
-python export/test_hf_text.py --model_dir exported/ --device cuda
+python export/test_hf_text.py --model_dir export/ --device cuda
 
 echo "=== Testing HF Multimodal Export ==="
-python export/test_hf_multimodal.py --model_dir exported/ --device cuda
+python export/test_hf_multimodal.py --model_dir export/ --device cuda
 
 echo "=== All tests passed ==="
 ```
@@ -226,7 +226,7 @@ Use `--device cpu` to run without a GPU (slower but works anywhere).
 ## Multimodal SFT Test
 
 ```bash
-python test_sft.py --checkpoint checkpoints/ --device cuda --num_samples 50
+python test/test_sft.py --checkpoint checkpoints/ --device cuda --num_samples 50
 ```
 
 The SFT test validates the full multimodal supervised fine-tuning pipeline.
@@ -250,10 +250,10 @@ compatible export works correctly. Both produce scored pass/fail results.
 ### export/test_hf_text.py
 
 ```bash
-python export/test_hf_text.py --model_dir exported/ --device cuda
+python export/test_hf_text.py --model_dir export/ --device cuda
 ```
 
-Loads the model via `AutoModelForCausalLM.from_pretrained("exported/",
+Loads the model via `AutoModelForCausalLM.from_pretrained("export/",
 trust_remote_code=True)` and validates:
 
 | Metric              | Target     | Description                          |
@@ -266,7 +266,7 @@ trust_remote_code=True)` and validates:
 ### export/test_hf_multimodal.py
 
 ```bash
-python export/test_hf_multimodal.py --model_dir exported/ --device cuda
+python export/test_hf_multimodal.py --model_dir export/ --device cuda
 ```
 
 Loads `MuOmniMultimodalModel` from `model_full.safetensors` and validates

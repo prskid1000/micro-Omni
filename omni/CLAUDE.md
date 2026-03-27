@@ -13,7 +13,12 @@ All neural network modules for μOmni. Imported by training scripts, inference, 
 | `codec.py` | RVQ, HiFiGANVocoder, GriffinLimVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator, ResBlock, NeuralVocoder | Speech codec (2 codebooks × 128) + vocoders (neural + classical) |
 | `ocr_model.py` | OCRModel, OCRDecoder, OCRDecoderBlock | ViT encoder + cross-attention decoder for text extraction from images |
 | `tokenizer.py` | BPETokenizer | SentencePiece BPE wrapper (train_new, encode, decode) |
-| `utils.py` | RoPE, RMSNorm, EMA, LRFinder, LRSpike, TrainingMonitor (wraps LRSpike + early stopping + best weight tracking), EarlyStopping (alias for TrainingMonitor), setup_cuda(), ProjectionHead, LearnableTemperature, TextDataset, ASRDataset, TTSDataset, VocoderDataset, ImgCapDataset, MixDataset, OCRDataset | Shared utilities — positional encoding, normalization, training helpers, all streaming datasets, checkpoint management, collate functions |
+| `nn_utils.py` | RoPE, RMSNorm, ProjectionHead, LearnableTemperature | Neural network primitives and positional encoding utilities |
+| `training_utils.py` | EMA, LRSpike, TrainingMonitor, EarlyStopping, setup_cuda(), schedulers, logger, gradient helpers | Training/runtime utilities and monitor logic |
+| `data_utils.py` | TextDataset, ASRDataset, TTSDataset, VocoderDataset, ImgCapDataset, MixDataset, OCRDataset, collate helpers | Streaming datasets, collate functions, dataset analysis |
+| `checkpoint_utils.py` | find_checkpoint, normalize_state_dict, metadata + checkpoint load/save helpers | Checkpoint discovery/normalization and persistence |
+| `io_utils.py` | enable_log_file, default_log_path, load_audio | Common logging and I/O helpers |
+| `resume_utils.py` | setup_resume_data_loading, resume-position helpers | Resume/skip calculations for IterableDataset training |
 
 ## Key Additions
 - **ThinkerLM.generate()**: Autoregressive text generation with temperature, top-k, top-p, repetition penalty support
@@ -22,7 +27,7 @@ All neural network modules for μOmni. Imported by training scripts, inference, 
 - **RoPE Scaling**: `rope_scaling_factor` in RoPE enables context length extension via frequency scaling
 
 ## Performance Rules
-- **RoPE** (`utils.py`): `inv_freq` is a registered buffer; cos/sin tables cached lazily in `_build_cache()`. Never recompute per forward.
+- **RoPE** (`nn_utils.py`): `inv_freq` is a registered buffer; cos/sin tables cached lazily in `_build_cache()`. Never recompute per forward.
 - **Causal masks** (`thinker.py`, `talker.py`, `ocr_model.py`): Pre-allocated via `register_buffer("_causal_mask", ...)`. Slice with `self._causal_mask[:, :, :T, :T]`.
 - **GQA** (`thinker.py` Attention): Expand KV heads with `unsqueeze(2).expand().reshape()` — zero-copy. Never use `repeat_interleave`.
 - **MoE** (`thinker.py` MoE): Sort tokens by expert ID, process in single loop with `index_add_`. Never nested for-loops.

@@ -6,7 +6,7 @@ JSON configs that control all training hyperparameters. **These are the source o
 
 | Config | Script | Stage |
 |--------|--------|-------|
-| `synthetic_thinker.json` | `train_text.py` | A — Thinker LLM |
+| `synthetic_thinker.json` | `train_thinker.py` | A — Thinker LLM |
 | `synthetic_audio_enc.json` | `train_audio_enc.py` | B — Audio Encoder |
 | `synthetic_vision.json` | `train_vision.py` | C — Vision Encoder |
 | `synthetic_talker.json` | `train_talker.py` | D — Talker + RVQ |
@@ -52,7 +52,7 @@ The FFN hidden dimension (`d_ff`) uses a ratio of 8/3 x `d_model`. For `d_model=
 - SFT projectors need higher LR (`proj_lr_mult: 5.0`) — they're randomly initialized
 - SFT `label_smoothing` is set to `0.1` in the actual config
 - All optimizers must use `fused=True` on CUDA — free 10-20% speedup
-- Use `setup_cuda()` not manual `torch.backends` lines — centralized in `omni/utils.py`
+- Use `setup_cuda()` not manual `torch.backends` lines — centralized in `omni/training_utils.py`
 - Use `TrainingMonitor(cfg)` not separate `LRSpike()` — handles spike + early stop + best weights
 - Synthetic configs: `val_loss_threshold: 999.0` disables reload (small data noise); production uses real thresholds
 - Training scripts copy config.json to checkpoint dir — test scripts read ONLY from there, never `configs/`

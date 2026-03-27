@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 from typing import Optional
-from omni.utils import RMSNorm
+from omni.nn_utils import RMSNorm
 from omni.thinker import SpikingNeuron, LiquidTimeConstant, MLP
 import warnings
 

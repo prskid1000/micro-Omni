@@ -699,6 +699,6 @@ if __name__ == "__main__":
     ap.add_argument("--config", required=True)
     ap.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = ap.parse_args()
-    enable_log_file(args.log_file, header=f"train_text.py start | config={args.config}")
+    enable_log_file(args.log_file, header=f"train_thinker.py start | config={args.config}")
     cfg = json.load(open(args.config))
     main(cfg)

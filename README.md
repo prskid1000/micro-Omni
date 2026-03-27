@@ -67,17 +67,17 @@ pip install -r requirements.txt
 python scripts/generate_synthetic_data.py
 
 # 3. Train (any order for A/B/C, then D needs A, E needs all)
-python train_text.py --config configs/synthetic_thinker.json       # Stage A: Thinker LLM
-python train_audio_enc.py --config configs/synthetic_audio_enc.json # Stage B: Audio Encoder
-python train_vision.py --config configs/synthetic_vision.json       # Stage C: Vision Encoder
-python train_talker.py --config configs/synthetic_talker.json       # Stage D: Talker + RVQ
-python sft_omni.py --config configs/synthetic_omni_sft.json         # Stage E: Multimodal SFT
+python train/train_thinker.py --config configs/synthetic_thinker.json    # Stage A: Thinker LLM
+python train/train_audio_enc.py --config configs/synthetic_audio_enc.json # Stage B: Audio Encoder
+python train/train_vision.py --config configs/synthetic_vision.json       # Stage C: Vision Encoder
+python train/train_talker.py --config configs/synthetic_talker.json       # Stage D: Talker + RVQ
+python train/sft_omni.py --config configs/synthetic_omni_sft.json         # Stage E: Multimodal SFT
 
 # 4. Inference
-python infer_chat.py --ckpt_dir checkpoints/thinker_tiny                                    # Text chat
-python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image photo.jpg "describe this"  # Image QA
-python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav              # Audio transcription
-python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr              # OCR
+python test/infer_chat.py --ckpt_dir checkpoints/thinker_tiny                                    # Text chat
+python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image photo.jpg "describe this"  # Image QA
+python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav              # Audio transcription
+python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr              # OCR
 ```
 
 ---
@@ -95,26 +95,31 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 | `codec.py` | RVQ + Vocoders | ~49K | RVQ (2 codebooks, 128 codes), HiFi-GAN neural vocoder (generator + MPD + MSD discriminators), Griffin-Lim fallback |
 | `ocr_model.py` | OCRModel | ~2.1M | ViT encoder + cross-attention decoder for extracting text from images |
 | `tokenizer.py` | BPETokenizer | — | SentencePiece BPE wrapper (encode/decode text to token IDs) |
-| `utils.py` | Utilities | — | RoPE (cached), RMSNorm, EMA, LR scheduler, datasets (streaming IterableDataset), collate functions, checkpoint management, LR finder, gradient utilities |
+| `nn_utils.py` | NN Utilities | — | RoPE (cached), RMSNorm, projection/temperature helpers |
+| `data_utils.py` | Data Utilities | — | Streaming IterableDatasets, collate functions, dataset analysis helpers |
+| `training_utils.py` | Training Utilities | — | EMA, LR scheduler, gradient utilities, TrainingMonitor, logger |
+| `checkpoint_utils.py` | Checkpoint Utilities | — | Checkpoint discovery/load/save and state-dict normalization |
+| `io_utils.py` | I/O Utilities | — | Log tee helpers and robust audio loading |
+| `resume_utils.py` | Resume Utilities | — | Resume position math and iterable-dataset resume setup |
 
 ### Training Scripts
 
 | File | Stage | What It Trains | Loss Function |
 |------|-------|----------------|---------------|
-| `train_text.py` | A | Thinker LLM on text corpus | Cross-entropy (next-token prediction) |
-| `train_audio_enc.py` | B | Audio encoder for ASR | CTC loss (sequence alignment) |
-| `train_vision.py` | C | Vision encoder + text encoder | InfoNCE contrastive loss (CLIP-style) |
-| `train_talker.py` | D | Talker + RVQ codec for TTS | Cross-entropy on RVQ codes |
-| `train_vocoder.py` | F | HiFi-GAN vocoder (optional) | Adversarial + feature matching + mel L1 |
-| `train_ocr.py` | G | OCR model (optional) | Cross-entropy on characters |
-| `sft_omni.py` | E | All components jointly on mixed data | Cross-entropy on text tokens |
+| `train/train_thinker.py` | A | Thinker LLM on text corpus | Cross-entropy (next-token prediction) |
+| `train/train_audio_enc.py` | B | Audio encoder for ASR | CTC loss (sequence alignment) |
+| `train/train_vision.py` | C | Vision encoder + text encoder | InfoNCE contrastive loss (CLIP-style) |
+| `train/train_talker.py` | D | Talker + RVQ codec for TTS | Cross-entropy on RVQ codes |
+| `train/train_vocoder.py` | F | HiFi-GAN vocoder (optional) | Adversarial + feature matching + mel L1 |
+| `train/train_ocr.py` | G | OCR model (optional) | Cross-entropy on characters |
+| `train/sft_omni.py` | E | All components jointly on mixed data | Cross-entropy on text tokens |
 
 ### Inference & Export
 
 | File | Purpose |
 |------|---------|
-| `infer_chat.py` | Interactive multimodal inference — text chat, image QA, audio transcription, TTS, OCR, video |
-| `export.py` | Merge all component checkpoints into HuggingFace-compatible safetensors |
+| `test/infer_chat.py` | Interactive multimodal inference — text chat, image QA, audio transcription, TTS, OCR, video |
+| `scripts/export.py` | Merge all component checkpoints into HuggingFace-compatible safetensors |
 | `export/modeling_muomni.py` | HuggingFace `PreTrainedModel` (`MuOmniForCausalLM` + `MuOmniMultimodalModel`) |
 | `export/infer_standalone.py` | Inference from merged safetensors (no separate checkpoints needed) |
 | `export/test_safetensor.py` | Validate exported safetensors file |
@@ -125,13 +130,13 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 
 | File | Tests | Key Metrics |
 |------|-------|-------------|
-| `test_thinker.py` | Thinker LLM | Perplexity, generation quality |
-| `test_audio_enc.py` | Audio encoder | WER/CER (word/character error rate) |
-| `test_vision.py` | Vision encoder | R@1/R@5/R@10 retrieval, embedding diversity |
-| `test_talker.py` | Talker + RVQ | Reconstruction quality |
-| `test_vocoder.py` | HiFi-GAN vocoder | Mel loss, audio quality |
-| `test_ocr.py` | OCR model | Character accuracy, edit distance |
-| `test_sft.py` | Multimodal SFT | Val loss, generation quality |
+| `test/test_thinker.py` | Thinker LLM | Perplexity, generation quality |
+| `test/test_audio_enc.py` | Audio encoder | WER/CER (word/character error rate) |
+| `test/test_vision.py` | Vision encoder | R@1/R@5/R@10 retrieval, embedding diversity |
+| `test/test_talker.py` | Talker + RVQ | Reconstruction quality |
+| `test/test_vocoder.py` | HiFi-GAN vocoder | Mel loss, audio quality |
+| `test/test_ocr.py` | OCR model | Character accuracy, edit distance |
+| `test/test_sft.py` | Multimodal SFT | Val loss, generation quality |
 
 ### Utility Scripts (`scripts/`)
 
@@ -148,7 +153,6 @@ python infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr 
 
 | File | Purpose |
 |------|---------|
-| `find_lr.py` | Learning rate finder (Smith 2017 range test) |
 | `CLAUDE.md` | Project instructions for Claude Code AI assistant |
 
 ---
@@ -237,7 +241,7 @@ Data formats:
 ### Export to safetensors
 ```bash
 # Merge all trained components into HuggingFace-compatible format
-python export.py \
+python scripts/export.py \
   --thinker_ckpt checkpoints/thinker_tiny \
   --audio_ckpt checkpoints/audio_enc_tiny \
   --vision_ckpt checkpoints/vision_tiny \
@@ -291,10 +295,10 @@ huggingface-cli upload prskid1000/micro-Omni export/
 
 ```bash
 # Single component
-python test_thinker.py --checkpoint checkpoints/thinker_tiny
+python test/test_thinker.py --checkpoint checkpoints/thinker_tiny
 
 # Multimodal SFT test
-python test_sft.py --checkpoint checkpoints/omni_sft_tiny
+python test/test_sft.py --checkpoint checkpoints/omni_sft_tiny --config configs/synthetic_omni_sft.json
 
 # All tests (PowerShell)
 Get-ChildItem -Filter 'test_*.py' -Recurse | ForEach-Object { python $_.FullName }

@@ -22,7 +22,8 @@ from modeling_muomni import MuOmniForCausalLM
 # Add parent dir for omni imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from omni.tokenizer import BPETokenizer
-from omni.utils import enable_log_file, default_log_path
+from omni.io_utils import enable_log_file, default_log_path
+from omni.eval_utils import sample_lines, count_topk_from_logits, safe_perplexity
 
 
 def main():
@@ -48,9 +49,7 @@ def main():
     print(f"Model: {params:,} params on {args.device}")
 
     # Load training data
-    random.seed(args.seed)
-    lines = [l.strip() for l in open(args.corpus, encoding="utf-8") if len(l.strip()) > 10]
-    samples = random.sample(lines, min(args.num_samples, len(lines)))
+    samples = sample_lines(args.corpus, args.num_samples, min_len=11, seed=args.seed)
 
     # Accuracy + loss
     c1, c5, c10, total = 0, 0, 0, 0
@@ -66,19 +65,14 @@ def main():
         with torch.inference_mode():
             logits = model(input_ids=x).logits
         total_loss += loss_fn(logits[0], tgt[0]).item()
-        for t in range(logits.shape[1]):
-            top10 = logits[0, t].topk(10).indices.tolist()
-            actual = ids[t + 1]
-            if top10[0] == actual:
-                c1 += 1
-            if actual in top10[:5]:
-                c5 += 1
-            if actual in top10:
-                c10 += 1
-            total += 1
+        topk = count_topk_from_logits(logits[0], tgt[0], ks=(1, 5, 10))
+        c1 += topk[1]
+        c5 += topk[5]
+        c10 += topk[10]
+        total += tgt.numel()
 
     avg_loss = total_loss / max(total, 1)
-    ppl = torch.exp(torch.tensor(avg_loss)).item()
+    ppl = safe_perplexity(avg_loss, max_exp_input=20.0)
 
     print(f"\nSamples: {len(samples)}, Tokens: {total}")
     print(f"Avg Loss:    {avg_loss:.4f}")

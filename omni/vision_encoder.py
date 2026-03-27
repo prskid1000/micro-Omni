@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 from typing import Tuple, Optional
-from omni.utils import RMSNorm
+from omni.nn_utils import RMSNorm
 from einops import rearrange
 import warnings
 

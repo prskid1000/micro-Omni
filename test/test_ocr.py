@@ -13,7 +13,10 @@ import numpy as np
 from PIL import Image
 from torchvision import transforms
 from omni.ocr_model import OCRModel
-from omni.utils import OCRDataset, find_checkpoint, strip_orig_mod, enable_log_file, default_log_path
+from omni.data_utils import OCRDataset
+from omni.checkpoint_utils import find_checkpoint, strip_orig_mod
+from omni.io_utils import enable_log_file, default_log_path
+from omni.eval_utils import load_checkpoint_and_config
 from tqdm import tqdm
 
 torch.set_float32_matmul_precision('high')
@@ -85,27 +88,9 @@ def compute_wer(pred, target):
 
 def load_model_and_vocab(checkpoint_dir, device="cuda", config_path=None):
     """Load OCR model and vocabulary from checkpoint."""
-    checkpoint_path, checkpoint = find_checkpoint(checkpoint_dir, "ocr.pt", "ocr_step_", device)
-    if checkpoint is None:
-        raise FileNotFoundError(f"Checkpoint not found in: {checkpoint_dir}")
-
-    print(f"Loading checkpoint from: {checkpoint_path}")
-
-    # Get config: explicit path > checkpoint > config file by name
-    if config_path and os.path.exists(config_path):
-        print(f"Loading config from: {config_path}")
-        with open(config_path, 'r') as f:
-            cfg = json.load(f)
-    elif "config" in checkpoint:
-        cfg = checkpoint["config"]
-    else:
-        config_path = os.path.join(checkpoint_dir, "config.json")
-        if os.path.exists(config_path):
-            print(f"Loading config from: {config_path}")
-            with open(config_path, 'r') as f:
-                cfg = json.load(f)
-        else:
-            raise FileNotFoundError(f"Config not found: {config_path}. Re-run training to generate it.")
+    _, checkpoint, cfg = load_checkpoint_and_config(
+        checkpoint_dir, "ocr.pt", "ocr_step_", device=device, config_path=config_path
+    )
 
     
     # Get vocabulary - try checkpoint first, then metadata file

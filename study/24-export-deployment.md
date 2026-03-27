@@ -25,7 +25,7 @@ script combines all component weights into a single `model.safetensors`
 using prefixed keys so each component's parameters stay namespaced.
 
 ```
-exported/
+export/
 ├── model.safetensors          # Flat keys (thinker weights only, HF-compatible)
 ├── model_full.safetensors     # Prefixed keys (all components, multimodal)
 ├── modeling_muomni.py         # Custom HF model classes
@@ -38,7 +38,7 @@ exported/
 ## Running the Export
 
 ```bash
-python export.py --ckpt_dir checkpoints/ --output_dir exported/
+python scripts/export.py --output_dir export/
 ```
 
 The script:
@@ -193,7 +193,7 @@ config.json              modeling_muomni.py         model.safetensors
     +----------+--------------+                          |
                |                                         |
                v                                         v
-   AutoModelForCausalLM.from_pretrained("exported/")
+   AutoModelForCausalLM.from_pretrained("export/")
                |
                v
       Working HF model ready for .generate()
@@ -211,12 +211,12 @@ import torch
 
 # Load model (discovers MuOmniForCausalLM via auto_map in config.json)
 model = AutoModelForCausalLM.from_pretrained(
-    "exported/", trust_remote_code=True
+    "export/", trust_remote_code=True
 )
 model.eval()
 
 # Tokenize
-tok = BPETokenizer("exported/tokenizer.model")
+tok = BPETokenizer("export/tokenizer.model")
 prompt = "The meaning of life is"
 ids = torch.tensor([tok.encode(prompt)])
 
@@ -237,13 +237,13 @@ from PIL import Image
 from torchvision import transforms
 
 # Load full multimodal model
-config = MuOmniConfig.from_pretrained("exported/")
+config = MuOmniConfig.from_pretrained("export/")
 model = MuOmniMultimodalModel.from_pretrained(
-    "exported/", config=config, trust_remote_code=True
+    "export/", config=config, trust_remote_code=True
 )
 model.eval()
 
-tok = BPETokenizer("exported/tokenizer.model")
+tok = BPETokenizer("export/tokenizer.model")
 
 # Prepare image
 img = Image.open("test.jpg")
@@ -279,7 +279,7 @@ checks that perplexity and generation quality match the standalone script.
 Returns a scored pass/fail.
 
 ```bash
-python export/test_hf_text.py --model_dir exported/ --device cuda
+python export/test_hf_text.py --model_dir export/ --device cuda
 ```
 
 **export/test_hf_multimodal.py** — Loads `MuOmniMultimodalModel`, feeds it
@@ -288,7 +288,7 @@ outputs. Checks vision embedding quality, audio transcription accuracy, and
 text generation coherence. Returns a scored pass/fail.
 
 ```bash
-python export/test_hf_multimodal.py --model_dir exported/ --device cuda
+python export/test_hf_multimodal.py --model_dir export/ --device cuda
 ```
 
 ---
@@ -298,7 +298,7 @@ python export/test_hf_multimodal.py --model_dir exported/ --device cuda
 Once exported, run inference without the training codebase:
 
 ```bash
-python export/infer_standalone.py --model_dir exported/
+python export/infer_standalone.py --model_dir export/
 ```
 
 The standalone script:
@@ -335,14 +335,14 @@ from huggingface_hub import HfApi
 api = HfApi()
 api.create_repo('your-username/micro-omni-tiny', exist_ok=True)
 api.upload_folder(
-    folder_path='exported/',
+    folder_path='export/',
     repo_id='your-username/micro-omni-tiny',
     commit_message='Upload micro-Omni tiny model'
 )
 "
 ```
 
-This uploads all files in `exported/` — including `modeling_muomni.py` and
+This uploads all files in `export/` — including `modeling_muomni.py` and
 both safetensors files — to a new HuggingFace repository. After upload,
 anyone can load your model with:
 
@@ -362,12 +362,12 @@ discover and instantiate `MuOmniForCausalLM`.
 
 ```
 [ ] All component checkpoints trained and saved
-[ ] export.py runs without errors
-[ ] exported/model.safetensors exists (flat keys, text-only)
-[ ] exported/model_full.safetensors exists (prefixed keys, all components)
-[ ] exported/modeling_muomni.py is present
-[ ] exported/tokenizer.model is present
-[ ] exported/config.json has correct architecture params + auto_map
+[ ] scripts/export.py runs without errors
+[ ] export/model.safetensors exists (flat keys, text-only)
+[ ] export/model_full.safetensors exists (prefixed keys, all components)
+[ ] export/modeling_muomni.py is present
+[ ] export/tokenizer.model is present
+[ ] export/config.json has correct architecture params + auto_map
 [ ] infer_standalone.py loads and runs correctly
 [ ] Text chat works
 [ ] Image QA works (if vision was trained)

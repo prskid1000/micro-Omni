@@ -166,7 +166,7 @@ Benefits:
 Use the SFT (Supervised Fine-Tuning) stage to adapt the model:
 
 ```bash
-python sft_omni.py \
+python train/sft_omni.py \
     --base_ckpt checkpoints/        \
     --data data/domain_specific/    \
     --config configs/sft.json       \
@@ -231,13 +231,13 @@ components to prevent catastrophic forgetting.
 | Liquid time-const | Implemented | thinker.py          |
 | GQA               | Implemented | thinker.py          |
 | MoE               | Implemented | thinker.py          |
-| SwiGLU            | Implemented | thinker.py, utils.py|
-| RoPE              | Implemented | utils.py            |
-| YaRN RoPE scaling | Implemented | utils.py            |
+| SwiGLU            | Implemented | thinker.py          |
+| RoPE              | Implemented | nn_utils.py         |
+| YaRN RoPE scaling | Implemented | nn_utils.py         |
 | FlashAttention    | Implemented | thinker.py          |
 | Sliding Window Attn| Implemented | thinker.py         |
 | Multi-Token Pred  | Implemented | thinker.py          |
-| Export/Deploy     | Implemented | export.py           |
+| Export/Deploy     | Implemented | scripts/export.py   |
 
 ---
 

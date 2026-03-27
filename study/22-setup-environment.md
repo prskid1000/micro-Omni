@@ -112,7 +112,12 @@ micro-Omni/
 │   ├── talker.py
 │   ├── ocr_model.py
 │   ├── tokenizer.py
-│   └── utils.py
+│   ├── nn_utils.py
+│   ├── data_utils.py
+│   ├── training_utils.py
+│   ├── checkpoint_utils.py
+│   ├── io_utils.py
+│   └── resume_utils.py
 ├── configs/               # JSON config files
 │   ├── synthetic_thinker.json
 │   ├── synthetic_audio_enc.json
@@ -124,8 +129,8 @@ micro-Omni/
 │   ├── images/
 │   └── ocr/
 ├── checkpoints/           # Saved during training
-├── exported/              # Merged models for deployment
-├── train_text.py
+├── export/                # Merged models for deployment
+├── train_thinker.py
 ├── train_audio_enc.py
 ├── train_vision.py
 ├── train_talker.py
@@ -133,7 +138,7 @@ micro-Omni/
 ├── train_ocr.py
 ├── sft_omni.py
 ├── infer_chat.py
-└── export.py
+└── scripts/export.py
 ```
 
 ---

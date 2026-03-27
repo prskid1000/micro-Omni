@@ -13,13 +13,13 @@
 ## Export Workflow
 ```bash
 # 1. Merge all component checkpoints into one file
-python export.py --ckpt_dir checkpoints/ --output_dir exported/
+python scripts/export.py --output_dir export/
 
 # 2. Test the export
 python export/test_safetensor.py
 
 # 3. Run standalone inference
-python export/infer_standalone.py --model_dir exported/
+python export/infer_standalone.py --model_dir export/
 ```
 
 ## Merged Key Prefixes
@@ -38,7 +38,7 @@ ocr.*          — OCR model (optional)
 
 ## Required Output Files
 ```
-exported/
+export/
 ├── model.safetensors       ← HF-compatible flat keys (for from_pretrained)
 ├── model_full.safetensors  ← All components with prefixed keys (thinker.*, audio_enc.*, etc.)
 ├── tokenizer.model         ← SentencePiece BPE model
@@ -46,11 +46,11 @@ exported/
 ```
 
 ## HuggingFace Integration
-- `model.safetensors` uses HF flat keys (no component prefixes) — loadable via `MuOmniForCausalLM.from_pretrained("exported/")`
+- `model.safetensors` uses HF flat keys (no component prefixes) — loadable via `MuOmniForCausalLM.from_pretrained("export/")`
 - `model_full.safetensors` keeps all component prefixes — used by `infer_standalone.py` and `MuOmniMultimodalModel`
 - `modeling_muomni.py` (954 lines) defines both `MuOmniForCausalLM` (text-only) and `MuOmniMultimodalModel` (full multimodal)
 
 ## Notes
-- `export.py` lives in the project root, not in this folder
+- `scripts/export.py` lives under the `scripts/` folder, not in this folder
 - `_orig_mod.` prefixes from `torch.compile()` are automatically stripped during export
 - The `find_checkpoint()` utility tries: `model.pt` → `{name}.pt` → latest `{name}_step_*.pt`

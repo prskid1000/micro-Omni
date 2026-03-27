@@ -12,7 +12,10 @@ import random
 import numpy as np
 import torchaudio  # Only used for transforms, not for loading audio
 from omni.codec import HiFiGANVocoder
-from omni.utils import VocoderDataset, find_checkpoint, strip_orig_mod, enable_log_file, default_log_path
+from omni.data_utils import VocoderDataset
+from omni.checkpoint_utils import find_checkpoint, strip_orig_mod
+from omni.io_utils import enable_log_file, default_log_path
+from omni.eval_utils import load_checkpoint_and_config
 from tqdm import tqdm
 
 torch.set_float32_matmul_precision('high')
@@ -35,23 +38,9 @@ except ImportError:
 
 def load_model_and_config(checkpoint_dir, device="cuda"):
     """Load Vocoder model from checkpoint."""
-    checkpoint_path, checkpoint = find_checkpoint(checkpoint_dir, "vocoder.pt", "vocoder_step_", device)
-    if checkpoint is None:
-        raise FileNotFoundError(f"Checkpoint not found in: {checkpoint_dir}")
-    
-    print(f"Loading checkpoint from: {checkpoint_path}")
-    
-    # Get config: checkpoint dict → checkpoint_dir/config.json → configs/{name}.json
-    if "config" in checkpoint:
-        cfg = checkpoint["config"]
-    else:
-        config_path = os.path.join(checkpoint_dir, "config.json")
-        if os.path.exists(config_path):
-            print(f"Loading config from: {config_path}")
-            with open(config_path, 'r') as f:
-                cfg = json.load(f)
-        else:
-            raise FileNotFoundError(f"Config not found: {config_path}")
+    _, checkpoint, cfg = load_checkpoint_and_config(
+        checkpoint_dir, "vocoder.pt", "vocoder_step_", device=device
+    )
     
     sr = cfg.get("sample_rate", 16000)
     n_mels = cfg.get("n_mels", 128)

@@ -238,7 +238,7 @@ Hidden state x (B, T, 384)
     +---> mtp_head_1  -> logits for t+3  (auxiliary)
 ```
 
-During training (`train_text.py`), the MTP loss is averaged with the main loss, providing richer gradient signal per training example. At inference, only the main `lm_head` is used -- MTP heads are training-only.
+During training (`train_thinker.py`), the MTP loss is averaged with the main loss, providing richer gradient signal per training example. At inference, only the main `lm_head` is used -- MTP heads are training-only.
 
 Think of it like a weather forecaster who is asked to predict not just tomorrow's weather, but also the day after and the day after that. Predicting further ahead forces the model to build deeper internal representations of the underlying patterns, even though at deployment you only need the one-day forecast.
 
@@ -258,7 +258,7 @@ This alternating pattern gives the best of both worlds: SWA layers handle local 
 
 ### YaRN RoPE Extension
 
-The RoPE module (in `omni/utils.py`) supports a `scaling_factor` parameter for extending the effective context length beyond what was used during training. When `scaling_factor > 1.0`, it uses NTK-by-parts interpolation:
+The RoPE module (in `omni/nn_utils.py`) supports a `scaling_factor` parameter for extending the effective context length beyond what was used during training. When `scaling_factor > 1.0`, it uses NTK-by-parts interpolation:
 
 - High-frequency components (local patterns) are left unmodified
 - Low-frequency components (long-range dependencies) are interpolated
@@ -287,7 +287,7 @@ This avoids GPU memory allocation during the hot path.
 
 ### Cached RoPE Tables
 
-RoPE requires computing `cos(position * frequency)` and `sin(position * frequency)` for each position. These are computed once and cached in the RoPE module (see `omni/utils.py`), avoiding redundant trigonometric calculations.
+RoPE requires computing `cos(position * frequency)` and `sin(position * frequency)` for each position. These are computed once and cached in the RoPE module (see `omni/nn_utils.py`), avoiding redundant trigonometric calculations.
 
 ### Flash Attention
 
@@ -365,7 +365,7 @@ prompt tokens ──→ forward pass ──→ logits (32000)
 
 - **Source**: `omni/thinker.py`
 - **Config**: `configs/synthetic_thinker.json`
-- **Classes**: `ThinkerLM`, `Block`, `Attention`, `MLP`, `MoE`, `SwiGLU`, `SpikingNeuron`, `LiquidTimeConstant`, `RoPE` (in utils.py)
+- **Classes**: `ThinkerLM`, `Block`, `Attention`, `MLP`, `MoE`, `SwiGLU`, `SpikingNeuron`, `LiquidTimeConstant`, `RoPE` (in `nn_utils.py`)
 
 ---
 

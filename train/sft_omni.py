@@ -11,13 +11,14 @@ from tqdm import tqdm
 from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
-from omni.utils import (
-    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    reload_from_last_checkpoint, MixDataset,
-    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, load_audio, save_training_metadata, load_training_metadata,
-    TrainingMonitor, setup_cuda
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss,
+    reload_from_last_checkpoint, TrainingMonitor, setup_cuda,
 )
+from omni.data_utils import MixDataset
+from omni.checkpoint_utils import load_checkpoint, save_training_metadata, load_training_metadata
+from omni.resume_utils import setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext
+from omni.io_utils import load_audio
 
 def mix_collate_fn(batch):
     """Custom collate function that handles missing keys"""

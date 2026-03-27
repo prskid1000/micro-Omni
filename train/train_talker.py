@@ -6,13 +6,17 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.codec import RVQ
 from omni.talker import TalkerTiny
-from omni.utils import (
-    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss, 
-    TTSDataset, EMA,
-    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, collate_mel_fn, analyze_tts_dataset,
-    save_training_metadata, load_training_metadata, TrainingMonitor, setup_cuda, enable_log_file, default_log_path
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss,
+    EMA, TrainingMonitor, setup_cuda,
 )
+from omni.data_utils import TTSDataset, collate_mel_fn, analyze_tts_dataset
+from omni.checkpoint_utils import load_checkpoint, save_training_metadata, load_training_metadata
+from omni.resume_utils import (
+    setup_resume_data_loading, calculate_steps_per_epoch, calculate_micro_batches_seen,
+    calculate_resume_epoch_batch_from_optimizer_step, ValidationSkipSamplesContext,
+)
+from omni.io_utils import enable_log_file, default_log_path
 from tqdm import tqdm
 
 def main(cfg):
@@ -235,14 +239,18 @@ def main(cfg):
     
     # Update skip_samples for dataset if resuming
     batch_size = cfg.get("batch_size", 4)
+    drop_last = cfg.get("drop_last", True)
     new_train_dl = setup_resume_data_loading(
         train_ds, step, batch_size, logger,
         train_dl_kwargs={
             "num_workers": cfg.get("num_workers", 2),
-            "drop_last": cfg.get("drop_last", True),
+            "drop_last": drop_last,
             "collate_fn": collate_fn_with_max,
             "pin_memory": True
-        }
+        },
+        train_size=train_size,
+        drop_last=drop_last,
+        accumulation_steps=accumulation_steps,
     )
     if new_train_dl is not None:
         train_dl = new_train_dl
@@ -250,20 +258,15 @@ def main(cfg):
     max_steps = cfg.get("max_steps", 5000)
     logger.training_start(max_steps, train_size, val_size)
     
-    # Calculate steps per epoch and determine starting epoch/position
-    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    # Calculate steps per epoch and determine starting epoch/position.
+    # `step` is optimizer-step; convert to micro-batch position for in-epoch resume.
     batch_size = cfg.get("batch_size", 4)
     drop_last = cfg.get("drop_last", True)
-    if train_size is not None:
-        steps_per_epoch = train_size // batch_size
-        if not drop_last and train_size % batch_size != 0:
-            steps_per_epoch += 1
-    else:
-        # Fallback: use a large number if size is unknown (for progress bar)
-        # The actual training will work fine, just progress bar won't be accurate
-        steps_per_epoch = 1000000  # Large placeholder
-    initial_step = step
-    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
+    steps_per_epoch = calculate_steps_per_epoch(train_size, batch_size, drop_last) or 1000000
+    start_epoch, start_batch_idx = calculate_resume_epoch_batch_from_optimizer_step(
+        step, accumulation_steps, steps_per_epoch
+    )
+    initial_micro_batches_seen = calculate_micro_batches_seen(step, accumulation_steps)
     if step > 0:
         logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
@@ -296,9 +299,9 @@ def main(cfg):
         for batch_idx, batch_data in enumerate(pbar, start=enum_start):
             # Skip batches if resuming mid-epoch
             # batch_idx already represents the position in the epoch when enum_start > 0
-            if epoch == start_epoch and initial_step > 0:
+            if epoch == start_epoch and initial_micro_batches_seen > 0:
                 current_batch_step = epoch * steps_per_epoch + batch_idx
-                if current_batch_step < initial_step:
+                if current_batch_step < initial_micro_batches_seen:
                     continue
             
             # Unpack batch data (now includes mel_lengths)
@@ -634,8 +637,10 @@ def main(cfg):
             )
             most_recent_val_loss = None
 
-            # Recalculate positions
-            start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
+            # Recalculate positions (optimizer-step -> micro-batches)
+            start_epoch, start_batch_idx = calculate_resume_epoch_batch_from_optimizer_step(
+                step, accumulation_steps, steps_per_epoch
+            )
             epoch = start_epoch
 
             # Reset dataloader
@@ -645,7 +650,10 @@ def main(cfg):
                     "num_workers": cfg.get("num_workers", 2),
                     "drop_last": cfg.get("drop_last", True),
                     "collate_fn": collate_fn_with_max
-                }
+                },
+                train_size=train_size,
+                drop_last=cfg.get("drop_last", True),
+                accumulation_steps=accumulation_steps,
             )
             continue
 
@@ -761,7 +769,9 @@ def main(cfg):
             most_recent_val_loss = None
 
             # Recalculate positions
-            start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
+            start_epoch, start_batch_idx = calculate_resume_epoch_batch_from_optimizer_step(
+                step, accumulation_steps, steps_per_epoch
+            )
             epoch = start_epoch
 
             # Reset dataloader

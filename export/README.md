@@ -4,20 +4,20 @@
 
 ## Purpose
 
-After running the export scripts (located in the root directory), place the exported model here. This folder contains everything needed to:
+After running the export script (`scripts/export.py`), place the exported model here. This folder contains everything needed to:
 - Upload to Hugging Face Hub
 - Run inference without the full codebase
 - Share the model with others
 
-## Export Scripts (in root directory)
+## Export Script
 
-- **`export.py`** - Merges all model components into a single safetensors file
+- **`scripts/export.py`** - Merges all model components into a single safetensors file
 
 ## Standalone Inference Script
 
 **`infer_standalone.py`** - Standalone model loading using Hugging Face transformers library (included in this folder)
 
-> **Note**: This script demonstrates model loading but requires the full codebase for actual generation. For full multimodal inference, use `infer_chat.py` from the root directory.
+> **Note**: This script demonstrates model loading but requires the full codebase for actual generation. For full multimodal inference, use `test/infer_chat.py` from the repo root.
 
 This script can load the model using transformers library and safetensors. It demonstrates the structure for integration with transformers, but full text generation requires the model architecture classes from the `omni` package.
 
@@ -26,7 +26,7 @@ This script can load the model using transformers library and safetensors. It de
 ### 1. Export Model (run from root)
 
 ```bash
-python export.py \
+python scripts/export.py \
     --omni_ckpt checkpoints/omni_sft_tiny \
     --thinker_ckpt checkpoints/thinker_tiny \
     --audio_ckpt checkpoints/audio_enc_tiny \
@@ -41,7 +41,7 @@ python export.py \
 
 ```bash
 # From root directory
-python infer_chat.py --ckpt_dir export --text "Hello, how are you?"
+python test/infer_chat.py --ckpt_dir export --text "Hello, how are you?"
 ```
 
 **Option B: Standalone Loading (demonstration only)**
@@ -52,7 +52,7 @@ pip install transformers safetensors sentencepiece torch
 python infer_standalone.py --text "Hello, how are you?"
 ```
 
-> **Note**: `infer_standalone.py` demonstrates model loading but requires the full codebase (`omni` package) for actual text generation. For production use, use `infer_chat.py` from the root directory.
+> **Note**: `infer_standalone.py` demonstrates model loading but requires the full codebase (`omni` package) for actual text generation. For production use, use `test/infer_chat.py` from the repo root.
 
 ## Documentation
 
@@ -98,9 +98,9 @@ For full multimodal inference (text, image, audio, video):
 
 ```bash
 # From root directory
-python infer_chat.py --ckpt_dir export --text "Hello" --image path/to/image.jpg
-python infer_chat.py --ckpt_dir export --audio_in path/to/audio.wav
-python infer_chat.py --ckpt_dir export --text "Generate speech" --audio_out output.wav
+python test/infer_chat.py --ckpt_dir export --text "Hello" --image path/to/image.jpg
+python test/infer_chat.py --ckpt_dir export --audio_in path/to/audio.wav
+python test/infer_chat.py --ckpt_dir export --text "Generate speech" --audio_out output.wav
 ```
 
 ### Model Configuration

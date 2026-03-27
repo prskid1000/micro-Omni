@@ -214,7 +214,7 @@ Or set the environment variable:
 
 ```bash
 export TORCH_COMPILE_DISABLE=1
-python train_thinker.py
+python train/train_thinker.py --config configs/synthetic_thinker.json
 ```
 
 Everything else (AMP, Flash Attention, cuDNN) works fine on Blackwell. Only
@@ -303,7 +303,7 @@ training.
 
 ## 21.11 TrainingMonitor (LR Spike + Early Stopping + Best Weights)
 
-Training scripts use `TrainingMonitor(cfg)` from `omni/utils.py` to unify
+Training scripts use `TrainingMonitor(cfg)` from `omni/training_utils.py` to unify
 three training-stability features in one class. The underlying `LRSpike`
 class still exists for standalone use, but all scripts now go through the
 monitor.
@@ -311,7 +311,7 @@ monitor.
 ### Setup
 
 ```python
-from omni.utils import TrainingMonitor, setup_cuda
+from omni.training_utils import TrainingMonitor, setup_cuda
 
 setup_cuda()                          # replaces per-script CUDA boilerplate
 monitor = TrainingMonitor(cfg)        # reads config for all three features

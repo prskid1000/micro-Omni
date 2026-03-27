@@ -425,7 +425,7 @@ def main():
             print("   data/text/production_corpus.txt")
         else:
             print("   data/text/[dataset_name].txt")
-        print("3. Run training: python train_text.py --config configs/thinker_tiny.json")
+        print("3. Run training: python train/train_thinker.py --config configs/thinker_tiny.json")
     else:
         print("✗ Some operations failed. Check errors above.")
         print("You can resume by running the script again (it will skip completed steps)")

@@ -22,7 +22,9 @@ from omni.thinker import ThinkerLM
 from omni.audio_encoder import AudioEncoderTiny
 from omni.vision_encoder import ViTTiny
 from omni.tokenizer import BPETokenizer
-from omni.utils import find_checkpoint, strip_orig_mod, load_audio, enable_log_file, default_log_path
+from omni.checkpoint_utils import find_checkpoint, strip_orig_mod
+from omni.io_utils import load_audio, enable_log_file, default_log_path
+from omni.eval_utils import sample_lines, safe_perplexity
 
 torch.set_float32_matmul_precision('high')
 
@@ -212,10 +214,7 @@ def load_text_samples(cfg, num_samples=50, seed=42):
     if not os.path.exists(text_path):
         print(f"  Warning: text file not found: {text_path}")
         return []
-    with open(text_path, 'r', encoding='utf-8', errors='ignore') as f:
-        lines = [l.strip() for l in f if len(l.strip()) >= 10]
-    rng = random.Random(seed)
-    return rng.sample(lines, min(num_samples, len(lines)))
+    return sample_lines(text_path, num_samples, min_len=10, seed=seed)
 
 
 def load_image_samples(cfg, num_samples=20, seed=42):
@@ -329,7 +328,7 @@ def evaluate_text_only(thinker, tokenizer, cfg, device, num_samples=50, verbose=
         return None
 
     avg_loss = total_loss / total_tokens
-    perplexity = np.exp(avg_loss) if avg_loss < 20 else float('inf')
+    perplexity = safe_perplexity(avg_loss, max_exp_input=20.0)
 
     return {
         'num_samples': len(samples),
@@ -427,7 +426,7 @@ def evaluate_image_text(thinker, vision_enc, proj_v, tokenizer, cfg, device, num
         return None
 
     avg_loss = total_loss / total_tokens
-    perplexity = np.exp(avg_loss) if avg_loss < 20 else float('inf')
+    perplexity = safe_perplexity(avg_loss, max_exp_input=20.0)
 
     return {
         'num_samples': num_valid,
@@ -530,7 +529,7 @@ def evaluate_audio_text(thinker, audio_enc, proj_a, tokenizer, mel_spec, cfg, de
         return None
 
     avg_loss = total_loss / total_tokens
-    perplexity = np.exp(avg_loss) if avg_loss < 20 else float('inf')
+    perplexity = safe_perplexity(avg_loss, max_exp_input=20.0)
 
     return {
         'num_samples': num_valid,

@@ -18,7 +18,7 @@ from collections import defaultdict
 
 # Logging helper (writes stdout/stderr to logs/)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from omni.utils import enable_log_file, default_log_path
+from omni.io_utils import enable_log_file, default_log_path
 
 def run_inference(cmd_args, description, silent=False):
     """Run inference command and return success status and timing"""
@@ -28,7 +28,7 @@ def run_inference(cmd_args, description, silent=False):
     start_time = time.time()
     try:
         result = subprocess.run(
-            [sys.executable, "infer_chat.py"] + cmd_args,
+            [sys.executable, "test/infer_chat.py"] + cmd_args,
             capture_output=True,
             text=True,
             timeout=120,
@@ -231,7 +231,7 @@ def verify_export_model():
     
     if not os.path.exists(model_file):
         print(f"ERROR: Model file not found: {model_file}")
-        print("Please run export.py first to create the merged model.")
+        print("Please run scripts/export.py first to create the merged model.")
         return False
     
     if not os.path.exists(config_file):

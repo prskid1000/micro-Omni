@@ -14,7 +14,10 @@ import numpy as np
 from PIL import Image
 from torchvision import transforms
 from omni.vision_encoder import ViTTiny, TransformerTextEncoder
-from omni.utils import ImgCapDataset, find_checkpoint, strip_orig_mod, enable_log_file, default_log_path
+from omni.data_utils import ImgCapDataset
+from omni.checkpoint_utils import find_checkpoint, strip_orig_mod
+from omni.io_utils import enable_log_file, default_log_path
+from omni.eval_utils import load_checkpoint_and_config
 from tqdm import tqdm
 
 # Import your custom tokenizer and Thinker model
@@ -26,27 +29,9 @@ torch.set_float32_matmul_precision('high')
 
 def load_model_and_head(checkpoint_dir, device="cuda", config_path=None):
     """Load Vision Encoder model, projection heads, and text encoder from checkpoint."""
-    checkpoint_path, checkpoint = find_checkpoint(checkpoint_dir, "vision.pt", "vision_step_", device)
-    if checkpoint is None:
-        raise FileNotFoundError(f"Checkpoint not found in: {checkpoint_dir}")
-
-    print(f"Loading checkpoint from: {checkpoint_path}")
-
-    # Get config: explicit path > checkpoint > config file by name
-    if config_path and os.path.exists(config_path):
-        print(f"Loading config from: {config_path}")
-        with open(config_path, 'r') as f:
-            cfg = json.load(f)
-    elif "config" in checkpoint:
-        cfg = checkpoint["config"]
-    else:
-        config_path = os.path.join(checkpoint_dir, "config.json")
-        if os.path.exists(config_path):
-            print(f"Loading config from: {config_path}")
-            with open(config_path, 'r') as f:
-                cfg = json.load(f)
-        else:
-            raise FileNotFoundError(f"Config not found: {config_path}. Re-run training to generate it.")
+    _, checkpoint, cfg = load_checkpoint_and_config(
+        checkpoint_dir, "vision.pt", "vision_step_", device=device, config_path=config_path
+    )
 
     
     d_model = cfg.get("d_model", 128)

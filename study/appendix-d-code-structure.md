@@ -16,7 +16,12 @@ micro-Omni/
 │   ├── talker.py                  # Talker (audio token generator)
 │   ├── ocr_model.py               # OCR model
 │   ├── tokenizer.py               # BPE tokenizer wrapper
-│   └── utils.py                   # Shared utilities
+│   ├── nn_utils.py                # RoPE/RMSNorm/projection primitives
+│   ├── data_utils.py              # Streaming datasets + collate functions
+│   ├── training_utils.py          # EMA/LR/monitor/logger helpers
+│   ├── checkpoint_utils.py        # Checkpoint + metadata helpers
+│   ├── io_utils.py                # Logging + audio I/O helpers
+│   └── resume_utils.py            # Resume-position helpers
 │
 ├── configs/                       # JSON configuration files
 │   ├── synthetic_thinker.json
@@ -27,7 +32,7 @@ micro-Omni/
 │   ├── synthetic_omni_sft.json
 │   └── synthetic_ocr.json
 │
-├── train_text.py                  # Train the Thinker LM
+├── train_thinker.py               # Train the Thinker LM
 ├── train_audio_enc.py             # Train audio encoder
 ├── train_vision.py                # Train vision encoder
 ├── train_talker.py                # Train Talker
@@ -44,7 +49,7 @@ micro-Omni/
 ├── test_sft.py                    # Multimodal SFT test
 │
 ├── infer_chat.py                  # Interactive multimodal chat
-├── export.py                      # Merge checkpoints for deployment
+├── scripts/export.py              # Merge checkpoints for deployment
 │
 ├── export/
 │   ├── infer_standalone.py        # Inference from exported model
@@ -65,7 +70,7 @@ micro-Omni/
 │       ├── <model>_metadata.json # Step, epoch, dataset stats
 │       ├── tokenizer.model       # BPE tokenizer (if applicable)
 │       └── tokenizer.vocab       # Vocabulary (if applicable)
-└── exported/                      # Merged model for deployment
+└── export/                        # Merged model for deployment
 ```
 
 ---
@@ -95,7 +100,7 @@ ThinkerLM
 │   │   ├── wk       Linear (d_model -> d_kv)
 │   │   ├── wv       Linear (d_model -> d_kv)
 │   │   ├── wo       Linear (d_model -> d_model)
-│   │   └── rope     RoPE (from utils)
+│   │   └── rope     RoPE (from nn_utils)
 │   ├── norm2        RMSNorm
 │   └── ffn          SwiGLU | MLP | MoE
 ├── norm_f           RMSNorm
@@ -249,28 +254,18 @@ Key methods: `encode(text) -> list[int]`, `decode(ids) -> str`,
 
 ---
 
-## omni/utils.py
+## Utility Modules
 
-Shared utilities used across all components.
+Utilities are split by domain:
 
-| Class / Function       | Description                                        |
-|------------------------|----------------------------------------------------|
-| `RoPE`                | Rotary Position Embedding computation               |
-| `RMSNorm`             | Root Mean Square Layer Normalization                 |
-| `EMA`                 | Exponential Moving Average of model parameters       |
-| `CosineScheduler`     | Learning rate schedule with warmup + cosine decay    |
-| `LRSpike`             | LR spike on consecutive val loss increases (low-level)|
-| `TrainingMonitor`     | Unified wrapper: LR spike + early stopping + best weight tracking. Constructed with `TrainingMonitor(cfg)`. |
-| `EarlyStopping`       | Alias for `TrainingMonitor` (backward compatibility) |
-| `setup_cuda()`        | Centralized CUDA setup: seeds, TF32, cudnn.benchmark, matmul precision. Replaces per-script boilerplate. |
-| `TextDataset`         | Dataset for text training (tokenized chunks)         |
-| `AudioTextDataset`    | Dataset for audio-text pairs                         |
-| `ImageTextDataset`    | Dataset for image-text pairs                         |
-| `find_checkpoint()`   | Locate latest checkpoint in a directory              |
-| `save_checkpoint()`   | Save model + optimizer + step to .pt file            |
-| `load_checkpoint()`   | Load model + optimizer + step from .pt file          |
-| `count_parameters()`  | Count trainable parameters                           |
-| `set_seed()`          | Set random seed for reproducibility                  |
+| File | Main Contents |
+|------|---------------|
+| `omni/nn_utils.py` | `RoPE`, `RMSNorm`, `ProjectionHead`, `LearnableTemperature` |
+| `omni/data_utils.py` | Streaming datasets (`TextDataset`, `ASRDataset`, `TTSDataset`, `VocoderDataset`, `ImgCapDataset`, `MixDataset`, `OCRDataset`) + `collate_*` + dataset analysis helpers |
+| `omni/training_utils.py` | `EMA`, `TrainingMonitor`, `setup_cuda()`, scheduler/gradient/logger utilities |
+| `omni/checkpoint_utils.py` | Checkpoint discovery, state-dict normalization, metadata save/load helpers |
+| `omni/io_utils.py` | Log tee helpers and robust `load_audio()` |
+| `omni/resume_utils.py` | Resume epoch/batch math and IterableDataset skip setup |
 
 ---
 
@@ -278,7 +273,7 @@ Shared utilities used across all components.
 
 | Script              | Trains            | Key Config               |
 |---------------------|-------------------|--------------------------|
-| `train_text.py`     | ThinkerLM         | `synthetic_thinker.json`    |
+| `train_thinker.py`  | ThinkerLM         | `synthetic_thinker.json`    |
 | `train_audio_enc.py`| AudioEncoderTiny  | `synthetic_audio_enc.json`  |
 | `train_vision.py`   | ViTTiny           | `synthetic_vision.json`     |
 | `train_talker.py`   | TalkerTiny        | `synthetic_talker.json`     |
@@ -346,4 +341,4 @@ checkpoints together and runs end-to-end inference on multimodal samples
 |-------------------------------|--------------------------------------|
 | `infer_chat.py`              | Interactive chat (all modalities)     |
 | `export/infer_standalone.py` | Chat from exported safetensors model  |
-| `export.py`                  | Merge checkpoints into one file       |
+| `scripts/export.py`          | Merge checkpoints into one file       |

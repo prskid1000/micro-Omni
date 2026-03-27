@@ -370,7 +370,7 @@ In practice, label smoothing:
 - **Improves calibration**: Predicted probabilities better match actual correctness rates
 - **Acts as regularization**: Slightly penalizes the model for being too sure, reducing overfitting
 
-The 0.1 default is used in pre-training scripts: `train_text.py`, `train_vision.py`, and `train_ocr.py`. This is the same value used by most production language models.
+The 0.1 default is used in pre-training scripts: `train_thinker.py`, `train_vision.py`, and `train_ocr.py`. This is the same value used by most production language models.
 
 The SFT stage (`sft_omni.py`) also uses `label_smoothing=0.1`.
 

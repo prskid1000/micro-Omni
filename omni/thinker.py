@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 from typing import Optional, Tuple, Dict, List, Union
-from omni.utils import RMSNorm, RoPE, make_positions
+from omni.nn_utils import RMSNorm, RoPE, make_positions
 from einops import rearrange
 import warnings
 

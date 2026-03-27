@@ -20,8 +20,13 @@ import shutil
 import torch
 from safetensors.torch import save_file
 from pathlib import Path
-from omni.utils import find_checkpoint, strip_orig_mod, enable_log_file, default_log_path
+from omni.checkpoint_utils import strip_orig_mod
+from omni.io_utils import enable_log_file, default_log_path
+from omni.component_utils import load_component_checkpoint
 from typing import Dict
+
+# Use shared component checkpoint resolver across export/inference.
+find_checkpoint = load_component_checkpoint
 
 
 def load_checkpoint(path, device="cpu"):
@@ -643,13 +648,13 @@ def main():
         epilog="""
 Examples:
   # Export all available components (auto-discovers checkpoints in checkpoints/ directory)
-  python export.py
+  python scripts/export.py
 
   # Export with custom config file (still auto-discovers missing components)
-  python export.py --omni_config omni_sft_tiny.json
+  python scripts/export.py --omni_config omni_sft_tiny.json
 
   # Export with explicit checkpoint paths (overrides auto-discovery)
-  python export.py \\
+  python scripts/export.py \\
       --omni_ckpt checkpoints/omni_sft_tiny \\
       --thinker_ckpt checkpoints/thinker_tiny \\
       --audio_ckpt checkpoints/audio_enc_tiny \\

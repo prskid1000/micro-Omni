@@ -17,13 +17,17 @@ from torch import nn
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator
-from omni.utils import (
-    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, VocoderDataset, EMA,
-    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, check_gradient_explosion, collate_mel_audio_fn,
-    save_training_metadata, load_training_metadata, analyze_vocoder_dataset, TrainingMonitor,
-    setup_cuda, validate_loss, enable_log_file, default_log_path
+from omni.training_utils import (
+    set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, EMA,
+    check_gradient_explosion, TrainingMonitor, setup_cuda, validate_loss,
 )
+from omni.data_utils import VocoderDataset, collate_mel_audio_fn, analyze_vocoder_dataset
+from omni.checkpoint_utils import load_checkpoint, save_training_metadata, load_training_metadata
+from omni.resume_utils import (
+    setup_resume_data_loading, calculate_steps_per_epoch, calculate_micro_batches_seen,
+    calculate_resume_epoch_batch_from_optimizer_step, ValidationSkipSamplesContext,
+)
+from omni.io_utils import enable_log_file, default_log_path
 from tqdm import tqdm
 
 def discriminator_loss(real_outputs, fake_outputs):
@@ -404,26 +408,25 @@ def main(cfg):
             "drop_last": True,
             "collate_fn": collate_fn,
             "pin_memory": False,
-        }
+        },
+        train_size=train_size,
+        drop_last=True,
+        accumulation_steps=accumulation_steps,
     )
     if new_train_dl is not None:
         train_dl = new_train_dl
     
     logger.training_start(max_steps, train_size, val_size)
     
-    # Calculate steps per epoch and determine starting epoch/position
-    # For IterableDataset, we can't use len() directly, so calculate from dataset size
+    # Calculate steps per epoch and determine starting epoch/position.
     batch_size = cfg.get("batch_size", 4)
     drop_last = True  # Vocoder uses drop_last=True
-    if train_size is not None:
-        steps_per_epoch = train_size // batch_size
-        if not drop_last and train_size % batch_size != 0:
-            steps_per_epoch += 1
-    else:
-        # Fallback: use None if size is unknown (for progress bar)
-        steps_per_epoch = None
-    initial_step = step
-    start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
+    steps_per_epoch = calculate_steps_per_epoch(train_size, batch_size, drop_last)
+    resume_steps_per_epoch = steps_per_epoch if steps_per_epoch is not None else 1
+    start_epoch, start_batch_idx = calculate_resume_epoch_batch_from_optimizer_step(
+        step, accumulation_steps, resume_steps_per_epoch
+    )
+    initial_micro_batches_seen = calculate_micro_batches_seen(step, accumulation_steps)
     if step > 0:
         logger.info(f"Resuming from step {step} (epoch {start_epoch}, batch {start_batch_idx}/{steps_per_epoch})")
     
@@ -1065,7 +1068,9 @@ def main(cfg):
             most_recent_val_loss = monitor.last_checkpoint_val_loss
             
             # Recalculate positions
-            start_epoch, start_batch_idx = calculate_resume_position(step, steps_per_epoch)
+            start_epoch, start_batch_idx = calculate_resume_epoch_batch_from_optimizer_step(
+                step, accumulation_steps, steps_per_epoch if steps_per_epoch is not None else 1
+            )
             epoch = start_epoch
             
             # Reset dataloader

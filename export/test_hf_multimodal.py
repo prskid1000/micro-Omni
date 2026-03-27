@@ -28,7 +28,8 @@ import torchaudio
 # Add parent dir for omni imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from omni.tokenizer import BPETokenizer
-from omni.utils import load_audio, enable_log_file, default_log_path
+from omni.io_utils import load_audio, enable_log_file, default_log_path
+from omni.eval_utils import sample_lines, count_topk_from_logits, safe_perplexity
 
 
 def main():
@@ -71,8 +72,7 @@ def main():
     print("\n" + "-" * 40)
     print("1. TEXT-ONLY FORWARD")
     print("-" * 40)
-    lines = [l.strip() for l in open(args.corpus, encoding="utf-8") if len(l.strip()) > 10]
-    text_samples = random.sample(lines, min(args.num_samples, len(lines)))
+    text_samples = sample_lines(args.corpus, args.num_samples, min_len=11, seed=args.seed)
     c1, c5, total, total_loss = 0, 0, 0, 0.0
     for line in text_samples:
         ids = [1] + tok.encode(line)
@@ -83,16 +83,12 @@ def main():
         with torch.inference_mode():
             logits = model(input_ids=x).logits
         total_loss += loss_fn(logits[0], tgt[0]).item()
-        for t in range(logits.shape[1]):
-            top5 = logits[0, t].topk(5).indices.tolist()
-            actual = ids[t + 1]
-            if top5[0] == actual:
-                c1 += 1
-            if actual in top5:
-                c5 += 1
-            total += 1
+        topk = count_topk_from_logits(logits[0], tgt[0], ks=(1, 5))
+        c1 += topk[1]
+        c5 += topk[5]
+        total += tgt.numel()
     avg_loss = total_loss / max(total, 1)
-    ppl = torch.exp(torch.tensor(avg_loss)).item()
+    ppl = safe_perplexity(avg_loss, max_exp_input=20.0)
     print(f"  Tokens: {total}")
     print(f"  Loss: {avg_loss:.4f}, Perplexity: {ppl:.2f}")
     print(f"  Top-1: {c1/total*100:.2f}%, Top-5: {c5/total*100:.2f}%")
@@ -176,7 +172,7 @@ def main():
             mm_count += 1
     if mm_count > 0:
         avg_mm = mm_loss / mm_count
-        mm_ppl = torch.exp(torch.tensor(avg_mm)).item()
+        mm_ppl = safe_perplexity(avg_mm, max_exp_input=20.0)
         print(f"  Samples: {mm_count}")
         print(f"  Loss: {avg_mm:.4f}, Perplexity: {mm_ppl:.2f}")
 
@@ -207,7 +203,7 @@ def main():
             continue
     if at_count > 0:
         avg_at = at_loss / at_count
-        at_ppl = torch.exp(torch.tensor(avg_at)).item()
+        at_ppl = safe_perplexity(avg_at, max_exp_input=20.0)
         print(f"  Samples: {at_count}")
         print(f"  Loss: {avg_at:.4f}, Perplexity: {at_ppl:.2f}")
 

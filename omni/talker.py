@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 from typing import Optional, Tuple, Dict
-from omni.utils import RMSNorm, make_positions
+from omni.nn_utils import RMSNorm, make_positions
 from omni.thinker import Attention, MLP, Block
 from einops import rearrange
 import warnings
