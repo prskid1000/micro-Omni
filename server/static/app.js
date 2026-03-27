@@ -1301,6 +1301,15 @@ async function setupTuning() {
       resultsDiv.textContent = "No tuning DB found for this stage. Start a tuning run.";
       $("#tuneTrialsTable tbody").innerHTML = "";
       $("#tuneSliceCharts").innerHTML = "";
+      $("#tuneApplyResult").innerHTML = "";
+
+      // Clear charts
+      if (tuneChart) { tuneChart.clear(); }
+      if (tuneTrainChart) { tuneTrainChart.clear(); }
+      for (const k of Object.keys(tuneSliceInstances)) {
+        try { tuneSliceInstances[k].dispose(); } catch {}
+        delete tuneSliceInstances[k];
+      }
     }
 
     // Auto-poll while running
@@ -1424,11 +1433,24 @@ async function setupTuning() {
   // Clear tuning data
   $("#tuneClearBtn").addEventListener("click", async () => {
     const stage = stageSel.value;
-    if (!confirm(`Delete ALL tuning data for stage ${stage}? (DB, trial checkpoints, tuned config)`)) return;
+    if (!confirm(`Delete ALL tuning data for stage ${stage}?\n\nThis removes:\n- Optuna DB (all trial results)\n- Trial checkpoints\n- Tuned config file`)) return;
     const res = await api.post("/api/tuning/clear", { stage });
     if (res.ok) {
       showToast(`Cleared ${res.count} items for stage ${stage}`, "success");
-      pollTuningProgress();
+      // Force clear all UI immediately
+      resultsDiv.textContent = "Cleared. No tuning data.";
+      progressDiv.innerHTML = "";
+      $("#tuneTrialsTable tbody").innerHTML = "";
+      $("#tuneSliceCharts").innerHTML = "";
+      $("#tuneApplyResult").innerHTML = "";
+      if (tuneChart) tuneChart.clear();
+      if (tuneTrainChart) tuneTrainChart.clear();
+      for (const k of Object.keys(tuneSliceInstances)) {
+        try { tuneSliceInstances[k].dispose(); } catch {}
+        delete tuneSliceInstances[k];
+      }
+      // Re-poll after short delay to confirm empty state
+      setTimeout(pollTuningProgress, 500);
     } else {
       showToast(res.error || "Failed to clear", "error");
     }

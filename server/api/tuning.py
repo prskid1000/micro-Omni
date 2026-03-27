@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+import threading
 from typing import Any
+
+# Lock to prevent DB reads during clear
+_db_lock = threading.Lock()
 
 # ── Search space definitions per stage ────────────────────────
 # Each entry: (param_name, type, args)
@@ -166,47 +169,85 @@ def _get_search_space(stage: str) -> list[dict[str, Any]]:
 
 
 def _read_study_results(db_path: str) -> dict[str, Any] | None:
-    """Read Optuna study results from SQLite DB."""
+    """Read Optuna study results directly from SQLite (no lingering connections)."""
     if not os.path.exists(db_path):
         return None
-    try:
-        import optuna
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-        studies = optuna.study.get_all_study_summaries(storage=f"sqlite:///{db_path}")
-        if not studies:
-            return None
-        study = optuna.load_study(
-            study_name=studies[0].study_name,
-            storage=f"sqlite:///{db_path}",
-        )
-        trials = []
-        for t in study.trials:
-            trials.append({
-                "number": t.number,
-                "value": t.value,
-                "params": t.params,
-                "state": t.state.name,
-                "duration_seconds": (t.datetime_complete - t.datetime_start).total_seconds()
-                if t.datetime_complete and t.datetime_start else None,
-            })
+    import sqlite3
+    from datetime import datetime
 
-        best = None
-        if study.best_trial:
-            best = {
-                "number": study.best_trial.number,
-                "value": study.best_trial.value,
-                "params": study.best_trial.params,
+    with _db_lock:
+        conn = None
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            cur.execute("SELECT study_id, study_name, direction FROM studies LIMIT 1")
+            study_row = cur.fetchone()
+            if not study_row:
+                return None
+            study_name = study_row["study_name"]
+            study_id = study_row["study_id"]
+            direction = "MINIMIZE" if study_row["direction"] == 1 else "MAXIMIZE"
+
+            cur.execute("""
+                SELECT trial_id, number, state, datetime_start, datetime_complete
+                FROM trials WHERE study_id = ? ORDER BY number
+            """, (study_id,))
+            trial_rows = cur.fetchall()
+
+            STATE_MAP = {0: "RUNNING", 1: "COMPLETE", 2: "PRUNED", 3: "FAIL", 4: "WAITING"}
+            trials = []
+            for tr in trial_rows:
+                trial_id = tr["trial_id"]
+
+                cur.execute("SELECT value FROM trial_values WHERE trial_id = ? AND objective_id = 0", (trial_id,))
+                val_row = cur.fetchone()
+                value = val_row["value"] if val_row else None
+
+                cur.execute("SELECT param_name, param_value FROM trial_params WHERE trial_id = ?", (trial_id,))
+                params = {}
+                for pr in cur.fetchall():
+                    try:
+                        params[pr["param_name"]] = json.loads(pr["param_value"])
+                    except Exception:
+                        params[pr["param_name"]] = pr["param_value"]
+
+                duration = None
+                if tr["datetime_start"] and tr["datetime_complete"]:
+                    try:
+                        t0 = datetime.fromisoformat(tr["datetime_start"])
+                        t1 = datetime.fromisoformat(tr["datetime_complete"])
+                        duration = (t1 - t0).total_seconds()
+                    except Exception:
+                        pass
+
+                trials.append({
+                    "number": tr["number"],
+                    "value": value,
+                    "params": params,
+                    "state": STATE_MAP.get(tr["state"], "UNKNOWN"),
+                    "duration_seconds": duration,
+                })
+
+            complete = [t for t in trials if t["state"] == "COMPLETE" and t["value"] is not None]
+            best = None
+            if complete:
+                best_t = min(complete, key=lambda t: t["value"]) if direction == "MINIMIZE" else max(complete, key=lambda t: t["value"])
+                best = {"number": best_t["number"], "value": best_t["value"], "params": best_t["params"]}
+
+            return {
+                "study_name": study_name,
+                "direction": direction,
+                "n_trials": len(trials),
+                "best_trial": best,
+                "trials": trials,
             }
-
-        return {
-            "study_name": study.study_name,
-            "direction": study.direction.name,
-            "n_trials": len(study.trials),
-            "best_trial": best,
-            "trials": trials,
-        }
-    except Exception as e:
-        return {"error": str(e)}
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            if conn:
+                conn.close()
 
 
 def handle_get(handler: Any, path: str, query: dict[str, list[str]]) -> None:
@@ -292,15 +333,18 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
 
         removed = []
 
-        # 1. Delete Optuna DB
-        db_path = f"logs/hp_tuning_{stage}.db"
-        if os.path.exists(db_path):
-            try:
-                os.remove(db_path)
-                removed.append(db_path)
-            except Exception as e:
-                handler.send_error_json(500, f"Failed to delete {db_path}: {e}")
-                return
+        # 1. Delete Optuna DB + WAL/journal files (acquire lock to ensure no readers)
+        with _db_lock:
+            db_path = f"logs/hp_tuning_{stage}.db"
+            for suffix in ["", "-wal", "-shm", "-journal"]:
+                p = db_path + suffix
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                        removed.append(p)
+                    except Exception as e:
+                        handler.send_error_json(500, f"Failed to delete {p}: {e}")
+                        return
 
         # 2. Delete tuning checkpoint dirs (checkpoints/tune_<stage>/trial_*)
         import shutil
