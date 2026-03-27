@@ -30,8 +30,17 @@
     "rope_theta": 10000,
     "use_gqa": false,
     "use_swiglu": true,
-    "use_moe": false
+    "use_moe": false,
+    "num_experts": 8,
+    "num_experts_per_tok": 2
   },
+  "use_gqa": false,
+  "use_swiglu": true,
+  "use_moe": false,
+  "use_spiking": false,
+  "use_ltc": false,
+  "label_smoothing": 0.0,
+  "window_size": 0,
   "ctx_len": 77,
   "vocab_size": 256,
   "batch_size": 64,

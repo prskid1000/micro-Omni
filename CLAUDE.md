@@ -139,4 +139,5 @@ All tests use `torch.inference_mode()` and `torch.set_float32_matmul_precision('
 ## Metrics Logging
 - Train/test scripts (except `test/infer_chat.py`) write structured JSONL to `logs/metrics/`.
 - Upsert key (resume-safe): `(run_id, phase, epoch, batch, step, split, metric_name)`.
-- Open `scripts/metrics_viewer.html` in a browser to inspect trends and latest values.
+- Run `python -m server` for the unified dashboard (metrics, training control, inference, export).
+- Legacy: `scripts/metrics_viewer.html` still works but is deprecated.

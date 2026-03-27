@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>micro-Omni Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+</head>
+<body>
+
+<!-- ── Top Bar ────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="logo">&mu;Omni</span>
+    <span class="logo-sub">Training Dashboard</span>
+  </div>
+  <div class="topbar-right">
+    <span id="gpuBadge" class="gpu-badge" title="GPU Status">GPU: --</span>
+    <button id="liveToggle" class="btn btn-live active" title="Toggle live polling">LIVE</button>
+  </div>
+</header>
+
+<!-- ── Pipeline ───────────────────────────────────────────── -->
+<section class="glass section" id="pipelineSection">
+  <div class="section-title">Training Pipeline</div>
+  <div class="pipeline" id="pipeline"></div>
+</section>
+
+<!-- ── Summary Cards ──────────────────────────────────────── -->
+<section class="cards-row" id="summaryCards">
+  <div class="card" id="cardStep"><div class="card-label">Current Step</div><div class="card-value">--</div></div>
+  <div class="card" id="cardBestVal"><div class="card-label">Best Val Loss</div><div class="card-value">--</div></div>
+  <div class="card" id="cardLR"><div class="card-label">Learning Rate</div><div class="card-value">--</div></div>
+  <div class="card" id="cardETA"><div class="card-label">ETA</div><div class="card-value">--</div></div>
+  <div class="card" id="cardThroughput"><div class="card-label">Throughput</div><div class="card-value">--</div></div>
+  <div class="card" id="cardGPUMem"><div class="card-label">GPU Memory</div><div class="card-value">--</div></div>
+</section>
+
+<!-- ── Chart Controls ─────────────────────────────────────── -->
+<section class="glass section">
+  <div class="chart-controls">
+    <div class="control-group">
+      <label>File <div class="chip-group" id="fileChips"></div></label>
+      <label>Run ID <div class="chip-group" id="runChips"></div></label>
+      <label>Metric <div class="chip-group" id="metricChips"></div></label>
+      <button id="xAxisToggle" class="btn btn-sm" title="Toggle X-axis between step and epoch">X: step</button>
+    </div>
+    <div class="control-group">
+      <label class="smoothing-label">
+        Smoothing: <span id="smoothingValue">0.6</span>
+        <input type="range" id="smoothingSlider" min="0" max="0.99" step="0.01" value="0.6" />
+      </label>
+      <button id="logScaleBtn" class="btn btn-sm">Log Scale</button>
+      <button id="dualAxisBtn" class="btn btn-sm">Dual Y-Axis</button>
+      <button id="refreshBtn" class="btn btn-sm">Refresh</button>
+    </div>
+  </div>
+  <!-- Hidden selects for JS compat -->
+  <select id="fileSelect" multiple style="display:none"></select>
+  <select id="runSelect" multiple style="display:none"></select>
+  <select id="metricSelect" multiple style="display:none"></select>
+  <select id="xAxisSelect" style="display:none"><option value="step" selected>step</option><option value="epoch">epoch</option></select>
+  <div id="chart" style="width:100%; height:440px;"></div>
+</section>
+
+<!-- ── Tabs ────────────────────────────────────────────────── -->
+<section class="glass section">
+  <div class="tab-bar" id="tabBar">
+    <button class="tab active" data-tab="latest">Latest Values</button>
+    <button class="tab" data-tab="checkpoints">Checkpoints</button>
+    <button class="tab" data-tab="hyperparams">Hyperparameters</button>
+    <button class="tab" data-tab="events">Events</button>
+    <button class="tab" data-tab="configs">Config Editor</button>
+    <button class="tab" data-tab="logs">Logs</button>
+  </div>
+
+  <!-- Latest Values -->
+  <div class="tab-content active" id="tab-latest">
+    <table id="latestTable">
+      <thead><tr><th>Metric</th><th>Value</th><th>Step</th><th>Epoch</th><th>LR</th><th>Timestamp</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- Checkpoints -->
+  <div class="tab-content" id="tab-checkpoints">
+    <table id="checkpointTable">
+      <thead><tr><th>Name</th><th>Step</th><th>Epoch</th><th>Size (MB)</th><th>Config</th><th>Modified</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- Hyperparameters -->
+  <div class="tab-content" id="tab-hyperparams">
+    <div id="hyperparamsContent" class="hp-grid"></div>
+  </div>
+
+  <!-- Events -->
+  <div class="tab-content" id="tab-events">
+    <table id="eventsTable">
+      <thead><tr><th>Event</th><th>File</th><th>Run ID</th><th>Step</th><th>Epoch</th><th>Timestamp</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- Config Editor -->
+  <div class="tab-content" id="tab-configs">
+    <div class="config-editor-controls">
+      <label>Config File
+        <select id="configSelect"></select>
+      </label>
+      <label>Compare with checkpoint
+        <select id="configCheckpointSelect">
+          <option value="">-- none --</option>
+        </select>
+      </label>
+      <button id="configLoadBtn" class="btn btn-sm">Load</button>
+      <button id="configSaveBtn" class="btn btn-accent btn-sm">Save Config</button>
+    </div>
+    <div class="config-editor-layout">
+      <div class="config-col">
+        <div class="config-col-title">Base Config (editable)</div>
+        <textarea id="configEditor" rows="24" class="config-textarea"></textarea>
+      </div>
+      <div class="config-col">
+        <div class="config-col-title">Checkpoint Config (read-only)</div>
+        <textarea id="configCheckpointView" rows="24" class="config-textarea" readonly></textarea>
+      </div>
+    </div>
+    <div id="configStatus" class="test-status"></div>
+  </div>
+
+  <!-- Logs -->
+  <div class="tab-content" id="tab-logs">
+    <div class="log-controls">
+      <label>Stage
+        <select id="logStageSelect">
+          <option value="A">A - Thinker</option>
+          <option value="B">B - Audio Enc</option>
+          <option value="C">C - Vision</option>
+          <option value="D">D - Talker</option>
+          <option value="E">E - SFT</option>
+          <option value="F">F - Vocoder</option>
+          <option value="G">G - OCR</option>
+        </select>
+      </label>
+      <button id="loadLogsBtn" class="btn btn-sm">Load Logs</button>
+    </div>
+    <pre id="logOutput" class="log-output"></pre>
+  </div>
+</section>
+
+<!-- ── Inference Panel ─────────────────────────────────────── -->
+<section class="glass section collapsible">
+  <div class="section-title collapsible-header" data-target="inferenceBody">
+    Inference
+    <span class="collapse-icon">&#9660;</span>
+  </div>
+  <div class="collapsible-body" id="inferenceBody" style="display:none;">
+    <div class="infer-controls">
+      <label>Mode
+        <select id="inferMode">
+          <option value="normal">Normal (Checkpoints)</option>
+          <option value="standalone">Standalone (Export)</option>
+          <option value="huggingface">HuggingFace (Export)</option>
+        </select>
+      </label>
+      <label id="inferCkptLabel">Checkpoint
+        <select id="inferCkpt"></select>
+      </label>
+    </div>
+    <div class="infer-controls">
+      <textarea id="inferText" rows="3" placeholder="Enter text prompt..."></textarea>
+    </div>
+    <div class="infer-controls">
+      <label>Image path <input type="text" id="inferImage" placeholder="e.g. data/images/test.jpg" /></label>
+      <label>Audio in <input type="text" id="inferAudioIn" placeholder="e.g. data/audio/test.wav" /></label>
+      <label>Audio out <input type="text" id="inferAudioOut" placeholder="e.g. output.wav (TTS)" /></label>
+      <label><input type="checkbox" id="inferOCR" /> OCR</label>
+    </div>
+    <div class="infer-controls">
+      <button id="inferBtn" class="btn btn-accent">Run Inference</button>
+      <button id="inferUnloadBtn" class="btn btn-sm btn-danger">Unload Model</button>
+    </div>
+    <div id="inferResult" class="infer-result"></div>
+  </div>
+</section>
+
+<!-- ── Testing Panel ──────────────────────────────────────── -->
+<section class="glass section collapsible">
+  <div class="section-title collapsible-header" data-target="testingBody">
+    Testing
+    <span class="collapse-icon">&#9660;</span>
+  </div>
+  <div class="collapsible-body" id="testingBody" style="display:none;">
+    <div class="test-controls">
+      <label>Test Script
+        <select id="testScript">
+          <option value="test_thinker">test_thinker</option>
+          <option value="test_audio_enc">test_audio_enc</option>
+          <option value="test_vision">test_vision</option>
+          <option value="test_talker">test_talker</option>
+          <option value="test_vocoder">test_vocoder</option>
+          <option value="test_ocr">test_ocr</option>
+          <option value="test_sft">test_sft</option>
+        </select>
+      </label>
+      <label>Samples <input type="number" id="testSamples" value="50" min="1" max="1000" /></label>
+      <button id="testRunBtn" class="btn btn-accent">Run Test</button>
+      <button id="exportBtn" class="btn btn-sm">Export Model</button>
+    </div>
+    <div id="testStatus" class="test-status"></div>
+  </div>
+</section>
+
+<!-- ── HP Tuning Panel ────────────────────────────────────── -->
+<section class="glass section collapsible">
+  <div class="section-title collapsible-header" data-target="tuningBody">
+    HP Tuning (Optuna)
+    <span class="collapse-icon">&#9660;</span>
+  </div>
+  <div class="collapsible-body" id="tuningBody" style="display:none;">
+    <div class="test-controls">
+      <label>Stage
+        <select id="tuneStage">
+          <option value="A">A - Thinker LLM</option>
+          <option value="B">B - Audio Encoder</option>
+          <option value="C">C - Vision Encoder</option>
+          <option value="D">D - Talker TTS</option>
+          <option value="E">E - Multimodal SFT</option>
+          <option value="F">F - Vocoder</option>
+          <option value="G">G - OCR</option>
+        </select>
+      </label>
+      <label>Trials <input type="number" id="tuneTrials" value="30" min="1" max="200" /></label>
+      <label>Steps/trial <input type="number" id="tuneSteps" value="2000" min="100" max="20000" /></label>
+      <button id="tuneStartBtn" class="btn btn-accent">Start Tuning</button>
+      <button id="tuneStopBtn" class="btn btn-sm btn-danger">Stop</button>
+    </div>
+    <div class="section-title" style="margin-top:12px">Search Space</div>
+    <div id="tuneParams" class="hp-grid"></div>
+    <div class="section-title" style="margin-top:12px">Results</div>
+    <div id="tuneResults" class="test-status"></div>
+    <table id="tuneTrialsTable" style="margin-top:8px">
+      <thead><tr><th>#</th><th>Val Loss</th><th>State</th><th>Duration</th><th>Params</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

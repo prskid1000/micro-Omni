@@ -45,5 +45,13 @@
   "lr_spike_duration": 50,
   "lr_spike_consecutive_increases": 3,
   "mpd_periods": [2, 3, 5],
-  "msd_num_scales": 2
+  "msd_num_scales": 2,
+  "drop_last": true,
+  "resblock_kernel_sizes": [3, 5, 7],
+  "resblock_dilation_sizes": [[1, 2], [1, 2], [1, 2]],
+  "upsample_initial_channel": 256,
+  "mpd_kernel_size": 3,
+  "mpd_stride": 2,
+  "mel_weight_decay_duration": 50000,
+  "mel_weight_decay_factor": 0.5
 }

@@ -11,6 +11,7 @@
 | `download_production_ocr.py` | Download real OCR dataset | `--combine` (MANDATORY) |
 | `calculate_model_size.py` | Print parameter counts for all model components | — |
 | `export.py` | Merge checkpoints into HF-compatible export artifacts | `--output_dir export/` |
+| `run_metrics_viewer.py` | Launch local server and open metrics viewer | — |
 
 ## Critical: `--combine` Flag
 Download scripts without `--combine` only create per-dataset files. Training scripts expect `production_*.txt/csv/json` files which are ONLY created with `--combine`. Always use it.
@@ -29,4 +30,11 @@ data/ocr/production_ocr.csv              ← OCR training
 
 ```bash
 python -m scripts.export --output_dir export/
+```
+
+## Metrics Viewer
+Run from repo root:
+
+```bash
+python -m scripts.run_metrics_viewer
 ```
