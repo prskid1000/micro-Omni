@@ -320,6 +320,9 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
 
     if path == "/api/tuning/stop":
         stage = str(body.get("stage", "")).upper()
+        if stage not in STAGE_MAP:
+            handler.send_error_json(400, f"Unknown stage: {stage}")
+            return
         key = f"tuning_tune_{stage}"
         stopped = pm.stop(key)
         handler.send_json({"ok": True, "stage": stage, "stopped": stopped})
