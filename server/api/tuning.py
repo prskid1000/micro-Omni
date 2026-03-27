@@ -171,8 +171,12 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
         return None
     try:
         import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        studies = optuna.study.get_all_study_summaries(storage=f"sqlite:///{db_path}")
+        if not studies:
+            return None
         study = optuna.load_study(
-            study_name=None,  # load whatever study exists
+            study_name=studies[0].study_name,
             storage=f"sqlite:///{db_path}",
         )
         trials = []
@@ -278,6 +282,61 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
         key = f"tuning_tune_{stage}"
         stopped = pm.stop(key)
         handler.send_json({"ok": True, "stage": stage, "stopped": stopped})
+        return
+
+    if path == "/api/tuning/apply":
+        stage = str(body.get("stage", "")).upper()
+        if stage not in STAGE_MAP:
+            handler.send_error_json(400, f"Unknown stage: {stage}")
+            return
+
+        target = body.get("target", "new")  # "base" = overwrite base config, "new" = save as tuned_*
+
+        db_path = f"logs/hp_tuning_{stage}.db"
+        results = _read_study_results(db_path)
+        if not results or not results.get("best_trial"):
+            handler.send_error_json(404, f"No tuning results found for stage {stage}")
+            return
+
+        best_params = results["best_trial"]["params"]
+        config_name = STAGE_MAP[stage]["config"]
+        config_path = os.path.join("configs", config_name)
+
+        try:
+            base_cfg = json.loads(open(config_path, "r", encoding="utf-8").read())
+        except Exception as e:
+            handler.send_error_json(500, f"Cannot read base config: {e}")
+            return
+
+        # Apply best params
+        applied = {}
+        for k, v in best_params.items():
+            if isinstance(v, tuple):
+                v = list(v)
+            old_val = base_cfg.get(k)
+            base_cfg[k] = v
+            applied[k] = {"old": old_val, "new": v}
+
+        # Save
+        if target == "base":
+            save_path = config_path
+        else:
+            save_path = os.path.join("configs", f"tuned_{config_name}")
+
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(base_cfg, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            handler.send_json({
+                "ok": True,
+                "stage": stage,
+                "target": target,
+                "saved_to": save_path,
+                "applied": applied,
+                "best_val_loss": results["best_trial"]["value"],
+            })
+        except Exception as e:
+            handler.send_error_json(500, f"Failed to save config: {e}")
         return
 
     handler.send_error_json(404, f"Unknown tuning endpoint: {path}")

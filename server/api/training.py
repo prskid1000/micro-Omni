@@ -76,8 +76,15 @@ def _get_pipeline_status(pm: Any) -> dict[str, Any]:
         deps = DEPENDENCIES.get(stage_id, [])
         missing_deps = [d for d in deps if not _has_checkpoint(STAGE_MAP[d]["checkpoint_dir"])]
 
+        # Determine process state
+        proc_status = proc_info.get("status") if proc_info else None
+
         if is_running:
             status = "running"
+        elif proc_status == "stopped":
+            status = "stopped"
+        elif proc_status == "failed":
+            status = "failed"
         elif has_ckpt:
             status = "done"
         elif missing_deps:
