@@ -38,7 +38,7 @@ export/
 ## Running the Export
 
 ```bash
-python scripts/export.py --output_dir export/
+python -m scripts.export --output_dir export/
 ```
 
 The script:
@@ -279,7 +279,7 @@ checks that perplexity and generation quality match the standalone script.
 Returns a scored pass/fail.
 
 ```bash
-python export/test_hf_text.py --model_dir export/ --device cuda
+python -m export.test_hf_text --model_dir export/ --device cuda
 ```
 
 **export/test_hf_multimodal.py** — Loads `MuOmniMultimodalModel`, feeds it
@@ -288,7 +288,7 @@ outputs. Checks vision embedding quality, audio transcription accuracy, and
 text generation coherence. Returns a scored pass/fail.
 
 ```bash
-python export/test_hf_multimodal.py --model_dir export/ --device cuda
+python -m export.test_hf_multimodal --model_dir export/ --device cuda
 ```
 
 ---
@@ -298,7 +298,7 @@ python export/test_hf_multimodal.py --model_dir export/ --device cuda
 Once exported, run inference without the training codebase:
 
 ```bash
-python export/infer_standalone.py --model_dir export/
+python -m export.infer_standalone --model_dir export/
 ```
 
 The standalone script:

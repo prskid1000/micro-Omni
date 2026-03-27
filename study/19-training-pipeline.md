@@ -66,7 +66,7 @@ A strong language model is the foundation.
 **Command:**
 
 ```bash
-python train/train_thinker.py --config configs/synthetic_thinker.json
+python -m train.train_thinker --config configs/synthetic_thinker.json
 ```
 
 **Key config values:**
@@ -132,7 +132,7 @@ waveforms into discrete token sequences the Thinker can process.
 **Command:**
 
 ```bash
-python train/train_audio_enc.py --config configs/synthetic_audio_enc.json
+python -m train.train_audio_enc --config configs/synthetic_audio_enc.json
 ```
 
 **Key config values:**
@@ -195,7 +195,7 @@ text embeddings.
 **Command:**
 
 ```bash
-python train/train_vision.py
+python -m train.train_vision
 ```
 
 **Key config values:**
@@ -262,7 +262,7 @@ conditions on the Thinker's hidden states.
 **Command:**
 
 ```bash
-python train/train_talker.py
+python -m train.train_talker
 ```
 
 **Key config values:**
@@ -328,7 +328,7 @@ question and speak the response."
 **Command:**
 
 ```bash
-python train/sft_omni.py --config configs/synthetic_omni_sft.json
+python -m train.sft_omni --config configs/synthetic_omni_sft.json
 ```
 
 **Key config values:**
@@ -403,7 +403,7 @@ design lets you build stripped-down variants in minutes for quick experiments.
 The simplest variant. Train just the Thinker — no audio, no vision.
 
 ```bash
-python train/train_thinker.py --config configs/synthetic_thinker.json
+python -m train.train_thinker --config configs/synthetic_thinker.json
 ```
 
 Use `configs/synthetic_thinker.json` for rapid iteration (`max_steps: 8400`,
@@ -416,10 +416,10 @@ Train the Thinker and Vision encoder, then SFT on text+image data only.
 
 ```bash
 # 1. Train Thinker
-python train/train_thinker.py --config configs/synthetic_thinker.json
+python -m train.train_thinker --config configs/synthetic_thinker.json
 
 # 2. Train Vision encoder
-python train/train_vision.py --config configs/synthetic_vision.json
+python -m train.train_vision --config configs/synthetic_vision.json
 
 # 3. SFT — remove audio from sft_mix
 #    In your SFT config, delete the "asr_csv" key from "sft_mix":
@@ -428,7 +428,7 @@ python train/train_vision.py --config configs/synthetic_vision.json
 #        "image_manifest": "data/images/production_annotations.json",
 #        "image_root": "data/images"
 #    }
-python train/sft_omni.py --config configs/synthetic_omni_sft.json
+python -m train.sft_omni --config configs/synthetic_omni_sft.json
 ```
 
 The SFT script gracefully handles missing modalities — if `asr_csv` is absent
@@ -440,10 +440,10 @@ Train the Thinker and Audio Encoder, then SFT on text+audio data only.
 
 ```bash
 # 1. Train Thinker
-python train/train_thinker.py --config configs/synthetic_thinker.json
+python -m train.train_thinker --config configs/synthetic_thinker.json
 
 # 2. Train Audio Encoder
-python train/train_audio_enc.py --config configs/synthetic_audio_enc.json
+python -m train.train_audio_enc --config configs/synthetic_audio_enc.json
 
 # 3. SFT — remove vision from sft_mix
 #    In your SFT config, delete "image_manifest" and "image_root":
@@ -451,7 +451,7 @@ python train/train_audio_enc.py --config configs/synthetic_audio_enc.json
 #        "text_path": "data/text/production_corpus.txt",
 #        "asr_csv": "data/audio/production_asr.csv"
 #    }
-python train/sft_omni.py --config configs/synthetic_omni_sft.json
+python -m train.sft_omni --config configs/synthetic_omni_sft.json
 ```
 
 ### Full Multimodal (All Stages A through E)
@@ -460,11 +460,11 @@ The complete pipeline as documented in this chapter. All five stages, all
 modalities.
 
 ```bash
-python train/train_thinker.py --config configs/synthetic_thinker.json      # Stage A
-python train/train_audio_enc.py --config configs/synthetic_audio_enc.json  # Stage B
-python train/train_vision.py --config configs/synthetic_vision.json        # Stage C
-python train/train_talker.py --config configs/synthetic_talker.json        # Stage D
-python train/sft_omni.py --config configs/synthetic_omni_sft.json          # Stage E
+python -m train.train_thinker --config configs/synthetic_thinker.json      # Stage A
+python -m train.train_audio_enc --config configs/synthetic_audio_enc.json  # Stage B
+python -m train.train_vision --config configs/synthetic_vision.json        # Stage C
+python -m train.train_talker --config configs/synthetic_talker.json        # Stage D
+python -m train.sft_omni --config configs/synthetic_omni_sft.json          # Stage E
 ```
 
 Remember: A, B, C can run in parallel. D requires A. E requires all four.
@@ -625,7 +625,7 @@ See Chapter 20, Section 20.12 for a detailed explanation of how label smoothing 
 For reproducible experiments and testing, use the data generation script:
 
 ```bash
-python scripts/generate_synthetic_data.py
+python -m scripts.generate_synthetic_data
 ```
 
 This generates synthetic training data for all modalities. Useful for debugging training pipelines and verifying that code changes do not affect model behavior.

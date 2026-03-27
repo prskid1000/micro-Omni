@@ -16,6 +16,7 @@ from omni.data_utils import VocoderDataset
 from omni.checkpoint_utils import find_checkpoint, strip_orig_mod
 from omni.io_utils import enable_log_file, default_log_path
 from omni.eval_utils import load_checkpoint_and_config
+from omni.training_utils import MetricsLogger, build_run_id
 from tqdm import tqdm
 
 torch.set_float32_matmul_precision('high')
@@ -521,6 +522,13 @@ def main():
     parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
     enable_log_file(args.log_file, header=f"test_vocoder.py start | checkpoint={args.checkpoint}")
+    metrics_logger = MetricsLogger(
+        script="test_vocoder.py",
+        run_id=build_run_id("test_vocoder.py", None, args.checkpoint),
+        metrics_path=os.path.join("logs", "metrics", "test_vocoder.jsonl"),
+        device=args.device,
+    )
+    metrics_logger.event(epoch=0, batch=0, step=0, name="run_start", value=1.0, extra={"is_resume": False, "resume_from_step": 0})
     
     if args.quick:
         args.num_samples = 10
@@ -549,7 +557,7 @@ def main():
             num_samples=args.num_samples,
             verbose=True
         )
-        
+        metrics_logger.test_metrics(metrics)
         print_results(metrics)
         
     except Exception as e:

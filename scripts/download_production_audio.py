@@ -624,8 +624,8 @@ def main():
         else:
             print("   data/audio/[dataset_name]_asr.csv")
         print("3. Run training:")
-        print("   python train_audio_enc.py --config configs/audio_enc_tiny.json")
-        print("   python train_talker.py --config configs/talker_tiny.json")
+        print("   python -m train.train_audio_enc --config configs/audio_enc_tiny.json")
+        print("   python -m train.train_talker --config configs/talker_tiny.json")
     else:
         print("✗ Some operations failed. Check errors above.")
         print("You can resume by running the script again (it will skip completed steps)")

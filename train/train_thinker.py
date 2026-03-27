@@ -5,13 +5,14 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
-from omni.utils import (
+from omni.training_utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss,
-    reload_from_last_checkpoint, TextDataset, EMA,
-    load_checkpoint, setup_resume_data_loading, calculate_resume_position,
-    ValidationSkipSamplesContext, save_training_metadata, load_training_metadata,
-    analyze_text_dataset, TrainingMonitor, setup_cuda, enable_log_file, default_log_path
+    reload_from_last_checkpoint, EMA, TrainingMonitor, setup_cuda, MetricsLogger, build_run_id,
 )
+from omni.data_utils import TextDataset, analyze_text_dataset
+from omni.checkpoint_utils import load_checkpoint, save_training_metadata, load_training_metadata
+from omni.resume_utils import setup_resume_data_loading, calculate_resume_position, ValidationSkipSamplesContext
+from omni.io_utils import enable_log_file, default_log_path
 from tqdm import tqdm
 
 def main(cfg):
@@ -243,6 +244,20 @@ def main(cfg):
     if new_train_dl is not None:
         train_dl = new_train_dl
     
+    metrics_logger = MetricsLogger(
+        script="train_thinker.py",
+        run_id=build_run_id("train_thinker.py", cfg.get("config_path"), save_dir),
+        metrics_path=os.path.join("logs", "metrics", "train_thinker.jsonl"),
+        device=device,
+    )
+    metrics_logger.event(
+        epoch=metadata.get("epoch", 0) if metadata else 0,
+        batch=0,
+        step=step,
+        name="run_start",
+        value=1.0,
+        extra={"is_resume": step > 0, "resume_from_step": step},
+    )
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
     # Calculate steps per epoch and determine starting epoch/position
@@ -440,6 +455,13 @@ def main(cfg):
                 unscaled_loss = loss_val * accumulation_steps
                 perplexity = torch.exp(unscaled_loss).item() if unscaled_loss.item() < 10 else float('inf')
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
+                metrics_logger.train_step(
+                    epoch=epoch,
+                    batch=batch_step,
+                    step=step,
+                    loss=float(unscaled_loss),
+                    lr=float(current_lr),
+                )
                 if batch_step % (print_freq * 10) == 0:  # Log perplexity less frequently
                     logger.info(f"Perplexity: {perplexity:.2f}")
 
@@ -509,6 +531,12 @@ def main(cfg):
                 
                 avg_val_loss = val_loss_sum / val_count
                 logger.val_step(step, avg_val_loss, epoch)
+                metrics_logger.val_step(
+                    epoch=epoch,
+                    batch=batch_step,
+                    step=step,
+                    loss=float(avg_val_loss),
+                )
                 
                 # Restore original weights after validation
                 if ema is not None:

@@ -64,20 +64,20 @@ Text  ──→ Token Embeddings ───────────┤
 pip install -r requirements.txt
 
 # 2. Generate synthetic data (for testing)
-python scripts/generate_synthetic_data.py
+python -m scripts.generate_synthetic_data
 
 # 3. Train (any order for A/B/C, then D needs A, E needs all)
-python train/train_thinker.py --config configs/synthetic_thinker.json    # Stage A: Thinker LLM
-python train/train_audio_enc.py --config configs/synthetic_audio_enc.json # Stage B: Audio Encoder
-python train/train_vision.py --config configs/synthetic_vision.json       # Stage C: Vision Encoder
-python train/train_talker.py --config configs/synthetic_talker.json       # Stage D: Talker + RVQ
-python train/sft_omni.py --config configs/synthetic_omni_sft.json         # Stage E: Multimodal SFT
+python -m train.train_thinker --config configs/synthetic_thinker.json    # Stage A: Thinker LLM
+python -m train.train_audio_enc --config configs/synthetic_audio_enc.json # Stage B: Audio Encoder
+python -m train.train_vision --config configs/synthetic_vision.json       # Stage C: Vision Encoder
+python -m train.train_talker --config configs/synthetic_talker.json       # Stage D: Talker + RVQ
+python -m train.sft_omni --config configs/synthetic_omni_sft.json         # Stage E: Multimodal SFT
 
 # 4. Inference
-python test/infer_chat.py --ckpt_dir checkpoints/thinker_tiny                                    # Text chat
-python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image photo.jpg "describe this"  # Image QA
-python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav              # Audio transcription
-python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr              # OCR
+python -m test.infer_chat --ckpt_dir checkpoints/thinker_tiny                                    # Text chat
+python -m test.infer_chat --ckpt_dir checkpoints/omni_sft_tiny --image photo.jpg "describe this"  # Image QA
+python -m test.infer_chat --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav              # Audio transcription
+python -m test.infer_chat --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr              # OCR
 ```
 
 ---
@@ -97,7 +97,7 @@ python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg -
 | `tokenizer.py` | BPETokenizer | — | SentencePiece BPE wrapper (encode/decode text to token IDs) |
 | `nn_utils.py` | NN Utilities | — | RoPE (cached), RMSNorm, projection/temperature helpers |
 | `data_utils.py` | Data Utilities | — | Streaming IterableDatasets, collate functions, dataset analysis helpers |
-| `training_utils.py` | Training Utilities | — | EMA, LR scheduler, gradient utilities, TrainingMonitor, logger |
+| `training_utils.py` | Training Utilities | — | EMA, LR scheduler, gradient utilities, TrainingMonitor, logger, JSONL metrics upsert |
 | `checkpoint_utils.py` | Checkpoint Utilities | — | Checkpoint discovery/load/save and state-dict normalization |
 | `io_utils.py` | I/O Utilities | — | Log tee helpers and robust audio loading |
 | `resume_utils.py` | Resume Utilities | — | Resume position math and iterable-dataset resume setup |
@@ -143,6 +143,7 @@ python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg -
 | File | Purpose |
 |------|---------|
 | `generate_synthetic_data.py` | Generate synthetic data for all modalities (quick testing) |
+| `metrics_viewer.html` | Static JSONL metrics viewer (open in browser) |
 | `download_production_text.py` | Download real text corpus |
 | `download_production_audio.py` | Download real audio dataset (ASR + TTS) |
 | `download_production_image.py` | Download real image dataset + captions |
@@ -158,6 +159,22 @@ python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg -
 ---
 
 ## Configuration
+
+## Structured Metrics Logging
+
+Train/test scripts (except `test/infer_chat.py`) now emit structured records to `logs/metrics/*.jsonl`.
+
+- Required fields: `timestamp`, `script`, `phase`, `run_id`, `epoch`, `batch`, `step`, `split`, `metric_name`, `metric_value`
+- Optional fields: `lr`, `loss`, `checkpoint`, `device`, `extra`
+- Resume safety: duplicate keys are upserted by `(run_id, phase, epoch, batch, step, split, metric_name)`
+
+Use the viewer:
+
+```bash
+start scripts/metrics_viewer.html
+```
+
+Then choose one or more files from `logs/metrics/` and filter by script/run/phase/metric.
 
 Configs in `configs/` — one per training stage (`synthetic_*.json`). These use smaller vocab/steps for quick iteration.
 
@@ -185,15 +202,15 @@ Key settings across all configs:
 
 ### Option A: Synthetic (recommended for quick start)
 ```bash
-python scripts/generate_synthetic_data.py
+python -m scripts.generate_synthetic_data
 ```
 
 ### Option B: Real datasets (each < 5GB)
 ```bash
-python scripts/download_production_text.py --combine
-python scripts/download_production_audio.py --combine
-python scripts/download_production_image.py --combine
-python scripts/download_production_ocr.py --combine
+python -m scripts.download_production_text --combine
+python -m scripts.download_production_audio --combine
+python -m scripts.download_production_image --combine
+python -m scripts.download_production_ocr --combine
 ```
 
 Data formats:
@@ -241,7 +258,7 @@ Data formats:
 ### Export to safetensors
 ```bash
 # Merge all trained components into HuggingFace-compatible format
-python scripts/export.py \
+python -m scripts.export \
   --thinker_ckpt checkpoints/thinker_tiny \
   --audio_ckpt checkpoints/audio_enc_tiny \
   --vision_ckpt checkpoints/vision_tiny \
@@ -295,20 +312,20 @@ huggingface-cli upload prskid1000/micro-Omni export/
 
 ```bash
 # Single component
-python test/test_thinker.py --checkpoint checkpoints/thinker_tiny
+python -m test.test_thinker --checkpoint checkpoints/thinker_tiny
 
 # Multimodal SFT test
-python test/test_sft.py --checkpoint checkpoints/omni_sft_tiny --config configs/synthetic_omni_sft.json
+python -m test.test_sft --checkpoint checkpoints/omni_sft_tiny --config configs/synthetic_omni_sft.json
 
 # All tests (PowerShell)
 Get-ChildItem -Filter 'test_*.py' -Recurse | ForEach-Object { python $_.FullName }
 
 # Export validation
-python export/test_safetensor.py
+python -m export.test_safetensor
 
 # HF model tests
-python export/test_hf_text.py           # HF text model scored test
-python export/test_hf_multimodal.py     # HF multimodal scored test
+python -m export.test_hf_text           # HF text model scored test
+python -m export.test_hf_multimodal     # HF multimodal scored test
 ```
 
 Flags: `--device cpu` (no GPU), `--num_samples N` (limit test size), `--config path/to/config.json`

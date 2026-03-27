@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 from omni.codec import HiFiGANVocoder, MultiPeriodDiscriminator, MultiScaleDiscriminator
 from omni.training_utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, EMA,
-    check_gradient_explosion, TrainingMonitor, setup_cuda, validate_loss,
+    check_gradient_explosion, TrainingMonitor, setup_cuda, validate_loss, MetricsLogger, build_run_id,
 )
 from omni.data_utils import VocoderDataset, collate_mel_audio_fn, analyze_vocoder_dataset
 from omni.checkpoint_utils import load_checkpoint, save_training_metadata, load_training_metadata
@@ -416,6 +416,20 @@ def main(cfg):
     if new_train_dl is not None:
         train_dl = new_train_dl
     
+    metrics_logger = MetricsLogger(
+        script="train_vocoder.py",
+        run_id=build_run_id("train_vocoder.py", cfg.get("config_path"), save_dir),
+        metrics_path=os.path.join("logs", "metrics", "train_vocoder.jsonl"),
+        device=device,
+    )
+    metrics_logger.event(
+        epoch=metadata.get("epoch", 0) if metadata else 0,
+        batch=0,
+        step=step,
+        name="run_start",
+        value=1.0,
+        extra={"is_resume": step > 0, "resume_from_step": step},
+    )
     logger.training_start(max_steps, train_size, val_size)
     
     # Calculate steps per epoch and determine starting epoch/position.
@@ -880,6 +894,13 @@ def main(cfg):
                     f"loss_mel={loss_mel_val:.4f} | loss_adv={loss_adv_val:.4f} | "
                     f"loss_fm={loss_fm_val:.4f} | lr_g={lr_g_val:.6f} | lr_d={lr_d_val:.6f}"
                 )
+                metrics_logger.train_step(
+                    epoch=epoch,
+                    batch=batch_step,
+                    step=step,
+                    loss=float(loss_g_val),
+                    lr=float(lr_g_val),
+                )
             
             # Validation
             if batch_step > 0 and batch_step % val_freq == 0:
@@ -945,6 +966,20 @@ def main(cfg):
                     val_loss_g /= val_samples
                     val_loss_d /= val_samples
                     logger.info(f"Step {step} | val_loss_g={val_loss_g:.4f} | val_loss_d={val_loss_d:.4f}")
+                    metrics_logger.val_step(
+                        epoch=epoch,
+                        batch=batch_step,
+                        step=step,
+                        loss=float(val_loss_g),
+                        metric_name="val_loss_g",
+                    )
+                    metrics_logger.val_step(
+                        epoch=epoch,
+                        batch=batch_step,
+                        step=step,
+                        loss=float(val_loss_d),
+                        metric_name="val_loss_d",
+                    )
                     
                     # Check for LR spike trigger / early stopping
                     monitor.on_val_end(val_loss_g, opt_g, {"generator": generator}, logger)

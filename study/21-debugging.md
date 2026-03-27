@@ -214,7 +214,7 @@ Or set the environment variable:
 
 ```bash
 export TORCH_COMPILE_DISABLE=1
-python train/train_thinker.py --config configs/synthetic_thinker.json
+python -m train.train_thinker --config configs/synthetic_thinker.json
 ```
 
 Everything else (AMP, Flash Attention, cuDNN) works fine on Blackwell. Only

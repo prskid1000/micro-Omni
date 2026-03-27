@@ -28,5 +28,5 @@ data/ocr/production_ocr.csv              ← OCR training
 `scripts/export.py` is the canonical export entrypoint. Run from repo root:
 
 ```bash
-python scripts/export.py --output_dir export/
+python -m scripts.export --output_dir export/
 ```

@@ -18,7 +18,7 @@ omni/ocr_model.py     OCRModel           ViT encoder + cross-attention decoder â
 omni/tokenizer.py     BPETokenizer       SentencePiece BPE (256 vocab synthetic, 32K production)
 omni/nn_utils.py      NN utilities       RoPE (cached), RMSNorm, ProjectionHead, temperature helpers
 omni/data_utils.py    Data utilities     Streaming datasets, collate fns, dataset analysis helpers
-omni/training_utils.py Training utils    EMA, LR scheduler, gradient utilities, monitor/logger
+omni/training_utils.py Training utils    EMA, LR scheduler, gradient utilities, monitor/logger, JSONL metrics upsert
 omni/checkpoint_utils.py Checkpoints     Checkpoint discovery/load/save/normalization helpers
 omni/io_utils.py      I/O utilities      Logging tee, default log paths, robust audio loading
 omni/resume_utils.py  Resume utilities   Resume-step math and iterable dataset resume setup
@@ -27,13 +27,13 @@ omni/resume_utils.py  Resume utilities   Resume-step math and iterable dataset r
 ## Training Pipeline
 
 ```
-Stage A: python train/train_thinker.py   --config configs/synthetic_thinker.json     # Thinker (cross-entropy)
-Stage B: python train/train_audio_enc.py --config configs/synthetic_audio_enc.json   # Audio Encoder (CTC loss)
-Stage C: python train/train_vision.py    --config configs/synthetic_vision.json      # Vision Encoder (InfoNCE)
-Stage D: python train/train_talker.py    --config configs/synthetic_talker.json      # Talker + RVQ (cross-entropy on codes)
-Stage E: python train/sft_omni.py        --config configs/synthetic_omni_sft.json    # Multimodal SFT (all modalities)
-Stage F: python train/train_vocoder.py   --config configs/synthetic_vocoder.json     # HiFi-GAN vocoder (optional)
-Stage G: python train/train_ocr.py       --config configs/synthetic_ocr.json         # OCR model (optional)
+Stage A: python -m train.train_thinker   --config configs/synthetic_thinker.json     # Thinker (cross-entropy)
+Stage B: python -m train.train_audio_enc --config configs/synthetic_audio_enc.json   # Audio Encoder (CTC loss)
+Stage C: python -m train.train_vision    --config configs/synthetic_vision.json      # Vision Encoder (InfoNCE)
+Stage D: python -m train.train_talker    --config configs/synthetic_talker.json      # Talker + RVQ (cross-entropy on codes)
+Stage E: python -m train.sft_omni        --config configs/synthetic_omni_sft.json    # Multimodal SFT (all modalities)
+Stage F: python -m train.train_vocoder   --config configs/synthetic_vocoder.json     # HiFi-GAN vocoder (optional)
+Stage G: python -m train.train_ocr       --config configs/synthetic_ocr.json         # OCR model (optional)
 ```
 
 Dependencies: A/B/C can run in parallel. D needs A. E needs A+B+C+D. F and G are independent.
@@ -61,14 +61,14 @@ export PYTHONIOENCODING=utf-8
 ## Inference
 
 ```
-python test/infer_chat.py --ckpt_dir checkpoints/thinker_tiny                                   # Text chat
-python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image photo.jpg "describe"     # Image QA
-python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav            # ASR
-python test/infer_chat.py --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr            # OCR
-python scripts/export.py --output_dir export/                                              # Export
-python export/infer_standalone.py --model_dir export/                                      # Standalone
-python export/test_hf_text.py                                                              # Test HF text model
-python export/test_hf_multimodal.py                                                        # Test HF multimodal model
+python -m test.infer_chat --ckpt_dir checkpoints/thinker_tiny                                   # Text chat
+python -m test.infer_chat --ckpt_dir checkpoints/omni_sft_tiny --image photo.jpg "describe"     # Image QA
+python -m test.infer_chat --ckpt_dir checkpoints/omni_sft_tiny --audio_in speech.wav            # ASR
+python -m test.infer_chat --ckpt_dir checkpoints/omni_sft_tiny --image doc.jpg --ocr            # OCR
+python -m scripts.export --output_dir export/                                              # Export
+python -m export.infer_standalone --model_dir export/                                      # Standalone
+python -m export.test_hf_text                                                              # Test HF text model
+python -m export.test_hf_multimodal                                                        # Test HF multimodal model
 ```
 
 ## HuggingFace Integration
@@ -125,13 +125,18 @@ python export/test_hf_multimodal.py                                             
 
 ## Testing
 ```
-python test/test_thinker.py --checkpoint checkpoints/thinker_tiny
-python test/test_audio_enc.py --checkpoint checkpoints/audio_enc_tiny
-python test/test_vision.py --checkpoint checkpoints/vision_tiny
-python test/test_talker.py --checkpoint checkpoints/talker_tiny
-python test/test_vocoder.py --checkpoint checkpoints/vocoder_tiny
-python test/test_ocr.py --checkpoint checkpoints/ocr_tiny
-python export/test_hf_text.py                                    # HF text model test
-python export/test_hf_multimodal.py                              # HF multimodal model test
+python -m test.test_thinker --checkpoint checkpoints/thinker_tiny
+python -m test.test_audio_enc --checkpoint checkpoints/audio_enc_tiny
+python -m test.test_vision --checkpoint checkpoints/vision_tiny
+python -m test.test_talker --checkpoint checkpoints/talker_tiny
+python -m test.test_vocoder --checkpoint checkpoints/vocoder_tiny
+python -m test.test_ocr --checkpoint checkpoints/ocr_tiny
+python -m export.test_hf_text                                    # HF text model test
+python -m export.test_hf_multimodal                              # HF multimodal model test
 ```
 All tests use `torch.inference_mode()` and `torch.set_float32_matmul_precision('high')`.
+
+## Metrics Logging
+- Train/test scripts (except `test/infer_chat.py`) write structured JSONL to `logs/metrics/`.
+- Upsert key (resume-safe): `(run_id, phase, epoch, batch, step, split, metric_name)`.
+- Open `scripts/metrics_viewer.html` in a browser to inspect trends and latest values.

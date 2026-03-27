@@ -3,8 +3,8 @@ Test HuggingFace text-only model (MuOmniForCausalLM) with scored analytics.
 Uses random samples from training data.
 
 Usage:
-    python export/test_hf_text.py
-    python export/test_hf_text.py --num_samples 50 --device cpu
+    python -m export.test_hf_text
+    python -m export.test_hf_text --num_samples 50 --device cpu
 """
 
 import sys
@@ -12,12 +12,15 @@ import os
 import argparse
 import random
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import torch
 torch.set_float32_matmul_precision('high')
 
-from modeling_muomni import MuOmniForCausalLM
+try:
+    from export.modeling_muomni import MuOmniForCausalLM
+except ImportError:
+    # Fallback for direct script execution from export/ folder.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from modeling_muomni import MuOmniForCausalLM
 
 # Add parent dir for omni imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

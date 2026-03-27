@@ -42,12 +42,12 @@ testing.
 ### General Syntax
 
 ```bash
-python test/test_thinker.py --checkpoint checkpoints/thinker_tiny
-python test/test_audio_enc.py --checkpoint checkpoints/audio_enc
-python test/test_vision.py --checkpoint checkpoints/vision_tiny
-python test/test_talker.py --checkpoint checkpoints/talker
-python test/test_vocoder.py --checkpoint checkpoints/vocoder
-python test/test_ocr.py --checkpoint checkpoints/ocr
+python -m test.test_thinker --checkpoint checkpoints/thinker_tiny
+python -m test.test_audio_enc --checkpoint checkpoints/audio_enc
+python -m test.test_vision --checkpoint checkpoints/vision_tiny
+python -m test.test_talker --checkpoint checkpoints/talker
+python -m test.test_vocoder --checkpoint checkpoints/vocoder
+python -m test.test_ocr --checkpoint checkpoints/ocr
 ```
 
 ### Common Flags
@@ -60,6 +60,22 @@ python test/test_ocr.py --checkpoint checkpoints/ocr
 | `--batch_size`    | `16`    | Batch size for evaluation          |
 | `--verbose`       | `false` | Print individual sample results    |
 
+### Structured Metrics Output
+
+All test scripts (except `test/infer_chat.py`) also emit structured JSONL records to `logs/metrics/`.
+
+- Format: one JSON object per line
+- Required fields: `timestamp`, `script`, `phase`, `run_id`, `epoch`, `batch`, `step`, `split`, `metric_name`, `metric_value`
+- Resume/re-run safety: records are upserted by key `(run_id, phase, epoch, batch, step, split, metric_name)` so collisions are replaced instead of duplicated
+
+Viewer:
+
+```bash
+start scripts/metrics_viewer.html
+```
+
+Load one or more `logs/metrics/*.jsonl` files, then filter by script/run/phase/metric and chart by step/epoch.
+
 ---
 
 ## Component Metrics
@@ -67,7 +83,7 @@ python test/test_ocr.py --checkpoint checkpoints/ocr
 ### Thinker (Language Model)
 
 ```bash
-python test/test_thinker.py --checkpoint checkpoints/thinker_tiny --num_samples 500
+python -m test.test_thinker --checkpoint checkpoints/thinker_tiny --num_samples 500
 ```
 
 | Metric              | Target     | Description                          |
@@ -82,7 +98,7 @@ on held-out text. Sample outputs are printed for manual inspection.
 ### Audio Encoder
 
 ```bash
-python test/test_audio_enc.py --checkpoint checkpoints/audio_enc --num_samples 200
+python -m test.test_audio_enc --checkpoint checkpoints/audio_enc --num_samples 200
 ```
 
 | Metric | Target  | Description                                   |
@@ -104,7 +120,7 @@ CER = 1/22 = 4.5%    (1 char substitution)
 ### Vision Encoder
 
 ```bash
-python test/test_vision.py --checkpoint checkpoints/vision_tiny --num_samples 1000
+python -m test.test_vision --checkpoint checkpoints/vision_tiny --num_samples 1000
 ```
 
 | Metric              | Target | Description                             |
@@ -121,7 +137,7 @@ varied representations (not mode-collapsed).
 ### Talker
 
 ```bash
-python test/test_talker.py --checkpoint checkpoints/talker --num_samples 100
+python -m test.test_talker --checkpoint checkpoints/talker --num_samples 100
 ```
 
 | Metric                | Target | Description                          |
@@ -135,7 +151,7 @@ generated audio tokens match expected targets.
 ### Vocoder (HiFi-GAN)
 
 ```bash
-python test/test_vocoder.py --checkpoint checkpoints/vocoder --num_samples 50
+python -m test.test_vocoder --checkpoint checkpoints/vocoder --num_samples 50
 ```
 
 | Metric       | Target  | Description                              |
@@ -149,7 +165,7 @@ ground-truth audio. Sample outputs are saved to disk for listening.
 ### OCR
 
 ```bash
-python test/test_ocr.py --checkpoint checkpoints/ocr --num_samples 200
+python -m test.test_ocr --checkpoint checkpoints/ocr --num_samples 200
 ```
 
 | Metric        | Target | Description                              |
@@ -190,31 +206,31 @@ Create a simple test-all script:
 set -e
 
 echo "=== Testing Thinker ==="
-python test/test_thinker.py --checkpoint checkpoints/thinker_tiny --device cuda
+python -m test.test_thinker --checkpoint checkpoints/thinker_tiny --device cuda
 
 echo "=== Testing Audio Encoder ==="
-python test/test_audio_enc.py --checkpoint checkpoints/audio_enc --device cuda
+python -m test.test_audio_enc --checkpoint checkpoints/audio_enc --device cuda
 
 echo "=== Testing Vision Encoder ==="
-python test/test_vision.py --checkpoint checkpoints/vision_tiny --device cuda
+python -m test.test_vision --checkpoint checkpoints/vision_tiny --device cuda
 
 echo "=== Testing Talker ==="
-python test/test_talker.py --checkpoint checkpoints/talker --device cuda
+python -m test.test_talker --checkpoint checkpoints/talker --device cuda
 
 echo "=== Testing Vocoder ==="
-python test/test_vocoder.py --checkpoint checkpoints/vocoder --device cuda
+python -m test.test_vocoder --checkpoint checkpoints/vocoder --device cuda
 
 echo "=== Testing OCR ==="
-python test/test_ocr.py --checkpoint checkpoints/ocr --device cuda
+python -m test.test_ocr --checkpoint checkpoints/ocr --device cuda
 
 echo "=== Testing Multimodal SFT ==="
-python test/test_sft.py --checkpoint checkpoints/ --device cuda
+python -m test.test_sft --checkpoint checkpoints/ --device cuda
 
 echo "=== Testing HF Text Export ==="
-python export/test_hf_text.py --model_dir export/ --device cuda
+python -m export.test_hf_text --model_dir export/ --device cuda
 
 echo "=== Testing HF Multimodal Export ==="
-python export/test_hf_multimodal.py --model_dir export/ --device cuda
+python -m export.test_hf_multimodal --model_dir export/ --device cuda
 
 echo "=== All tests passed ==="
 ```
@@ -226,7 +242,7 @@ Use `--device cpu` to run without a GPU (slower but works anywhere).
 ## Multimodal SFT Test
 
 ```bash
-python test/test_sft.py --checkpoint checkpoints/ --device cuda --num_samples 50
+python -m test.test_sft --checkpoint checkpoints/ --device cuda --num_samples 50
 ```
 
 The SFT test validates the full multimodal supervised fine-tuning pipeline.
@@ -250,7 +266,7 @@ compatible export works correctly. Both produce scored pass/fail results.
 ### export/test_hf_text.py
 
 ```bash
-python export/test_hf_text.py --model_dir export/ --device cuda
+python -m export.test_hf_text --model_dir export/ --device cuda
 ```
 
 Loads the model via `AutoModelForCausalLM.from_pretrained("export/",
@@ -266,7 +282,7 @@ trust_remote_code=True)` and validates:
 ### export/test_hf_multimodal.py
 
 ```bash
-python export/test_hf_multimodal.py --model_dir export/ --device cuda
+python -m export.test_hf_multimodal --model_dir export/ --device cuda
 ```
 
 Loads `MuOmniMultimodalModel` from `model_full.safetensors` and validates

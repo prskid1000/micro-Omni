@@ -25,6 +25,7 @@ from omni.tokenizer import BPETokenizer
 from omni.checkpoint_utils import find_checkpoint, strip_orig_mod
 from omni.io_utils import load_audio, enable_log_file, default_log_path
 from omni.eval_utils import sample_lines, safe_perplexity
+from omni.training_utils import MetricsLogger, build_run_id
 
 torch.set_float32_matmul_precision('high')
 
@@ -691,6 +692,13 @@ def main():
     parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
     enable_log_file(args.log_file, header=f"test_sft.py start | checkpoint={args.checkpoint}")
+    metrics_logger = MetricsLogger(
+        script="test_sft.py",
+        run_id=build_run_id("test_sft.py", args.config, args.checkpoint),
+        metrics_path=os.path.join("logs", "metrics", "test_sft.jsonl"),
+        device=args.device,
+    )
+    metrics_logger.event(epoch=0, batch=0, step=0, name="run_start", value=1.0, extra={"is_resume": False, "resume_from_step": 0})
 
     if args.quick:
         args.num_samples = 10
@@ -740,6 +748,12 @@ def main():
             num_samples=args.num_mm_samples, verbose=True
         )
 
+        if text_metrics:
+            metrics_logger.test_metrics(text_metrics, phase="test_text", split="test")
+        if image_metrics:
+            metrics_logger.test_metrics(image_metrics, phase="test_image", split="test")
+        if audio_metrics:
+            metrics_logger.test_metrics(audio_metrics, phase="test_audio", split="test")
         print_results(text_metrics, image_metrics, audio_metrics)
 
     except Exception as e:

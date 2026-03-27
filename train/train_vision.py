@@ -7,7 +7,7 @@ from omni.thinker import ThinkerLM
 from omni.tokenizer import BPETokenizer
 from omni.training_utils import (
     set_seed, get_lr_scheduler, clip_gradients, SimpleLogger, validate_loss,
-    EMA, TrainingMonitor, setup_cuda,
+    EMA, TrainingMonitor, setup_cuda, MetricsLogger, build_run_id,
 )
 from omni.data_utils import ImgCapDataset
 from omni.checkpoint_utils import find_checkpoint, load_checkpoint, save_training_metadata, load_training_metadata
@@ -371,6 +371,20 @@ def main(cfg):
     if new_train_dl is not None:
         train_dl = new_train_dl
     
+    metrics_logger = MetricsLogger(
+        script="train_vision.py",
+        run_id=build_run_id("train_vision.py", cfg.get("config_path"), save_dir),
+        metrics_path=os.path.join("logs", "metrics", "train_vision.jsonl"),
+        device=device,
+    )
+    metrics_logger.event(
+        epoch=metadata.get("epoch", 0) if metadata else 0,
+        batch=0,
+        step=step,
+        name="run_start",
+        value=1.0,
+        extra={"is_resume": step > 0, "resume_from_step": step},
+    )
     logger.training_start(cfg["max_steps"], train_size, val_size)
     
     # Calculate steps per epoch and determine starting epoch/position.
@@ -569,6 +583,13 @@ def main(cfg):
                 current_lr = scheduler.get_last_lr()[0]
                 unscaled_loss = loss_val * accumulation_steps
                 logger.train_step(step, float(unscaled_loss), current_lr, epoch)
+                metrics_logger.train_step(
+                    epoch=epoch,
+                    batch=batch_step,
+                    step=step,
+                    loss=float(unscaled_loss),
+                    lr=float(current_lr),
+                )
 
             # Periodic checkpointing
             if batch_step % checkpoint_freq == 0 and batch_step > 0:
@@ -672,6 +693,12 @@ def main(cfg):
                     
                     avg_val_loss = val_loss_sum / max(val_count, 1)
                     logger.val_step(step, avg_val_loss, epoch)
+                    metrics_logger.val_step(
+                        epoch=epoch,
+                        batch=batch_step,
+                        step=step,
+                        loss=float(avg_val_loss),
+                    )
                     
                     # Restore original weights after validation
                     if ema is not None:

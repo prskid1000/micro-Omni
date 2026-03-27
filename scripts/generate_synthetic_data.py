@@ -3,12 +3,12 @@ Generate high-quality synthetic training data for all modalities.
 Produces 5K samples per modality with maximum diversity.
 
 Usage:
-    python generate_synthetic_data.py --all              # Generate everything
-    python generate_synthetic_data.py --text             # Text corpus only
-    python generate_synthetic_data.py --audio            # ASR + TTS audio
-    python generate_synthetic_data.py --images           # Image + captions
-    python generate_synthetic_data.py --ocr              # OCR images + text
-    python generate_synthetic_data.py --count 10000      # Override sample count
+    python -m scripts.generate_synthetic_data --all              # Generate everything
+    python -m scripts.generate_synthetic_data --text             # Text corpus only
+    python -m scripts.generate_synthetic_data --audio            # ASR + TTS audio
+    python -m scripts.generate_synthetic_data --images           # Image + captions
+    python -m scripts.generate_synthetic_data --ocr              # OCR images + text
+    python -m scripts.generate_synthetic_data --count 10000      # Override sample count
 """
 
 import argparse

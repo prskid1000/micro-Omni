@@ -46,10 +46,10 @@ scripts/
 Each download script supports `--combine`, and you **must** use it:
 
 ```bash
-python scripts/download_production_corpus.py --combine
-python scripts/download_production_asr.py    --combine
-python scripts/download_production_vision.py --combine
-python scripts/download_production_tts.py    --combine
+python -m scripts.download_production_text --combine
+python -m scripts.download_production_audio --combine
+python -m scripts.download_production_image --combine
+python -m scripts.download_production_ocr --combine
 ```
 
 Without `--combine`, the script downloads raw shards but does not merge them

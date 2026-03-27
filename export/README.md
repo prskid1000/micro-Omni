@@ -17,7 +17,7 @@ After running the export script (`scripts/export.py`), place the exported model 
 
 **`infer_standalone.py`** - Standalone model loading using Hugging Face transformers library (included in this folder)
 
-> **Note**: This script demonstrates model loading but requires the full codebase for actual generation. For full multimodal inference, use `test/infer_chat.py` from the repo root.
+> **Note**: This script demonstrates model loading but requires the full codebase for actual generation. For full multimodal inference, use `python -m test.infer_chat` from the repo root.
 
 This script can load the model using transformers library and safetensors. It demonstrates the structure for integration with transformers, but full text generation requires the model architecture classes from the `omni` package.
 
@@ -26,7 +26,7 @@ This script can load the model using transformers library and safetensors. It de
 ### 1. Export Model (run from root)
 
 ```bash
-python scripts/export.py \
+python -m scripts.export \
     --omni_ckpt checkpoints/omni_sft_tiny \
     --thinker_ckpt checkpoints/thinker_tiny \
     --audio_ckpt checkpoints/audio_enc_tiny \
@@ -41,18 +41,17 @@ python scripts/export.py \
 
 ```bash
 # From root directory
-python test/infer_chat.py --ckpt_dir export --text "Hello, how are you?"
+python -m test.infer_chat --ckpt_dir export --text "Hello, how are you?"
 ```
 
 **Option B: Standalone Loading (demonstration only)**
 
 ```bash
-cd export
 pip install transformers safetensors sentencepiece torch
-python infer_standalone.py --text "Hello, how are you?"
+python -m export.infer_standalone --model_dir export --text "Hello, how are you?"
 ```
 
-> **Note**: `infer_standalone.py` demonstrates model loading but requires the full codebase (`omni` package) for actual text generation. For production use, use `test/infer_chat.py` from the repo root.
+> **Note**: `infer_standalone.py` demonstrates model loading but requires the full codebase (`omni` package) for actual text generation. For production use, use `python -m test.infer_chat` from the repo root.
 
 ## Documentation
 
@@ -98,9 +97,9 @@ For full multimodal inference (text, image, audio, video):
 
 ```bash
 # From root directory
-python test/infer_chat.py --ckpt_dir export --text "Hello" --image path/to/image.jpg
-python test/infer_chat.py --ckpt_dir export --audio_in path/to/audio.wav
-python test/infer_chat.py --ckpt_dir export --text "Generate speech" --audio_out output.wav
+python -m test.infer_chat --ckpt_dir export --text "Hello" --image path/to/image.jpg
+python -m test.infer_chat --ckpt_dir export --audio_in path/to/audio.wav
+python -m test.infer_chat --ckpt_dir export --text "Generate speech" --audio_out output.wav
 ```
 
 ### Model Configuration

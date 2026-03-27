@@ -13,5 +13,5 @@
 Run from repo root, for example:
 
 ```bash
-python test/test_thinker.py --checkpoint checkpoints/thinker_tiny
+python -m test.test_thinker --checkpoint checkpoints/thinker_tiny
 ```

@@ -287,7 +287,7 @@ def main():
             print("   data/images/production_annotations.json")
         else:
             print("   data/images/[dataset_name]_annotations.json")
-        print("3. Run training: python train_vision.py --config configs/vision_tiny.json")
+        print("3. Run training: python -m train.train_vision --config configs/vision_tiny.json")
     else:
         print("✗ Some operations failed. Check errors above.")
         print("You can resume by running the script again (it will skip completed steps)")

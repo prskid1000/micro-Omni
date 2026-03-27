@@ -648,13 +648,13 @@ def main():
         epilog="""
 Examples:
   # Export all available components (auto-discovers checkpoints in checkpoints/ directory)
-  python scripts/export.py
+  python -m scripts.export
 
   # Export with custom config file (still auto-discovers missing components)
-  python scripts/export.py --omni_config omni_sft_tiny.json
+  python -m scripts.export --omni_config omni_sft_tiny.json
 
   # Export with explicit checkpoint paths (overrides auto-discovery)
-  python scripts/export.py \\
+  python -m scripts.export \\
       --omni_ckpt checkpoints/omni_sft_tiny \\
       --thinker_ckpt checkpoints/thinker_tiny \\
       --audio_ckpt checkpoints/audio_enc_tiny \\

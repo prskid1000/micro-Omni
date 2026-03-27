@@ -13,7 +13,7 @@
 Run from repo root, for example:
 
 ```bash
-python train/train_thinker.py --config configs/synthetic_thinker.json
+python -m train.train_thinker --config configs/synthetic_thinker.json
 ```
 
 Always use:

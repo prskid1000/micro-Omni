@@ -4,8 +4,8 @@ Tests: text, image encoding, audio encoding, image+text, audio+text, all combine
 Uses random samples from training data.
 
 Usage:
-    python export/test_hf_multimodal.py
-    python export/test_hf_multimodal.py --num_samples 20 --device cpu
+    python -m export.test_hf_multimodal
+    python -m export.test_hf_multimodal --num_samples 20 --device cpu
 """
 
 import sys
@@ -15,12 +15,15 @@ import random
 import json
 import csv
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import torch
 torch.set_float32_matmul_precision('high')
 
-from modeling_muomni import MuOmniMultimodalModel
+try:
+    from export.modeling_muomni import MuOmniMultimodalModel
+except ImportError:
+    # Fallback for direct script execution from export/ folder.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from modeling_muomni import MuOmniMultimodalModel
 from PIL import Image
 from torchvision import transforms
 import torchaudio

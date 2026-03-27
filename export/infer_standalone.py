@@ -2,15 +2,15 @@
 Standalone inference script for μOmni.
 
 This script can work in two modes:
-1. Full mode: Uses the full codebase (test/infer_chat.py) if available - recommended
+1. Full mode: Uses the full codebase (`python -m test.infer_chat`) if available - recommended
 2. Standalone mode: Demonstrates model loading structure (limited functionality)
 
 Usage:
     # Full mode (recommended - uses full codebase)
-    python infer_standalone.py --model_dir . --text "Hello, how are you?"
+    python -m export.infer_standalone --model_dir export --text "Hello, how are you?"
     
     # Or use the main inference script directly:
-    python test/infer_chat.py --ckpt_dir export --text "Hello, how are you?"
+    python -m test.infer_chat --ckpt_dir export --text "Hello, how are you?"
 """
 
 import argparse
@@ -159,7 +159,7 @@ def simple_generate(model_data, prompt, max_new_tokens=64, device="cuda"):
     Simple text generation using the loaded model.
     
     Note: This is a simplified version. For full multimodal inference (image, audio, video),
-    you need to use the full codebase with test/infer_chat.py or register custom model classes
+    you need to use the full codebase with `python -m test.infer_chat` or register custom model classes
     with transformers.
     
     This function demonstrates the structure but requires the model architecture classes
@@ -188,12 +188,12 @@ def simple_generate(model_data, prompt, max_new_tokens=64, device="cuda"):
     # This is a placeholder that shows the structure
     print("\n⚠ Note: Full generation requires model architecture classes from the codebase.")
     print("   For full functionality, use:")
-    print("   1. test/infer_chat.py (from root directory) - Full multimodal inference")
+    print("   1. python -m test.infer_chat (from root directory) - Full multimodal inference")
     print("   2. Register custom model classes with transformers")
     print("   3. Use Hugging Face's model loading with custom architecture definitions")
     
     # Return a simple response
-    return f"[Generation requires model architecture. To generate text, use test/infer_chat.py from the root directory. Input: {prompt}]"
+    return f"[Generation requires model architecture. To generate text, use python -m test.infer_chat from the root directory. Input: {prompt}]"
 
 
 def try_use_full_codebase(model_dir, text=None, image=None, video=None, audio_in=None, audio_out=None, ocr=False):
@@ -212,7 +212,7 @@ def try_use_full_codebase(model_dir, text=None, image=None, video=None, audio_in
             break
     
     if infer_script:
-        print("✓ Found full codebase - using test/infer_chat.py for full functionality")
+        print("✓ Found full codebase - using python -m test.infer_chat for full functionality")
         import subprocess
         cmd = [sys.executable, infer_script, "--ckpt_dir", model_dir]
         if text:
@@ -247,10 +247,10 @@ def main():
         epilog="""
 Examples:
   # Full mode (if codebase available)
-  python infer_standalone.py --model_dir export --text "Hello"
+  python -m export.infer_standalone --model_dir export --text "Hello"
   
   # Or use main inference script directly (recommended):
-  python test/infer_chat.py --ckpt_dir export --text "Hello"
+  python -m test.infer_chat --ckpt_dir export --text "Hello"
         """
     )
     parser.add_argument(
@@ -333,7 +333,7 @@ Examples:
     
     # Fall back to standalone mode
     print("⚠ Using standalone mode (limited functionality)")
-    print("  For full multimodal inference, use: python test/infer_chat.py --ckpt_dir <model_dir>")
+    print("  For full multimodal inference, use: python -m test.infer_chat --ckpt_dir <model_dir>")
     print()
     
     # Load model
@@ -346,7 +346,7 @@ Examples:
         print("  2. All required files are present (model.safetensors, config.json, tokenizer.model)")
         print("  3. Required libraries are installed: transformers, safetensors, sentencepiece")
         print("\nFor full functionality, use the main inference script:")
-        print(f"  python test/infer_chat.py --ckpt_dir {args.model_dir}")
+        print(f"  python -m test.infer_chat --ckpt_dir {args.model_dir}")
         sys.exit(1)
     
     # Generate
@@ -366,7 +366,7 @@ Examples:
     print("⚠ Note: Standalone mode has limited functionality.")
     print("For full multimodal inference (image, audio, video, OCR, TTS),")
     print("use the main inference script:")
-    print(f"  python test/infer_chat.py --ckpt_dir {args.model_dir}")
+    print(f"  python -m test.infer_chat --ckpt_dir {args.model_dir}")
     print("=" * 60)
 
 

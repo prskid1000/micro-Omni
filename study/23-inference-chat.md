@@ -30,7 +30,7 @@ dispatches based on input type.
 ## Quick Start
 
 ```bash
-python test/infer_chat.py --ckpt checkpoints/
+python -m test.infer_chat --ckpt checkpoints/
 ```
 
 This starts an interactive chat session. The script auto-detects available
@@ -146,7 +146,7 @@ You can still chat with text even if audio/vision checkpoints are absent.
 After exporting with `scripts/export.py` (see Chapter 24), use the standalone script:
 
 ```bash
-python export/infer_standalone.py --model_dir export/
+python -m export.infer_standalone --model_dir export/
 ```
 
 This loads a single `model.safetensors` file instead of separate component
@@ -187,7 +187,7 @@ Measured on RTX 3090, Tiny model (25M params), PyTorch 2.1, CUDA 11.8:
 ## Common Flags
 
 ```bash
-python test/infer_chat.py \
+python -m test.infer_chat \
     --ckpt checkpoints/          \  # Checkpoint directory
     --device cuda                \  # Device: cuda, cpu
     --dtype float16              \  # Precision: float32, float16, bfloat16

@@ -166,7 +166,7 @@ Benefits:
 Use the SFT (Supervised Fine-Tuning) stage to adapt the model:
 
 ```bash
-python train/sft_omni.py \
+python -m train.sft_omni \
     --base_ckpt checkpoints/        \
     --data data/domain_specific/    \
     --config configs/sft.json       \

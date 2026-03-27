@@ -18,6 +18,7 @@ from omni.data_utils import ImgCapDataset
 from omni.checkpoint_utils import find_checkpoint, strip_orig_mod
 from omni.io_utils import enable_log_file, default_log_path
 from omni.eval_utils import load_checkpoint_and_config
+from omni.training_utils import MetricsLogger, build_run_id
 from tqdm import tqdm
 
 # Import your custom tokenizer and Thinker model
@@ -635,6 +636,13 @@ def main():
     parser.add_argument("--log_file", default=default_log_path(__file__), help="Write stdout/stderr to this file (UTF-8)")
     args = parser.parse_args()
     enable_log_file(args.log_file, header=f"test_vision.py start | checkpoint={args.checkpoint}")
+    metrics_logger = MetricsLogger(
+        script="test_vision.py",
+        run_id=build_run_id("test_vision.py", args.config, args.checkpoint),
+        metrics_path=os.path.join("logs", "metrics", "test_vision.jsonl"),
+        device=args.device,
+    )
+    metrics_logger.event(epoch=0, batch=0, step=0, name="run_start", value=1.0, extra={"is_resume": False, "resume_from_step": 0})
     
     if args.quick:
         args.num_samples = 10
@@ -685,7 +693,9 @@ def main():
             )
             if retrieval_metrics is None:
                 print("⚠️  Retrieval evaluation skipped (text encoder not available)")
-        
+        metrics_logger.test_metrics(embedding_metrics, phase="test_embedding", split="test")
+        if retrieval_metrics is not None:
+            metrics_logger.test_metrics(retrieval_metrics, phase="test_retrieval", split="test")
         print_results(embedding_metrics, retrieval_metrics)
         
     except Exception as e:

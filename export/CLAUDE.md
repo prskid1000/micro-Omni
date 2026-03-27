@@ -13,13 +13,13 @@
 ## Export Workflow
 ```bash
 # 1. Merge all component checkpoints into one file
-python scripts/export.py --output_dir export/
+python -m scripts.export --output_dir export/
 
 # 2. Test the export
-python export/test_safetensor.py
+python -m export.test_safetensor
 
 # 3. Run standalone inference
-python export/infer_standalone.py --model_dir export/
+python -m export.infer_standalone --model_dir export/
 ```
 
 ## Merged Key Prefixes

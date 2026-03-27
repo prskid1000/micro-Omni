@@ -1,7 +1,11 @@
 import math
 import os
 import random
+import json
+import hashlib
+import tempfile
 from datetime import datetime
+from typing import Any
 
 import torch
 
@@ -336,6 +340,151 @@ class SimpleLogger:
         self._write(self._format_message("METRIC", f"Step {step} | {epoch_str}{metric_name}={value:.4f}"))
 
 
+def build_run_id(script: str, config_path: str | None = None, save_dir: str | None = None) -> str:
+    """Build a stable run id so resumed runs can upsert same keys."""
+    base = f"{script}|{config_path or ''}|{save_dir or ''}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+
+
+def _record_key(record: dict[str, Any]) -> str:
+    run_id = str(record.get("run_id", ""))
+    phase = str(record.get("phase", ""))
+    epoch = str(record.get("epoch", ""))
+    batch = str(record.get("batch", ""))
+    step = str(record.get("step", ""))
+    split = str(record.get("split", ""))
+    metric_name = str(record.get("metric_name", ""))
+    return f"{run_id}|{phase}|{split}|{epoch}|{batch}|{step}|{metric_name}"
+
+
+def append_or_upsert_jsonl(path: str, record: dict[str, Any]) -> None:
+    """Append a record or replace existing duplicate key atomically."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    key = _record_key(record)
+    records: list[dict[str, Any]] = []
+    replaced = False
+
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if _record_key(obj) == key:
+                    records.append(record)
+                    replaced = True
+                else:
+                    records.append(obj)
+
+    if not replaced:
+        records.append(record)
+
+    fd, tmp_path = tempfile.mkstemp(prefix="metrics_", suffix=".jsonl", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for obj in records:
+                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+class MetricsLogger:
+    """Structured metrics logger with resume-safe upsert writes."""
+
+    def __init__(self, script: str, run_id: str, metrics_path: str, device: str | None = None):
+        self.script = script
+        self.run_id = run_id
+        self.metrics_path = metrics_path
+        self.device = device
+
+    def emit(
+        self,
+        *,
+        phase: str,
+        split: str,
+        metric_name: str,
+        metric_value: float,
+        epoch: int | None,
+        batch: int | None,
+        step: int | None,
+        lr: float | None = None,
+        loss: float | None = None,
+        checkpoint: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        record = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "script": self.script,
+            "phase": phase,
+            "run_id": self.run_id,
+            "epoch": epoch,
+            "batch": batch,
+            "step": step,
+            "split": split,
+            "metric_name": metric_name,
+            "metric_value": float(metric_value),
+            "lr": lr,
+            "loss": loss,
+            "checkpoint": checkpoint,
+            "device": self.device,
+            "extra": extra or {},
+        }
+        append_or_upsert_jsonl(self.metrics_path, record)
+
+    def train_step(self, *, epoch: int, batch: int, step: int, loss: float, lr: float) -> None:
+        self.emit(
+            phase="train",
+            split="train",
+            metric_name="loss",
+            metric_value=loss,
+            epoch=epoch,
+            batch=batch,
+            step=step,
+            lr=lr,
+            loss=loss,
+        )
+
+    def val_step(self, *, epoch: int, batch: int | None, step: int, loss: float, metric_name: str = "val_loss") -> None:
+        self.emit(
+            phase="val",
+            split="val",
+            metric_name=metric_name,
+            metric_value=loss,
+            epoch=epoch,
+            batch=batch,
+            step=step,
+            loss=loss,
+        )
+
+    def event(self, *, epoch: int | None, batch: int | None, step: int | None, name: str, value: float = 1.0, extra: dict[str, Any] | None = None) -> None:
+        self.emit(
+            phase="event",
+            split="event",
+            metric_name=name,
+            metric_value=value,
+            epoch=epoch,
+            batch=batch,
+            step=step,
+            extra=extra,
+        )
+
+    def test_metrics(self, metrics: dict[str, Any], *, phase: str = "test", split: str = "test") -> None:
+        for k, v in metrics.items():
+            if isinstance(v, bool):
+                self.emit(phase=phase, split=split, metric_name=k, metric_value=float(v), epoch=0, batch=0, step=0)
+            elif isinstance(v, (int, float)):
+                self.emit(phase=phase, split=split, metric_name=k, metric_value=float(v), epoch=0, batch=0, step=0)
+
+
 def reload_from_last_checkpoint(save_dir, checkpoint_prefix, device, logger, model, opt=None, scheduler=None, scaler=None):
     if not os.path.exists(save_dir):
         logger.error(f"Save directory does not exist: {save_dir}")
@@ -395,4 +544,7 @@ __all__ = [
     "TrainingMonitor",
     "EMA",
     "reload_from_last_checkpoint",
+    "build_run_id",
+    "append_or_upsert_jsonl",
+    "MetricsLogger",
 ]

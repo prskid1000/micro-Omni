@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>uOmni Metrics Viewer</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .tab { border: 1px solid #ccc; background: #f7f7f7; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+    .tab.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+    label { font-size: 13px; }
+    select, button { min-width: 140px; padding: 4px; }
+    canvas { border: 1px solid #ddd; width: 100%; max-width: 1200px; height: 420px; }
+    table { border-collapse: collapse; margin-top: 12px; width: 100%; max-width: 1200px; }
+    th, td { border: 1px solid #ddd; padding: 6px; font-size: 12px; }
+    th { background: #f4f4f4; text-align: left; }
+    .muted { color: #666; font-size: 12px; }
+    .status { margin: 6px 0 12px; font-size: 12px; color: #333; }
+  </style>
+</head>
+<body>
+  <h2>uOmni Metrics Viewer</h2>
+  <p class="muted">Auto-detects JSONL files in <code>logs/metrics/</code>. No manual upload required.</p>
+  <div class="row">
+    <button id="refreshBtn">Refresh Logs</button>
+    <label>Script <select id="script"></select></label>
+    <label>Run ID <select id="run"></select></label>
+    <label>Phase <select id="phase"></select></label>
+    <label>Metric <select id="metric"></select></label>
+    <label>X-axis
+      <select id="xAxis">
+        <option value="step">step</option>
+        <option value="epoch">epoch</option>
+      </select>
+    </label>
+  </div>
+  <div id="status" class="status"></div>
+  <div id="tabs" class="tabs"></div>
+  <canvas id="chart" width="1200" height="420"></canvas>
+  <table id="latestTable">
+    <thead><tr><th>Metric</th><th>Latest Value</th><th>Step</th><th>Epoch</th><th>Timestamp</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <script>
+    const KNOWN_METRICS_FILES = [
+      "train_thinker.jsonl", "train_audio_enc.jsonl", "train_vision.jsonl", "train_talker.jsonl",
+      "sft_omni.jsonl", "train_vocoder.jsonl", "train_ocr.jsonl",
+      "test_thinker.jsonl", "test_audio_enc.jsonl", "test_vision.jsonl", "test_talker.jsonl",
+      "test_vocoder.jsonl", "test_ocr.jsonl", "test_sft.jsonl"
+    ];
+    const fileData = new Map();
+    let currentTab = "__all__";
+
+    const scriptSel = document.getElementById("script");
+    const runSel = document.getElementById("run");
+    const phaseSel = document.getElementById("phase");
+    const metricSel = document.getElementById("metric");
+    const xAxisSel = document.getElementById("xAxis");
+    const statusEl = document.getElementById("status");
+    const tabsEl = document.getElementById("tabs");
+    const canvas = document.getElementById("chart");
+    const ctx = canvas.getContext("2d");
+
+    function fill(sel, values) {
+      sel.innerHTML = `<option value="">all</option>` + values.map(v => `<option>${v}</option>`).join("");
+    }
+
+    function rowsForTab() {
+      if (currentTab === "__all__") {
+        const rows = [];
+        for (const arr of fileData.values()) rows.push(...arr);
+        return rows;
+      }
+      return fileData.get(currentTab) || [];
+    }
+
+    function by(k) {
+      const rows = rowsForTab();
+      return [...new Set(rows.map(r => String(r[k] ?? "")))].sort();
+    }
+
+    function parsedLines(text) {
+      return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => {
+        try { return JSON.parse(l); } catch { return null; }
+      }).filter(Boolean);
+    }
+
+    function normalizeName(pathOrName) {
+      const p = String(pathOrName).replaceAll("\\", "/");
+      return p.split("/").pop();
+    }
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function buildTabs() {
+      const names = [...fileData.keys()].sort();
+      tabsEl.innerHTML = "";
+      const addTab = (id, label) => {
+        const btn = document.createElement("button");
+        btn.className = "tab" + (currentTab === id ? " active" : "");
+        btn.textContent = label;
+        btn.addEventListener("click", () => {
+          currentTab = id;
+          buildTabs();
+          resetFilters();
+          render();
+        });
+        tabsEl.appendChild(btn);
+      };
+      addTab("__all__", `All (${names.length})`);
+      for (const name of names) addTab(name, name);
+    }
+
+    function resetFilters() {
+      fill(scriptSel, by("script"));
+      fill(runSel, by("run_id"));
+      fill(phaseSel, by("phase"));
+      fill(metricSel, by("metric_name"));
+    }
+
+    async function fetchJsonl(fileName) {
+      const path = `logs/metrics/${fileName}`;
+      try {
+        const res = await fetch(path, { cache: "no-store" });
+        if (!res.ok) return null;
+        const text = await res.text();
+        const rows = parsedLines(text);
+        return rows.length ? rows : null;
+      } catch {
+        return null;
+      }
+    }
+
+    async function discoverFromDirectoryListing() {
+      try {
+        const res = await fetch("logs/metrics/", { cache: "no-store" });
+        if (!res.ok) return [];
+        const html = await res.text();
+        const matches = [...html.matchAll(/href=["']([^"']+\.jsonl)["']/gi)];
+        return [...new Set(matches.map(m => normalizeName(m[1])))];
+      } catch {
+        return [];
+      }
+    }
+
+    async function autoLoad() {
+      setStatus("Scanning logs/metrics ...");
+      fileData.clear();
+      const listed = await discoverFromDirectoryListing();
+      const candidates = [...new Set([...KNOWN_METRICS_FILES, ...listed])];
+
+      for (const name of candidates) {
+        const rows = await fetchJsonl(name);
+        if (rows && rows.length) fileData.set(name, rows);
+      }
+
+      if (fileData.size === 0) {
+        tabsEl.innerHTML = "";
+        setStatus("No metrics found. Start a train/test run first, or serve repo root and open this page through http://localhost.");
+        render();
+        return;
+      }
+
+      if (currentTab !== "__all__" && !fileData.has(currentTab)) currentTab = "__all__";
+      buildTabs();
+      resetFilters();
+      setStatus(`Loaded ${fileData.size} metric files from logs/metrics.`);
+      render();
+    }
+
+    function filtered() {
+      return rowsForTab().filter(r =>
+        (!scriptSel.value || String(r.script) === scriptSel.value) &&
+        (!runSel.value || String(r.run_id) === runSel.value) &&
+        (!phaseSel.value || String(r.phase) === phaseSel.value) &&
+        (!metricSel.value || String(r.metric_name) === metricSel.value)
+      );
+    }
+
+    function drawLine(data) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!data.length) return;
+      const xKey = xAxisSel.value;
+      const pts = data
+        .map(r => ({ x: Number(r[xKey] ?? 0), y: Number(r.metric_value ?? 0), t: String(r.timestamp ?? "") }))
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+        .sort((a, b) => a.x - b.x);
+      if (!pts.length) return;
+      const minX = Math.min(...pts.map(p => p.x));
+      const maxX = Math.max(...pts.map(p => p.x));
+      const minY = Math.min(...pts.map(p => p.y));
+      const maxY = Math.max(...pts.map(p => p.y));
+      const pad = 40, w = canvas.width - pad * 2, h = canvas.height - pad * 2;
+      const sx = (x) => pad + ((x - minX) / Math.max(1e-9, maxX - minX)) * w;
+      const sy = (y) => pad + (1 - (y - minY) / Math.max(1e-9, maxY - minY)) * h;
+      ctx.strokeStyle = "#1d4ed8"; ctx.lineWidth = 2; ctx.beginPath();
+      pts.forEach((p, i) => i ? ctx.lineTo(sx(p.x), sy(p.y)) : ctx.moveTo(sx(p.x), sy(p.y)));
+      ctx.stroke();
+      ctx.fillStyle = "#111"; ctx.font = "12px Arial";
+      ctx.fillText(`${xKey}: ${minX} -> ${maxX}`, 8, 16);
+      ctx.fillText(`value: ${minY.toFixed(4)} -> ${maxY.toFixed(4)}`, 8, 32);
+      const last = pts[pts.length - 1];
+      ctx.fillText(`latest: ${last.y.toFixed(6)}`, 8, 48);
+    }
+
+    function renderTable(data) {
+      const body = document.querySelector("#latestTable tbody");
+      const latest = new Map();
+      data.forEach(r => {
+        const key = String(r.metric_name);
+        const x = Number(r.step ?? 0);
+        if (!latest.has(key) || Number(latest.get(key).step ?? 0) <= x) latest.set(key, r);
+      });
+      const rows = [...latest.values()].sort((a, b) => String(a.metric_name).localeCompare(String(b.metric_name)));
+      body.innerHTML = rows.map(r => `
+        <tr>
+          <td>${String(r.metric_name ?? "")}</td>
+          <td>${Number(r.metric_value ?? 0).toFixed(6)}</td>
+          <td>${String(r.step ?? "")}</td>
+          <td>${String(r.epoch ?? "")}</td>
+          <td>${String(r.timestamp ?? "")}</td>
+        </tr>`).join("");
+    }
+
+    function render() {
+      const data = filtered();
+      drawLine(data);
+      renderTable(data);
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", autoLoad);
+    [scriptSel, runSel, phaseSel, metricSel, xAxisSel].forEach(el => el.addEventListener("change", render));
+    autoLoad();
+  </script>
+</body>
+</html>
