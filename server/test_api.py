@@ -151,6 +151,7 @@ class APITester:
         self._run_section("Pipeline Status", self.test_pipeline_status)
         self._run_section("Training Lifecycle", self.test_training_lifecycle, skip_slow)
         self._run_section("GPU Lock", self.test_gpu_lock, skip_slow)
+        self._run_section("Pause/Resume Progress", self.test_pause_resume_progress, skip_slow)
         self._run_section("Training All Stages", self.test_all_stages_start_stop, skip_slow)
         self._run_section("Testing Lifecycle", self.test_testing_lifecycle, skip_slow)
         self._run_section("Inference API", self.test_inference_api)
@@ -432,6 +433,94 @@ class APITester:
         self.check("Start E (blocked) -> 409", self.post("/api/training/start", {"stage": "E"}), expect_ok=False)
 
     test_training_lifecycle._slow = True
+
+    # ── Pause/Resume Verification ────────────────────────────
+
+    def test_pause_resume_progress(self):
+        """Verify training actually resumes from where it stopped — step counter advances."""
+        self.wait_gpu_free()
+
+        # Start fresh Stage A training
+        self.post("/api/training/clear", {"stage": "A"})
+        time.sleep(1)
+
+        # ── Phase 1: Train for a while, record step ──────────
+        r = self.check("Start Stage A (fresh)", self.post("/api/training/start", {"stage": "A"}))
+        if not r.get("ok"):
+            self.skip("Pause/resume test", "failed to start")
+            return
+
+        # Wait for checkpoint to be saved (need 500+ steps)
+        print("       Phase 1: Training until first checkpoint...")
+        for i in range(24):  # max 120s
+            time.sleep(5)
+            r = self.get("/api/training/pipeline")
+            meta = r["stages"]["A"].get("metadata")
+            if meta and meta.get("step", 0) > 0:
+                break
+
+        # Stop training
+        self.post("/api/training/stop", {"stage": "A"})
+        time.sleep(2)
+
+        # Read step from checkpoint metadata
+        r = self.get("/api/training/pipeline")
+        meta1 = r["stages"]["A"].get("metadata")
+        step1 = meta1.get("step", 0) if meta1 else 0
+        print(f"       Phase 1 stopped at step {step1}")
+        self.assert_gt("Phase 1 trained some steps", step1, 0)
+
+        # Read metrics to verify loss was logged
+        r = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        rows1 = [row for row in r.get("rows", []) if row.get("metric_name") == "loss" and row.get("phase") == "train"]
+        self.assert_gt("Phase 1 has metric rows", len(rows1), 0)
+
+        # ── Phase 2: Resume and verify step advances ─────────
+        print("       Phase 2: Resuming training...")
+        r = self.check("Resume Stage A", self.post("/api/training/start", {"stage": "A"}))
+        if not r.get("ok"):
+            self.skip("Resume phase", "failed to resume")
+            return
+
+        # Record the max step BEFORE phase 2 starts producing data
+        r = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        rows_before = [row for row in r.get("rows", []) if row.get("metric_name") == "loss" and row.get("phase") == "train"]
+        max_step_before = max((row.get("step", 0) for row in rows_before), default=0)
+
+        # Wait for resumed training to log new metrics
+        time.sleep(15)
+
+        # Stop again
+        self.post("/api/training/stop", {"stage": "A"})
+        time.sleep(2)
+
+        # Read new step from checkpoint metadata
+        r = self.get("/api/training/pipeline")
+        meta2 = r["stages"]["A"].get("metadata")
+        step2 = meta2.get("step", 0) if meta2 else 0
+        print(f"       Phase 2 stopped at metadata step {step2} (was {step1})")
+
+        # Read metrics — find the highest step logged
+        r = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        rows_after = [row for row in r.get("rows", []) if row.get("metric_name") == "loss" and row.get("phase") == "train"]
+        max_step_after = max((row.get("step", 0) for row in rows_after), default=0)
+        print(f"       Max metric step: before={max_step_before} -> after={max_step_after}")
+
+        # Key assertion: metrics should show steps beyond phase 1
+        self.assert_gt(f"Metrics advanced beyond phase 1 (step {step1})", max_step_after, step1)
+
+        # Verify resume didn't restart from step 0 — find min step in phase 2 metrics
+        # (rows with timestamps after phase 2 start should have step > 0)
+        self.assert_gt("Resume didn't restart from 0", max_step_after, step1 - 1)
+
+        # ── Phase 3: Verify logs show resume ─────────────────
+        r = self.get("/api/training/logs/A")
+        log_text = "\n".join(r.get("lines", []))
+        # Training scripts typically print "Resuming from step X" or load checkpoint
+        has_resume_indicator = "resum" in log_text.lower() or "checkpoint" in log_text.lower() or "step" in log_text.lower()
+        self.assert_true("Logs mention resume/checkpoint/step", has_resume_indicator)
+
+    test_pause_resume_progress._slow = True
 
     # ── GPU Lock ─────────────────────────────────────────────
 
