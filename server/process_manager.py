@@ -206,6 +206,17 @@ class ProcessManager:
             if mp is not None and mp.status == "running":
                 self.stop(key)
 
+    def clear_record(self, key: str) -> bool:
+        """Remove a non-running process record so the stage returns to idle."""
+        with self._lock:
+            mp = self._processes.get(key)
+            if mp is None:
+                return False
+            if mp.status == "running":
+                return False  # Can't clear a running process
+            del self._processes[key]
+            return True
+
     # ── Internal ─────────────────────────────────────────────────
 
     def _is_gpu_busy_unlocked(self) -> bool:

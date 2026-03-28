@@ -218,15 +218,20 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
             handler.send_error_json(400, f"Unknown stage: {stage}")
             return
 
-        # Don't allow clearing while running
         key = f"training_{stage}"
         proc = pm.get_status(key)
-        if proc and proc.get("status") == "running":
-            handler.send_error_json(409, f"Stage {stage} is currently running — stop it first")
-            return
 
+        # If still running, stop it first
+        if proc and proc.get("status") == "running":
+            pm.stop(key)
+
+        # Delete checkpoint files
         ckpt_dir = STAGE_MAP[stage]["checkpoint_dir"]
         result = _clear_checkpoint(ckpt_dir)
+
+        # Clear the process record so stage returns to "idle"
+        pm.clear_record(key)
+
         handler.send_json({"ok": True, "stage": stage, "checkpoint_dir": ckpt_dir, **result})
         return
 
