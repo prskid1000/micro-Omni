@@ -17,7 +17,7 @@ _db_lock = threading.Lock()
 COMMON_TRAINING_SPACE = [
     # Optimization
     ("lr", "float_log", (1e-4, 5e-3)),
-    ("wd", "float_log", (1e-5, 0.1)),
+    ("wd", "float_log", (1e-6, 0.1)),
     ("warmup_steps", "int", (10, 300)),
     ("batch_size", "categorical", ([8, 16, 32, 64],)),
     ("gradient_accumulation_steps", "categorical", ([1, 2, 4],)),
@@ -111,9 +111,9 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         # Vocoder — HiFi-GAN (different LR structure, no common lr)
         ("lr_g", "float_log", (1e-5, 1e-3)),
         ("lr_d", "float_log", (1e-5, 1e-3)),
-        ("wd", "float_log", (1e-5, 0.1)),
+        ("wd", "float_log", (1e-6, 0.1)),
         ("warmup_steps", "int", (10, 200)),
-        ("batch_size", "categorical", ([1, 2, 4]),),
+        ("batch_size", "categorical", ([1, 2, 4],)),
         ("gradient_accumulation_steps", "categorical", ([1, 2, 4, 8],)),
         ("max_grad_norm", "categorical", ([0.5, 1.0, 2.0, 5.0],)),
         ("ema_decay", "float", (0.99, 0.9999)),
@@ -123,7 +123,7 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("discriminator_update_interval", "categorical", ([1, 2, 3, 5],)),
         ("discriminator_lr_warmup_steps", "int", (50, 500)),
         ("mel_weight_decay_start", "int", (500, 5000)),
-        ("mel_weight_decay_rate", "float", (0.0001, 0.01)),
+        ("mel_weight_decay_rate", "float", (0.0, 0.01)),
         ("mpd_periods", "categorical", ([[2, 3, 5, 7, 11], [2, 3, 5, 7], [3, 5, 7, 11, 13]],)),
         ("msd_num_scales", "categorical", ([2, 3, 4],)),
         ("shuffle_buffer_size", "categorical", ([500, 1000, 2000],)),
@@ -182,13 +182,17 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
 
-            cur.execute("SELECT study_id, study_name, direction FROM studies LIMIT 1")
+            cur.execute("SELECT study_id, study_name FROM studies LIMIT 1")
             study_row = cur.fetchone()
             if not study_row:
                 return None
             study_name = study_row["study_name"]
             study_id = study_row["study_id"]
-            direction = "MINIMIZE" if study_row["direction"] == 1 else "MAXIMIZE"
+
+            # Direction is in a separate table in Optuna 4.x
+            cur.execute("SELECT direction FROM study_directions WHERE study_id = ? LIMIT 1", (study_id,))
+            dir_row = cur.fetchone()
+            direction = dir_row["direction"] if dir_row else "MINIMIZE"
 
             cur.execute("""
                 SELECT trial_id, number, state, datetime_start, datetime_complete
@@ -196,22 +200,41 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
             """, (study_id,))
             trial_rows = cur.fetchall()
 
-            STATE_MAP = {0: "RUNNING", 1: "COMPLETE", 2: "PRUNED", 3: "FAIL", 4: "WAITING"}
+            # Optuna 4.x uses VARCHAR state, older uses INT
+            STATE_INT_MAP = {0: "RUNNING", 1: "COMPLETE", 2: "PRUNED", 3: "FAIL", 4: "WAITING"}
+            def _parse_state(raw):
+                if isinstance(raw, int):
+                    return STATE_INT_MAP.get(raw, "UNKNOWN")
+                return str(raw).upper() if raw else "UNKNOWN"
+
             trials = []
             for tr in trial_rows:
                 trial_id = tr["trial_id"]
 
-                cur.execute("SELECT value FROM trial_values WHERE trial_id = ? AND objective_id = 0", (trial_id,))
+                cur.execute("SELECT value FROM trial_values WHERE trial_id = ? AND objective = 0", (trial_id,))
                 val_row = cur.fetchone()
                 value = val_row["value"] if val_row else None
 
-                cur.execute("SELECT param_name, param_value FROM trial_params WHERE trial_id = ?", (trial_id,))
+                cur.execute("SELECT param_name, param_value, distribution_json FROM trial_params WHERE trial_id = ?", (trial_id,))
                 params = {}
                 for pr in cur.fetchall():
+                    name = pr["param_name"]
+                    raw_val = pr["param_value"]  # stored as FLOAT
+                    dist_json = pr["distribution_json"]
+                    # Decode based on distribution type
                     try:
-                        params[pr["param_name"]] = json.loads(pr["param_value"])
+                        dist = json.loads(dist_json) if dist_json else {}
+                        dist_name = dist.get("name", "")
+                        if "Int" in dist_name:
+                            params[name] = int(raw_val)
+                        elif "Categorical" in dist_name:
+                            choices = dist.get("attributes", {}).get("choices", [])
+                            idx = int(raw_val)
+                            params[name] = choices[idx] if idx < len(choices) else raw_val
+                        else:
+                            params[name] = raw_val
                     except Exception:
-                        params[pr["param_name"]] = pr["param_value"]
+                        params[name] = raw_val
 
                 duration = None
                 if tr["datetime_start"] and tr["datetime_complete"]:
@@ -226,7 +249,7 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
                     "number": tr["number"],
                     "value": value,
                     "params": params,
-                    "state": STATE_MAP.get(tr["state"], "UNKNOWN"),
+                    "state": _parse_state(tr["state"]),
                     "duration_seconds": duration,
                 })
 

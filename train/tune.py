@@ -50,8 +50,8 @@ def _suggest_param(trial, name: str, kind: str, args: tuple):
     return None
 
 
-def _get_best_val_loss_from_jsonl(metrics_file: str, run_id_substr: str) -> float:
-    """Read best val_loss from JSONL metrics after training completes."""
+def _get_best_val_loss_from_jsonl(metrics_file: str, run_id: str) -> float:
+    """Read best val_loss from JSONL metrics for a specific run_id."""
     best = float("inf")
     if not os.path.exists(metrics_file):
         return best
@@ -66,7 +66,7 @@ def _get_best_val_loss_from_jsonl(metrics_file: str, run_id_substr: str) -> floa
                 continue
             if rec.get("metric_name") != "val_loss":
                 continue
-            if run_id_substr and run_id_substr not in str(rec.get("run_id", "")):
+            if run_id and rec.get("run_id") != run_id:
                 continue
             val = rec.get("metric_value")
             if val is not None and val < best:
@@ -152,6 +152,13 @@ def main():
         print(f"  Params: {trial.params}")
 
         try:
+            # Compute the run_id that training will use (same as build_run_id)
+            # Note: training scripts use cfg.get("config_path") which is None
+            # when called programmatically (not via CLI --config flag)
+            from omni.training_utils import build_run_id
+            script_name = module_name.split(".")[-1] + ".py"
+            trial_run_id = build_run_id(script_name, None, cfg["save_dir"])
+
             # Run training
             result = train_main(cfg)
 
@@ -159,17 +166,17 @@ def main():
             if isinstance(result, (int, float)) and result < 1e6:
                 val_loss = float(result)
             else:
-                # Fall back to reading JSONL
+                # Fall back to reading JSONL with the exact run_id
                 val_loss = _get_best_val_loss_from_jsonl(
                     metrics_path,
-                    run_id_substr=cfg["save_dir"],
+                    run_id=trial_run_id,
                 )
 
             if val_loss == float("inf"):
                 # No val loss found — use a large penalty
                 val_loss = 100.0
 
-            print(f"  Result: val_loss={val_loss:.4f}")
+            print(f"  Result: val_loss={val_loss:.4f} (run_id={trial_run_id[:8]})")
             return val_loss
 
         except optuna.TrialPruned:

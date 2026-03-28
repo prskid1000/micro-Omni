@@ -160,6 +160,25 @@ class APITester:
         self._run_section("Error Handling", self.test_error_handling)
         self._run_section("CORS Headers", self.test_cors)
         self._run_section("Content Types", self.test_content_types)
+        # Integration data validation (reads real files on disk)
+        self._run_section("Metrics Data Integrity", self.test_metrics_data_integrity)
+        self._run_section("Checkpoint Data Integrity", self.test_checkpoint_data_integrity)
+        self._run_section("Config Schema Integrity", self.test_config_schema_integrity)
+        self._run_section("Pipeline Dependency Integrity", self.test_pipeline_dependency_integrity)
+        self._run_section("Training Logs Integrity", self.test_training_logs_integrity)
+        self._run_section("Tuning Results Integrity", self.test_tuning_results_integrity)
+        self._run_section("Search Space Integrity", self.test_search_space_integrity)
+        # Cross-validation (config ↔ script ↔ tuning)
+        self._run_section("Config↔Script Param Coverage", self.test_config_training_param_coverage)
+        self._run_section("Tuning↔Config Coverage", self.test_tuning_space_covers_config)
+        self._run_section("Tuning Param Type Match", self.test_tuning_param_types_match_config)
+        self._run_section("Tuning Run ID", self.test_tuning_run_id_computation)
+        self._run_section("Tuning DB Schema", self.test_tuning_optuna_db_schema)
+        self._run_section("Metrics Run ID Consistency", self.test_metrics_run_id_consistency)
+        self._run_section("Config Value Sanity", self.test_config_value_sanity)
+        self._run_section("Tuning Range Sanity", self.test_tuning_range_sanity)
+        self._run_section("Config in Tuning Range", self.test_config_value_in_tuning_range)
+        self._run_section("All Stages Registered", self.test_all_stages_registered, skip_slow)
 
         self._print_summary()
         return self.failed == 0
@@ -710,9 +729,14 @@ class APITester:
         # Status
         self.check("GET /api/tuning/status", self.get("/api/tuning/status"))
 
-        # Results with no DB
-        r = self.check("Results with no DB", self.get("/api/tuning/results/A"))
-        self.assert_eq("No results = None", r.get("results"), None)
+        # Results (may have data if tuning was run previously)
+        r = self.check("Results for A", self.get("/api/tuning/results/A"))
+        results = r.get("results")
+        if results is not None:
+            self.assert_true("Results has no error", "error" not in results, str(results.get("error", "")))
+        # Stage B should not have been tuned
+        r_b = self.get("/api/tuning/results/B")
+        self.assert_eq("Stage B no results", r_b.get("results"), None)
 
         # Invalid stage
         self.check("Start bad stage -> 400", self.post("/api/tuning/start", {"stage": "Z"}), expect_ok=False)
@@ -805,6 +829,691 @@ class APITester:
             ct = headers.get("Content-Type", "")
             matched = any(e in ct for e in expected_cts)
             self.assert_true(f"{path} Content-Type has '{expected_cts[0]}'", matched, f"got '{ct}'")
+
+
+    # ══════════════════════════════════════════════════════════
+    # INTEGRATION DATA VALIDATION
+    # (tests that real data on disk is parsed correctly)
+    # ══════════════════════════════════════════════════════════
+
+    # ── Metrics JSONL Schema Validation ──────────────────────
+
+    def test_metrics_data_integrity(self):
+        """Validate actual JSONL rows have correct types and values."""
+        r = self.get("/api/metrics/files")
+        files = r.get("files", [])
+        if not files:
+            self.skip("Metrics data integrity", "no JSONL files on disk")
+            return
+
+        for fname in files:
+            r = self.get(f"/api/metrics/data?file={fname}")
+            rows = r.get("rows", [])
+            if not rows:
+                continue
+
+            self.assert_gt(f"{fname} has rows", len(rows), 0)
+
+            # Validate schema of first 5 rows
+            for i, row in enumerate(rows[:5]):
+                prefix = f"{fname}[{i}]"
+                # Required fields
+                self.assert_in(f"{prefix} has timestamp", "timestamp", row)
+                self.assert_in(f"{prefix} has metric_name", "metric_name", row)
+                self.assert_in(f"{prefix} has phase", "phase", row)
+
+                # Type checks
+                self.assert_true(f"{prefix} timestamp is string",
+                                isinstance(row.get("timestamp"), str), f"got {type(row.get('timestamp'))}")
+                self.assert_true(f"{prefix} metric_name is string",
+                                isinstance(row.get("metric_name"), str))
+                self.assert_in(f"{prefix} phase is valid",
+                              row.get("phase"), ["train", "val", "test", "event"])
+
+                # metric_value should be numeric (not NaN, not string)
+                mv = row.get("metric_value")
+                if row.get("phase") != "event":
+                    self.assert_true(f"{prefix} metric_value is number",
+                                    isinstance(mv, (int, float)), f"got {type(mv)}: {mv}")
+                    if isinstance(mv, float):
+                        import math
+                        self.assert_true(f"{prefix} metric_value not NaN", not math.isnan(mv))
+                        self.assert_true(f"{prefix} metric_value not Inf", not math.isinf(mv))
+
+                # step should be int or None
+                step = row.get("step")
+                if step is not None:
+                    self.assert_true(f"{prefix} step is int", isinstance(step, int), f"got {type(step)}")
+
+        # Summary should aggregate correctly
+        r = self.get("/api/metrics/summary")
+        summary = r.get("summary", {})
+        for fname, finfo in summary.items():
+            runs = finfo.get("runs", {})
+            for run_id, rinfo in runs.items():
+                metrics = rinfo.get("metrics", {})
+                for mname, mdata in metrics.items():
+                    self.assert_true(f"Summary {fname}/{mname} has value",
+                                    mdata.get("value") is not None)
+                    self.assert_true(f"Summary {fname}/{mname} has step",
+                                    mdata.get("step") is not None)
+
+    # ── Checkpoint Data Integrity ────────────────────────────
+
+    def test_checkpoint_data_integrity(self):
+        """Validate checkpoint scan returns correct metadata."""
+        r = self.get("/api/system/checkpoints")
+        ckpts = r.get("checkpoints", [])
+        if not ckpts:
+            self.skip("Checkpoint data integrity", "no checkpoints on disk")
+            return
+
+        for c in ckpts:
+            name = c.get("name", "?")
+            prefix = f"ckpt/{name}"
+
+            # Type validation
+            self.assert_true(f"{prefix} size_mb is number",
+                            isinstance(c.get("size_mb"), (int, float)))
+            self.assert_true(f"{prefix} has_config is bool",
+                            isinstance(c.get("has_config"), bool))
+            self.assert_true(f"{prefix} has_model is bool",
+                            isinstance(c.get("has_model"), bool))
+
+            # If has model, size should be > 0
+            if c.get("has_model"):
+                self.assert_gt(f"{prefix} model size > 0", c.get("size_mb", 0), 0)
+
+            # If has config, read it and validate
+            if c.get("has_config"):
+                r2 = self.get(f"/api/system/checkpoint-config/{name}")
+                if r2.get("ok"):
+                    cfg = r2.get("config", {})
+                    # All checkpoint configs should have basic keys
+                    for key in ["d_model", "n_layers"]:
+                        if key in cfg:
+                            self.assert_true(f"{prefix} config {key} is int",
+                                            isinstance(cfg[key], int))
+
+            # Metadata validation
+            meta = c.get("metadata")
+            if meta:
+                if "step" in meta:
+                    self.assert_true(f"{prefix} metadata step is int",
+                                    isinstance(meta["step"], int))
+                if "epoch" in meta:
+                    self.assert_true(f"{prefix} metadata epoch is int",
+                                    isinstance(meta["epoch"], int))
+
+    # ── Config Schema Validation ─────────────────────────────
+
+    def test_config_schema_integrity(self):
+        """Validate all configs have required fields with correct types."""
+        r = self.get("/api/system/configs")
+        configs = r.get("configs", [])
+
+        # Common fields all training configs must have
+        common_required = ["lr", "wd", "warmup_steps", "max_steps", "batch_size",
+                          "use_amp", "save_dir", "seed"]
+
+        for fname in configs:
+            if not fname.startswith("synthetic_"):
+                continue
+            r = self.get(f"/api/system/config/{fname}")
+            cfg = r.get("config", {})
+
+            # Check common fields (vocoder uses lr_g/lr_d instead of lr)
+            is_vocoder = "vocoder" in fname
+            for key in common_required:
+                if key == "lr" and is_vocoder:
+                    self.assert_in(f"{fname} has lr_g", "lr_g", cfg)
+                    self.assert_in(f"{fname} has lr_d", "lr_d", cfg)
+                else:
+                    self.assert_in(f"{fname} has {key}", key, cfg)
+
+            # Type checks for numeric params
+            for key in ["warmup_steps", "max_steps", "batch_size", "seed"]:
+                if key in cfg:
+                    self.assert_true(f"{fname} {key} is int",
+                                    isinstance(cfg[key], int), f"got {type(cfg[key])}: {cfg[key]}")
+
+            for key in ["wd", "ema_decay"]:
+                if key in cfg:
+                    self.assert_true(f"{fname} {key} is number",
+                                    isinstance(cfg[key], (int, float)))
+
+            # Boolean flags
+            for key in ["use_amp", "use_compile"]:
+                if key in cfg:
+                    self.assert_true(f"{fname} {key} is bool",
+                                    isinstance(cfg[key], bool))
+
+            # val_loss_threshold must be 999.0 for synthetic configs
+            if "val_loss_threshold" in cfg:
+                self.assert_eq(f"{fname} val_loss_threshold = 999.0",
+                              cfg["val_loss_threshold"], 999.0)
+
+    # ── Pipeline Dependency Integrity ────────────────────────
+
+    def test_pipeline_dependency_integrity(self):
+        """Validate pipeline dependencies are consistent with actual checkpoint state."""
+        r = self.get("/api/training/pipeline")
+        stages = r.get("stages", {})
+
+        for stage_id, s in stages.items():
+            # Blocked stages must list which stages block them
+            if s["status"] == "blocked":
+                self.assert_gt(f"Stage {stage_id} blocked_by not empty",
+                              len(s.get("blocked_by", [])), 0)
+                # Each blocker should actually lack a checkpoint
+                for blocker in s["blocked_by"]:
+                    blocker_info = stages.get(blocker, {})
+                    self.assert_eq(f"Stage {stage_id} blocker {blocker} has no checkpoint",
+                                  blocker_info.get("has_checkpoint"), False)
+
+            # Done stages must have a checkpoint
+            if s["status"] == "done":
+                self.assert_true(f"Stage {stage_id} done -> has checkpoint",
+                                s.get("has_checkpoint"))
+
+            # Running stages must have process info
+            if s["status"] == "running":
+                self.assert_true(f"Stage {stage_id} running -> has process",
+                                s.get("process") is not None)
+
+    # ── Training Logs Integrity ──────────────────────────────
+
+    def test_training_logs_integrity(self):
+        """Validate training log endpoints return parseable content."""
+        for stage in ["A", "B", "C", "D", "E", "F", "G"]:
+            r = self.get(f"/api/training/logs/{stage}")
+            self.check(f"Logs for stage {stage}", r)
+            lines = r.get("lines", [])
+            # Lines should be strings
+            if lines:
+                self.assert_true(f"Stage {stage} log lines are strings",
+                                all(isinstance(l, str) for l in lines))
+                # No null bytes or binary garbage
+                self.assert_true(f"Stage {stage} logs are text",
+                                all("\x00" not in l for l in lines))
+
+    # ── Tuning Results Integrity ─────────────────────────────
+
+    def test_tuning_results_integrity(self):
+        """Validate tuning results from actual Optuna DB (if exists)."""
+        for stage in ["A", "B", "C", "D", "E", "F", "G"]:
+            r = self.get(f"/api/tuning/results/{stage}")
+            self.check(f"Tuning results {stage}", r)
+            results = r.get("results")
+
+            if results is None:
+                continue  # No DB for this stage
+
+            if "error" in results:
+                self._record(f"Tuning {stage} DB read error: {results['error']}", False)
+                continue
+
+            # Validate structure
+            self.assert_in(f"Tuning {stage} has study_name", "study_name", results)
+            self.assert_in(f"Tuning {stage} has direction", "direction", results)
+            self.assert_in(f"Tuning {stage} has n_trials", "n_trials", results)
+            self.assert_in(f"Tuning {stage} has trials", "trials", results)
+
+            direction = results.get("direction", "")
+            self.assert_in(f"Tuning {stage} direction valid", direction, ["MINIMIZE", "MAXIMIZE"])
+
+            trials = results.get("trials", [])
+            for t in trials[:5]:
+                # Trial schema
+                self.assert_in(f"Trial has number", "number", t)
+                self.assert_in(f"Trial has state", "state", t)
+                self.assert_in(f"Trial has params", "params", t)
+                self.assert_in(f"Trial state valid", t.get("state"),
+                              ["COMPLETE", "RUNNING", "PRUNED", "FAIL", "WAITING"])
+
+                # Params should be a dict with correct types
+                params = t.get("params", {})
+                self.assert_true(f"Trial params is dict", isinstance(params, dict))
+                for k, v in params.items():
+                    self.assert_true(f"Param '{k}' is not None", v is not None, f"got None")
+
+                # Completed trials must have a numeric value
+                if t.get("state") == "COMPLETE":
+                    val = t.get("value")
+                    self.assert_true(f"Complete trial has numeric value",
+                                    isinstance(val, (int, float)), f"got {type(val)}")
+
+            # Best trial validation
+            best = results.get("best_trial")
+            if best:
+                self.assert_in(f"Best trial has number", "number", best)
+                self.assert_in(f"Best trial has value", "value", best)
+                self.assert_in(f"Best trial has params", "params", best)
+                self.assert_true(f"Best trial value is number",
+                                isinstance(best.get("value"), (int, float)))
+
+    # ── Search Space Integrity ───────────────────────────────
+
+    def test_search_space_integrity(self):
+        """Validate all search spaces have well-formed param definitions."""
+        r = self.get("/api/tuning/spaces")
+        spaces = r.get("spaces", {})
+
+        valid_types = {"float_log", "float", "int", "categorical"}
+
+        for stage_id, space in spaces.items():
+            params = space.get("params", [])
+            self.assert_gt(f"Stage {stage_id} has params", len(params), 0)
+
+            seen_names = set()
+            for p in params:
+                name = p.get("name", "")
+                ptype = p.get("type", "")
+
+                # No duplicate param names
+                self.assert_true(f"Stage {stage_id}/{name} not duplicate",
+                                name not in seen_names, f"duplicate: {name}")
+                seen_names.add(name)
+
+                # Valid type
+                self.assert_in(f"Stage {stage_id}/{name} type valid", ptype, valid_types)
+
+                # Range validation
+                if ptype in ("float_log", "float", "int"):
+                    low = p.get("low")
+                    high = p.get("high")
+                    self.assert_true(f"Stage {stage_id}/{name} has low",
+                                    low is not None)
+                    self.assert_true(f"Stage {stage_id}/{name} has high",
+                                    high is not None)
+                    if low is not None and high is not None:
+                        self.assert_true(f"Stage {stage_id}/{name} low < high",
+                                        low < high, f"{low} >= {high}")
+                elif ptype == "categorical":
+                    choices = p.get("choices", [])
+                    if isinstance(choices, list):
+                        self.assert_gt(f"Stage {stage_id}/{name} has choices",
+                                      len(choices), 0)
+                    else:
+                        self._record(f"Stage {stage_id}/{name} choices is list", False,
+                                    f" -> got {type(choices)}")
+
+
+    # ══════════════════════════════════════════════════════════
+    # CROSS-VALIDATION: Config ↔ Training Script ↔ Tuning Space
+    # ══════════════════════════════════════════════════════════
+
+    def test_config_training_param_coverage(self):
+        """Every cfg.get() param in training scripts must exist in its config."""
+        import re
+
+        scripts = {
+            "A": ("train/train_thinker.py", "synthetic_thinker.json"),
+            "B": ("train/train_audio_enc.py", "synthetic_audio_enc.json"),
+            "C": ("train/train_vision.py", "synthetic_vision.json"),
+            "D": ("train/train_talker.py", "synthetic_talker.json"),
+            "E": ("train/sft_omni.py", "synthetic_omni_sft.json"),
+            "F": ("train/train_vocoder.py", "synthetic_vocoder.json"),
+            "G": ("train/train_ocr.py", "synthetic_ocr.json"),
+        }
+
+        DYNAMIC_PARAMS = {
+            "config_path", "ctc_vocab_size", "max_mel_length", "max_text_len",
+            "max_mel_length_sample_size", "recalculate_dataset_stats",
+            "max_text_length", "max_text_length_percentile",
+            "thinker_d_model", "dataset_sample_size", "max_audio_length",
+        }
+
+        pat = re.compile(r'cfg\.get\(\s*["\x27]([^"\x27]+)["\x27]')
+
+        for stage, (script_path, config_name) in sorted(scripts.items()):
+            r = self.get(f"/api/system/config/{config_name}")
+            if not r.get("ok"):
+                self.skip(f"Stage {stage} config", "not readable")
+                continue
+            cfg = r.get("config", {})
+            cfg_keys = set(cfg.keys())
+            for k, v in cfg.items():
+                if isinstance(v, dict):
+                    for nk in v:
+                        cfg_keys.add(nk)
+
+            script_keys = set()
+            try:
+                with open(script_path, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        for m in pat.finditer(line):
+                            script_keys.add(m.group(1))
+            except FileNotFoundError:
+                self.skip(f"Stage {stage} script", "not found")
+                continue
+
+            missing = script_keys - cfg_keys - DYNAMIC_PARAMS
+            if missing:
+                for m in sorted(missing):
+                    self._record(f"Stage {stage} config missing '{m}'", False, " (used in script)")
+            else:
+                self.check(f"Stage {stage} all script params in config ({len(script_keys)} params)", r)
+
+    def test_tuning_space_covers_config(self):
+        """Every tuning param must exist in its stage's config."""
+        r = self.get("/api/tuning/spaces")
+        spaces = r.get("spaces", {})
+
+        config_map = {
+            "A": "synthetic_thinker.json", "B": "synthetic_audio_enc.json",
+            "C": "synthetic_vision.json", "D": "synthetic_talker.json",
+            "E": "synthetic_omni_sft.json", "F": "synthetic_vocoder.json",
+            "G": "synthetic_ocr.json",
+        }
+
+        for stage_id, space in spaces.items():
+            config_name = config_map.get(stage_id)
+            if not config_name:
+                continue
+
+            r2 = self.get(f"/api/system/config/{config_name}")
+            cfg = r2.get("config", {})
+            cfg_keys = set(cfg.keys())
+            for k, v in cfg.items():
+                if isinstance(v, dict):
+                    for nk in v:
+                        cfg_keys.add(nk)
+
+            for p in space.get("params", []):
+                name = p["name"]
+                self.assert_in(f"Tune {stage_id}/{name} in config", name, cfg_keys)
+
+    def test_tuning_param_types_match_config(self):
+        """Tuning param types must be compatible with config value types."""
+        r = self.get("/api/tuning/spaces")
+        spaces = r.get("spaces", {})
+
+        config_map = {
+            "A": "synthetic_thinker.json", "B": "synthetic_audio_enc.json",
+            "C": "synthetic_vision.json", "D": "synthetic_talker.json",
+            "E": "synthetic_omni_sft.json", "F": "synthetic_vocoder.json",
+            "G": "synthetic_ocr.json",
+        }
+
+        for stage_id, space in spaces.items():
+            config_name = config_map.get(stage_id)
+            if not config_name:
+                continue
+
+            r2 = self.get(f"/api/system/config/{config_name}")
+            cfg = r2.get("config", {})
+
+            for p in space.get("params", []):
+                name = p["name"]
+                ptype = p["type"]
+                cfg_val = cfg.get(name)
+                if cfg_val is None:
+                    for v in cfg.values():
+                        if isinstance(v, dict) and name in v:
+                            cfg_val = v[name]
+                            break
+                if cfg_val is None:
+                    continue
+
+                if ptype in ("float_log", "float"):
+                    self.assert_true(f"Tune {stage_id}/{name} cfg is number",
+                                    isinstance(cfg_val, (int, float)),
+                                    f"got {type(cfg_val).__name__}: {cfg_val}")
+                elif ptype == "int":
+                    self.assert_true(f"Tune {stage_id}/{name} cfg is int",
+                                    isinstance(cfg_val, (int, float)),
+                                    f"got {type(cfg_val).__name__}: {cfg_val}")
+                elif ptype == "categorical":
+                    choices = p.get("choices", [])
+                    if isinstance(choices, list) and choices:
+                        choice_types = set(type(c) for c in choices)
+                        # Allow int/float interchangeability
+                        if isinstance(cfg_val, int):
+                            choice_types.add(int)
+                            choice_types.add(float)
+                        if isinstance(cfg_val, float):
+                            choice_types.add(int)
+                            choice_types.add(float)
+                        self.assert_in(f"Tune {stage_id}/{name} cfg type compatible",
+                                      type(cfg_val), choice_types)
+
+    def test_tuning_run_id_computation(self):
+        """Verify run_id is deterministic and unique per trial."""
+        try:
+            from omni.training_utils import build_run_id
+        except ImportError:
+            self.skip("build_run_id import", "omni not importable")
+            return
+
+        stages = {
+            "A": "train_thinker.py", "B": "train_audio_enc.py",
+            "C": "train_vision.py", "D": "train_talker.py",
+            "E": "sft_omni.py", "F": "train_vocoder.py",
+            "G": "train_ocr.py",
+        }
+
+        for stage, script_name in stages.items():
+            rid0 = build_run_id(script_name, None, f"checkpoints/tune_{stage}/trial_0")
+            rid1 = build_run_id(script_name, None, f"checkpoints/tune_{stage}/trial_1")
+            self.assert_true(f"Stage {stage} run_id is 16-char hex",
+                            len(rid0) == 16 and all(c in "0123456789abcdef" for c in rid0))
+            self.assert_true(f"Stage {stage} trial_0 != trial_1", rid0 != rid1)
+            # Same inputs = same output (deterministic)
+            rid0b = build_run_id(script_name, None, f"checkpoints/tune_{stage}/trial_0")
+            self.assert_eq(f"Stage {stage} run_id deterministic", rid0, rid0b)
+
+    def test_tuning_optuna_db_schema(self):
+        """If Optuna DB exists, validate the read produces correct schema."""
+        for stage in ["A", "B", "C", "D", "E", "F", "G"]:
+            r = self.get(f"/api/tuning/results/{stage}")
+            results = r.get("results")
+            if results is None:
+                continue
+            if "error" in results:
+                self._record(f"Tuning {stage} DB read error", False, f": {results['error']}")
+                continue
+
+            self.assert_eq(f"Tuning {stage} direction", results.get("direction"), "MINIMIZE")
+
+            # Validate trial params match search space
+            r2 = self.get("/api/tuning/spaces")
+            space_params = set(p["name"] for p in r2.get("spaces", {}).get(stage, {}).get("params", []))
+            for trial in results.get("trials", [])[:3]:
+                trial_params = set(trial.get("params", {}).keys())
+                extra = trial_params - space_params
+                self.assert_eq(f"Tune {stage} trial #{trial['number']} no extra params", len(extra), 0)
+
+                if trial.get("state") == "COMPLETE":
+                    val = trial.get("value")
+                    self.assert_true(f"Tune {stage} trial #{trial['number']} value is number",
+                                    isinstance(val, (int, float)))
+
+    def test_metrics_run_id_consistency(self):
+        """Verify metrics have consistent run_ids and monotonic steps."""
+        r = self.get("/api/metrics/files")
+        for fname in r.get("files", []):
+            r2 = self.get(f"/api/metrics/data?file={fname}")
+            rows = r2.get("rows", [])
+            if len(rows) < 2:
+                continue
+
+            runs = {}
+            for row in rows:
+                rid = row.get("run_id", "")
+                if rid not in runs:
+                    runs[rid] = []
+                runs[rid].append(row)
+
+            for rid, run_rows in runs.items():
+                train_rows = [r for r in run_rows if r.get("phase") == "train" and r.get("metric_name") == "loss"]
+                if len(train_rows) < 2:
+                    continue
+                max_step = max(r.get("step", 0) for r in train_rows)
+                self.assert_gt(f"{fname}/{rid[:8]} max step > 0", max_step, 0)
+
+    def test_config_value_sanity(self):
+        """Validate all config values are within sane ranges."""
+        config_map = {
+            "A": "synthetic_thinker.json", "B": "synthetic_audio_enc.json",
+            "C": "synthetic_vision.json", "D": "synthetic_talker.json",
+            "E": "synthetic_omni_sft.json", "F": "synthetic_vocoder.json",
+            "G": "synthetic_ocr.json",
+        }
+
+        for stage, config_name in sorted(config_map.items()):
+            r = self.get(f"/api/system/config/{config_name}")
+            cfg = r.get("config", {})
+            s = f"{stage}"
+
+            # LR
+            lr = cfg.get("lr") or cfg.get("lr_g")
+            if lr is not None:
+                self.assert_true(f"{s} lr > 0", lr > 0, f"lr={lr}")
+                self.assert_true(f"{s} lr <= 1", lr <= 1, f"lr={lr}")
+
+            # Weight decay
+            wd = cfg.get("wd")
+            if wd is not None:
+                self.assert_true(f"{s} wd >= 0", wd >= 0, f"wd={wd}")
+
+            # Ranges
+            for key, lo, hi in [
+                ("dropout", 0, 1), ("label_smoothing", 0, 1), ("ema_decay", 0, 1), ("val_split", 0, 1),
+            ]:
+                v = cfg.get(key)
+                if v is not None:
+                    self.assert_true(f"{s} {key} in [{lo},{hi}]", lo <= v <= hi, f"{key}={v}")
+
+            # Positive ints
+            for key in ["warmup_steps", "max_steps", "batch_size", "seed", "checkpoint_freq", "val_freq"]:
+                v = cfg.get(key)
+                if v is not None:
+                    self.assert_true(f"{s} {key} > 0", v > 0, f"{key}={v}")
+
+            # Booleans
+            self.assert_eq(f"{s} use_compile=false", cfg.get("use_compile"), False)
+            self.assert_eq(f"{s} use_amp=true", cfg.get("use_amp"), True)
+            self.assert_eq(f"{s} val_loss_threshold=999", cfg.get("val_loss_threshold"), 999.0)
+
+            # Architecture: d_model divisible by n_heads
+            dm = cfg.get("d_model")
+            nh = cfg.get("n_heads")
+            if dm and nh:
+                self.assert_eq(f"{s} d_model%n_heads=0", dm % nh, 0)
+
+            # Stage-specific
+            if stage == "A":
+                kv = cfg.get("kv_groups")
+                if kv and nh:
+                    self.assert_eq(f"{s} n_heads%kv_groups=0", nh % kv, 0)
+                self.assert_true(f"{s} rope_theta>0", cfg.get("rope_theta", 1) > 0)
+
+            if stage == "C":
+                temp = cfg.get("temperature")
+                if temp:
+                    self.assert_true(f"{s} temperature in (0,1]", 0 < temp <= 1, f"temp={temp}")
+
+            if stage == "F":
+                for k in ["lr_g", "lr_d", "lambda_mel"]:
+                    v = cfg.get(k)
+                    if v is not None:
+                        self.assert_true(f"{s} {k}>0", v > 0, f"{k}={v}")
+
+    def test_tuning_range_sanity(self):
+        """Validate tuning search space ranges are sane."""
+        r = self.get("/api/tuning/spaces")
+        spaces = r.get("spaces", {})
+
+        for stage_id, space in spaces.items():
+            for p in space.get("params", []):
+                name, ptype = p["name"], p["type"]
+                prefix = f"{stage_id}/{name}"
+
+                if ptype in ("float_log", "float"):
+                    lo, hi = p.get("low"), p.get("high")
+                    if lo is not None and hi is not None:
+                        self.assert_true(f"{prefix} low<high", lo < hi, f"{lo}>={hi}")
+                    if ptype == "float_log" and lo is not None:
+                        self.assert_true(f"{prefix} log low>0", lo > 0, f"low={lo}")
+                    # Known param sanity
+                    if "lr" in name and "mult" not in name and hi is not None:
+                        self.assert_true(f"{prefix} lr max<=1", hi <= 1, f"max={hi}")
+                    if name == "dropout" and hi is not None:
+                        self.assert_true(f"{prefix} dropout max<=0.5", hi <= 0.5, f"max={hi}")
+
+                elif ptype == "int":
+                    lo, hi = p.get("low"), p.get("high")
+                    if lo is not None:
+                        self.assert_true(f"{prefix} int low>=0", lo >= 0, f"low={lo}")
+
+    def test_config_value_in_tuning_range(self):
+        """Config defaults should be within or near tuning search ranges."""
+        r = self.get("/api/tuning/spaces")
+        spaces = r.get("spaces", {})
+
+        config_map = {
+            "A": "synthetic_thinker.json", "B": "synthetic_audio_enc.json",
+            "C": "synthetic_vision.json", "D": "synthetic_talker.json",
+            "E": "synthetic_omni_sft.json", "F": "synthetic_vocoder.json",
+            "G": "synthetic_ocr.json",
+        }
+
+        for stage_id, space in spaces.items():
+            config_name = config_map.get(stage_id)
+            if not config_name:
+                continue
+            r2 = self.get(f"/api/system/config/{config_name}")
+            cfg = r2.get("config", {})
+
+            for p in space.get("params", []):
+                name, ptype = p["name"], p["type"]
+                val = cfg.get(name)
+                if val is None:
+                    for v in cfg.values():
+                        if isinstance(v, dict) and name in v:
+                            val = v[name]
+                            break
+                if val is None:
+                    continue
+
+                prefix = f"{stage_id}/{name}"
+                if ptype in ("float_log", "float"):
+                    lo, hi = p.get("low", 0), p.get("high", 1)
+                    if isinstance(val, (int, float)) and val != 0:
+                        self.assert_true(f"{prefix} cfg={val} near range [{lo},{hi}]",
+                                        val >= lo * 0.1 and val <= hi * 10,
+                                        f"val={val} outside 10x of [{lo},{hi}]")
+
+    def test_all_stages_registered(self):
+        """Verify all training/testing scripts are registered in their APIs."""
+        # Training
+        r = self.get("/api/training/pipeline")
+        stages = r.get("stages", {})
+        expected_modules = {
+            "A": "train.train_thinker", "B": "train.train_audio_enc",
+            "C": "train.train_vision", "D": "train.train_talker",
+            "E": "train.sft_omni", "F": "train.train_vocoder",
+            "G": "train.train_ocr",
+        }
+        for stage_id, module in expected_modules.items():
+            self.assert_eq(f"Stage {stage_id} module", stages[stage_id]["module"], module)
+
+        # Testing
+        test_scripts = ["test_thinker", "test_audio_enc", "test_vision",
+                       "test_talker", "test_vocoder", "test_ocr", "test_sft"]
+        for script in test_scripts:
+            r = self.post("/api/testing/run", {"script": script, "num_samples": 1})
+            # Should either start (ok) or fail with GPU busy — not 400 bad script
+            self.assert_true(f"Test script {script} registered",
+                            r.get("ok") or "GPU busy" in str(r.get("error", "")),
+                            f"got: {r.get('error', '')}")
+            # Stop it if started
+            if r.get("ok"):
+                time.sleep(0.5)
+                self.wait_gpu_free(timeout=10)
+
+    test_all_stages_registered._slow = True
 
 
 def main():
