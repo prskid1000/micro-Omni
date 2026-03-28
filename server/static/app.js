@@ -17,6 +17,9 @@ const state = {
   gpuData: null,
   summaryData: null,
   checkpointData: null,
+  gpuHistory: [],
+  gpuSparkChart: null,
+  logAutoRefreshTimer: null,
 };
 
 // ── Toast notifications ─────────────────────────────────────
@@ -27,10 +30,37 @@ function showToast(message, type = "info", duration = 5000) {
   toast.className = `toast ${type}`;
   const icon = type === "success" ? "&#10003;" : type === "error" ? "&#10007;" : type === "warning" ? "&#9888;" : "&#8505;";
   toast.innerHTML = `<span>${icon}</span> ${message}`;
+  toast.addEventListener("click", () => toast.remove());
   stack.appendChild(toast);
   if (duration > 0) setTimeout(() => toast.remove(), duration);
   // Max 3 visible
   while (stack.children.length > 3) stack.children[0].remove();
+}
+
+// ── Debounce helper ─────────────────────────────────────────
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+}
+
+// ── Relative timestamp helper ───────────────────────────────
+function timeAgo(iso) {
+  if (!iso) return "";
+  const sec = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (sec < 60) return Math.round(sec) + "s ago";
+  if (sec < 3600) return Math.round(sec / 60) + "m ago";
+  if (sec < 86400) return Math.round(sec / 3600) + "h ago";
+  return Math.round(sec / 86400) + "d ago";
+}
+
+// ── Desktop notifications (#19) ─────────────────────────────
+function _desktopNotify(body) {
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission === "granted") {
+    new Notification("micro-Omni", { body });
+  } else if (Notification.permission !== "denied") {
+    Notification.requestPermission();
+  }
 }
 
 // ── API client ──────────────────────────────────────────────
@@ -82,15 +112,18 @@ const dom = {
   testStatus:    $("#testStatus"),
 };
 
-// ── ECharts init ────────────────────────────────────────────
+// ── ECharts registry & init ─────────────────────────────────
+const chartRegistry = [];
+
+function registerChart(instance) {
+  chartRegistry.push(instance);
+  return instance;
+}
+
 function initChart() {
-  state.chart = echarts.init($("#chart"), null, { renderer: "canvas" });
-  // Resize ALL echarts instances on window resize
+  state.chart = registerChart(echarts.init($("#chart"), null, { renderer: "canvas" }));
   window.addEventListener("resize", () => {
-    document.querySelectorAll("div").forEach(el => {
-      const inst = echarts.getInstanceByDom(el);
-      if (inst) inst.resize();
-    });
+    chartRegistry.forEach(c => { if (!c.isDisposed()) c.resize(); });
   });
 }
 
@@ -176,6 +209,24 @@ function updateChart() {
       });
     }
     idx++;
+  }
+
+  // Event annotations (#15): find events and add markLines to first series
+  const eventRows = state.allRows.filter(r => r.phase === "event");
+  const xKey2 = xKey; // capture for event filtering
+  const eventMarkLines = eventRows
+    .filter(r => Number.isFinite(Number(r[xKey2] ?? 0)))
+    .map(r => ({
+      xAxis: Number(r[xKey2]),
+      label: { formatter: r.metric_name || "event", fontSize: 9, color: "#f59e0b" },
+      lineStyle: { color: "rgba(245,158,11,0.4)", type: "dashed", width: 1 },
+    }));
+  if (eventMarkLines.length > 0 && series.length > 0) {
+    series[0].markLine = {
+      silent: true,
+      symbol: "none",
+      data: eventMarkLines,
+    };
   }
 
   const option = {
@@ -276,8 +327,14 @@ function buildChips(containerId, selectId, values) {
   const sel = $(`#${selectId}`);
   if (!container || !sel) return;
 
-  // Preserve current selection
-  const prevActive = new Set([...sel.selectedOptions].map(o => o.value));
+  // Preserve current selection, or restore from localStorage (#17)
+  let prevActive = new Set([...sel.selectedOptions].map(o => o.value));
+  if (prevActive.size === 0) {
+    try {
+      const saved = localStorage.getItem("filters_" + containerId);
+      if (saved) prevActive = new Set(JSON.parse(saved).filter(v => values.includes(v)));
+    } catch {}
+  }
 
   // Build hidden select
   sel.innerHTML = values.map(v =>
@@ -300,6 +357,8 @@ function buildChips(containerId, selectId, values) {
         [...container.querySelectorAll(".chip.active")].map(c => c.dataset.value)
       );
       [...sel.options].forEach(opt => { opt.selected = activeValues.has(opt.value); });
+      // Persist to localStorage (#17)
+      try { localStorage.setItem("filters_" + containerId, JSON.stringify([...activeValues])); } catch {}
       updateChart();
       renderLatestValues();
     });
@@ -360,12 +419,19 @@ function renderPipeline(stages) {
         actions += ` <button class="btn btn-sm btn-danger" onclick="clearStage('${id}')" title="Delete and restart">Clear</button>`;
         break;
       case "done":
-        actions = `<button class="btn btn-sm" onclick="startStage('${id}')">Retrain</button>`;
+        actions = `<button class="btn btn-sm" onclick="retrainStage('${id}')">Retrain</button>`;
         actions += ` <button class="btn btn-sm btn-danger" onclick="clearStage('${id}')" title="Delete checkpoint files">Clear</button>`;
         break;
       case "blocked":
         actions = `<span style="font-size:10px;color:var(--warning)">Needs: ${s.blocked_by.join(", ")}</span>`;
         break;
+    }
+
+    // Progress bar for running stages
+    let progressBar = "";
+    if (s.status === "running" && meta && maxSteps && meta.step) {
+      const pct = Math.min(100, Math.round((meta.step / maxSteps) * 100));
+      progressBar = `<div class="stage-progress" style="width:${pct}%" title="${meta.step}/${maxSteps} (${pct}%)"></div>`;
     }
 
     return `
@@ -377,6 +443,7 @@ function renderPipeline(stages) {
           ${statusLine}
         </div>
         <div class="stage-actions">${actions}</div>
+        ${progressBar}
       </div>
     `;
   }).join("");
@@ -415,9 +482,62 @@ window.clearStage = async function(stage) {
   poll();
 };
 
+window.retrainStage = async function(stage) {
+  if (!confirm(`Retrain stage ${stage} from scratch?`)) return;
+  startStage(stage);
+};
+
+window.startAllIdle = async function() {
+  if (!state.pipelineData) return;
+  const idleStages = Object.entries(state.pipelineData)
+    .filter(([_, s]) => s.status === "idle")
+    .map(([id]) => id);
+  if (!idleStages.length) {
+    showToast("No idle stages to start", "warning");
+    return;
+  }
+  if (!confirm(`Start ${idleStages.length} idle stage(s): ${idleStages.join(", ")}?`)) return;
+  for (const stage of idleStages) {
+    const res = await api.post("/api/training/start", { stage });
+    if (res.ok) {
+      showToast(`Stage ${stage} started (PID ${res.pid})`, "success");
+    } else {
+      showToast(`Stage ${stage}: ${res.error || "Failed"}`, "error");
+      break; // GPU busy, stop trying
+    }
+    // Wait briefly for GPU lock
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  poll();
+};
+
 // ── Summary cards ───────────────────────────────────────────
 function updateSummaryCards() {
-  const rows = state.allRows.filter(r => r.phase !== "event");
+  const allNonEvent = state.allRows.filter(r => r.phase !== "event");
+  if (!allNonEvent.length) return;
+
+  // Stage-aware filtering (#14): detect running stage and filter to its metrics file
+  const stageToFile = {
+    A: "train_thinker.jsonl", B: "train_audio_enc.jsonl", C: "train_vision.jsonl",
+    D: "train_talker.jsonl", E: "sft_omni.jsonl", F: "train_vocoder.jsonl", G: "train_ocr.jsonl",
+  };
+  let activeFile = null;
+  if (state.pipelineData) {
+    // Find running stage
+    for (const [id, s] of Object.entries(state.pipelineData)) {
+      if (s.status === "running") { activeFile = stageToFile[id]; break; }
+    }
+    // If nothing running, find most recently active (done/stopped)
+    if (!activeFile) {
+      for (const [id, s] of Object.entries(state.pipelineData)) {
+        if (s.status === "done" || s.status === "stopped") { activeFile = stageToFile[id]; break; }
+      }
+    }
+  }
+
+  const rows = activeFile
+    ? allNonEvent.filter(r => r._file === activeFile)
+    : allNonEvent;
   if (!rows.length) return;
 
   // Find latest training metrics
@@ -475,6 +595,30 @@ function updateSummaryCards() {
     const g = state.gpuData.gpu;
     const el = setCard("cardGPUMem", `${(g.memory_used_mb / 1024).toFixed(1)}/${(g.memory_total_mb / 1024).toFixed(0)} GB`);
   }
+
+  // Loss Trend (#13) — rolling delta of last 20 train loss values
+  if (trainRows.length >= 2) {
+    const sorted = [...trainRows].sort((a, b) => (a.step || 0) - (b.step || 0));
+    const recent = sorted.slice(-20).map(r => Number(r.metric_value ?? 0));
+    if (recent.length >= 2) {
+      const delta = recent[recent.length - 1] - recent[0];
+      const sign = delta < -0.001 ? "-" : delta > 0.001 ? "+" : "";
+      const el = setCard("cardLossTrend", sign + Math.abs(delta).toFixed(4));
+      if (el) {
+        el.className = "card-value";
+        if (delta < -0.001) el.style.color = "var(--success)";
+        else if (delta > 0.001) el.style.color = "var(--danger)";
+        else el.style.color = "var(--warning)";
+      }
+    }
+  }
+
+  // GPU sparkline (#21) — store readings in circular buffer
+  if (state.gpuData && state.gpuData.gpu) {
+    state.gpuHistory.push(state.gpuData.gpu.utilization_percent || 0);
+    if (state.gpuHistory.length > 60) state.gpuHistory.shift();
+    renderGPUSparkline();
+  }
 }
 
 function findMaxSteps() {
@@ -508,7 +652,7 @@ function updateGPUBadge() {
   }
   const g = state.gpuData.gpu;
   dom.gpuBadge.textContent = `GPU: ${(g.memory_used_mb / 1024).toFixed(1)}/${(g.memory_total_mb / 1024).toFixed(0)} GB  ${g.utilization_percent}%  ${g.temperature_c}C`;
-  dom.gpuBadge.className = "gpu-badge" + (g.memory_percent > 90 ? " warn" : g.memory_percent > 95 ? " error" : "");
+  dom.gpuBadge.className = "gpu-badge" + (g.memory_percent > 95 ? " error" : g.memory_percent > 80 ? " warn" : "");
 }
 
 // ── Tab: Latest Values ──────────────────────────────────────
@@ -525,17 +669,41 @@ function renderLatestValues() {
     String(a.metric_name).localeCompare(String(b.metric_name))
   );
 
+  // Build a map of previous values for color coding (#12)
+  const prevValues = new Map();
+  for (const r of rows) {
+    const key = `${r._file}|${r.metric_name}`;
+    const cur = prevValues.get(key);
+    if (!cur) { prevValues.set(key, [r]); }
+    else { cur.push(r); }
+  }
+
   const tbody = $("#latestTable tbody");
-  tbody.innerHTML = sorted.map(r => `
+  tbody.innerHTML = sorted.map(r => {
+    const key = `${r._file}|${r.metric_name}`;
+    const history = (prevValues.get(key) || []).sort((a, b) => (a.step || 0) - (b.step || 0));
+    let valStyle = "";
+    if (history.length >= 2) {
+      const prev = history[history.length - 2];
+      const cur = r;
+      const pv = Number(prev.metric_value ?? 0);
+      const cv = Number(cur.metric_value ?? 0);
+      if (cv < pv) valStyle = ' style="color:var(--success)"'; // improving (lower)
+      else if (cv > pv) valStyle = ' style="color:var(--warning)"'; // worsening
+    }
+    const ts = r.timestamp || "";
+    const fullTs = ts ? ts.replace("T", " ").slice(0, 19) : "";
+    return `
     <tr>
       <td style="color:var(--accent-2)">${r.metric_name || ""}</td>
-      <td>${Number(r.metric_value ?? 0).toFixed(6)}</td>
+      <td${valStyle}>${Number(r.metric_value ?? 0).toFixed(6)}</td>
       <td>${r.step ?? ""}</td>
       <td>${r.epoch ?? ""}</td>
       <td>${r.lr != null ? Number(r.lr).toExponential(2) : ""}</td>
-      <td>${r.timestamp ? r.timestamp.replace("T", " ").slice(0, 19) : ""}</td>
+      <td title="${fullTs}">${timeAgo(ts) || fullTs}</td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 }
 
 // ── Tab: Checkpoints ────────────────────────────────────────
@@ -567,18 +735,15 @@ async function renderHyperparams() {
     return;
   }
 
-  // Load full configs for each checkpoint that has one
-  const cards = [];
-  for (const ckpt of state.checkpointData) {
-    if (!ckpt.has_config) continue;
-    const res = await api.get(`/api/system/config/${ckpt.name}`);
-    if (!res.ok) {
-      // Try reading from checkpoint dir config
-      cards.push({ name: ckpt.name, config: ckpt.config || {} });
-      continue;
-    }
-    cards.push({ name: ckpt.name, config: res.config });
-  }
+  // Load full configs for each checkpoint that has one (parallel)
+  const ckptsWithConfig = state.checkpointData.filter(c => c.has_config);
+  const configResponses = await Promise.all(
+    ckptsWithConfig.map(c => api.get(`/api/system/config/${c.name}`))
+  );
+  const cards = ckptsWithConfig.map((ckpt, i) => {
+    const res = configResponses[i];
+    return { name: ckpt.name, config: res.ok ? res.config : (ckpt.config || {}) };
+  });
 
   container.innerHTML = cards.map(c => {
     const rows = Object.entries(c.config).map(([k, v]) =>
@@ -596,24 +761,51 @@ function renderEvents() {
     .slice(0, 100);
 
   const tbody = $("#eventsTable tbody");
-  tbody.innerHTML = events.map(r => `
+  tbody.innerHTML = events.map(r => {
+    const ts = r.timestamp || "";
+    const fullTs = ts ? ts.replace("T", " ").slice(0, 19) : "";
+    return `
     <tr>
       <td style="color:var(--warning)">${r.metric_name || ""}</td>
       <td>${r._file || ""}</td>
       <td>${r.run_id || ""}</td>
       <td>${r.step ?? ""}</td>
       <td>${r.epoch ?? ""}</td>
-      <td>${r.timestamp ? r.timestamp.replace("T", " ").slice(0, 19) : ""}</td>
+      <td title="${fullTs}">${timeAgo(ts) || fullTs}</td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
+}
+
+// ── GPU Sparkline (#21) ─────────────────────────────────────
+function renderGPUSparkline() {
+  const el = $("#gpuSparkline");
+  if (!el) return;
+  if (!state.gpuSparkChart) {
+    state.gpuSparkChart = registerChart(echarts.init(el));
+  }
+  state.gpuSparkChart.setOption({
+    animation: false,
+    grid: { left: 0, right: 0, top: 0, bottom: 0 },
+    xAxis: { show: false, type: "category", data: state.gpuHistory.map((_, i) => i) },
+    yAxis: { show: false, type: "value", min: 0, max: 100 },
+    series: [{
+      type: "line", data: state.gpuHistory, symbol: "none", smooth: true,
+      lineStyle: { width: 1.5, color: "#8b5cf6" },
+      areaStyle: { color: "rgba(139,92,246,0.2)" },
+    }],
+  }, true);
 }
 
 // ── Polling ─────────────────────────────────────────────────
 async function poll() {
   try {
     // Parallel fetches
+    const metricsUrl = state.lastTimestamp
+      ? `/api/metrics/data?file=__all__&since=${encodeURIComponent(state.lastTimestamp)}`
+      : "/api/metrics/data?file=__all__";
     const [metricsRes, gpuRes, pipelineRes, ckptRes, testStatusRes, tuneStatusRes, exportStatusRes] = await Promise.all([
-      api.get("/api/metrics/data?file=__all__"),
+      api.get(metricsUrl),
       api.get("/api/system/gpu"),
       api.get("/api/training/pipeline"),
       api.get("/api/system/checkpoints"),
@@ -622,19 +814,26 @@ async function poll() {
       api.get("/api/export/status"),
     ]);
 
-    // Metrics
+    // Metrics — incremental: append new rows on subsequent polls
     if (metricsRes.ok && metricsRes.file_data) {
-      state.allRows = [];
+      let newRowCount = 0;
       for (const [fname, rows] of Object.entries(metricsRes.file_data)) {
         for (const r of rows) {
           r._file = fname;
           state.allRows.push(r);
+          newRowCount++;
+          if (r.timestamp && (!state.lastTimestamp || r.timestamp > state.lastTimestamp)) {
+            state.lastTimestamp = r.timestamp;
+          }
         }
       }
-      updateFilters();
-      updateChart();
-      renderLatestValues();
-      renderEvents();
+      // Only update UI if we got new data or this is the first poll
+      if (newRowCount > 0 || !state.lastTimestamp) {
+        updateFilters();
+        updateChart();
+        renderLatestValues();
+        renderEvents();
+      }
     }
 
     // GPU
@@ -657,11 +856,13 @@ async function poll() {
             showToast(`Stage ${id} (${s.name}) completed!`, "success", 10000);
             document.title = `[Done] micro-Omni Dashboard`;
             setTimeout(() => { document.title = "micro-Omni Dashboard"; }, 30000);
+            _desktopNotify(`Stage ${id} ${s.status}!`);
           }
           // Training failed
           if (old.status === "running" && s.status === "failed") {
             showToast(`Stage ${id} (${s.name}) failed! Check logs.`, "error", 15000);
             document.title = `[Failed] micro-Omni Dashboard`;
+            _desktopNotify(`Stage ${id} ${s.status}!`);
           }
           // Training stopped by user
           if (old.status === "running" && s.status === "stopped") {
@@ -745,16 +946,9 @@ function setupTabs() {
     }
     if (tabId === "inference" && typeof window._updateInferCkptList === "function") window._updateInferCkptList();
 
-    // Resize all ECharts instances in the newly visible tab
-    // (charts initialized while tab was hidden get 0 width)
+    // Resize all ECharts instances (charts initialized while tab was hidden get 0 width)
     setTimeout(() => {
-      const tabEl = $(`#tab-${tabId}`);
-      if (tabEl) {
-        tabEl.querySelectorAll("div").forEach(el => {
-          const inst = echarts.getInstanceByDom(el);
-          if (inst) inst.resize();
-        });
-      }
+      chartRegistry.forEach(c => { if (!c.isDisposed()) c.resize(); });
     }, 100);
   });
 }
@@ -781,12 +975,12 @@ function setupControls() {
     dom.liveToggle.textContent = state.live ? "LIVE" : "PAUSED";
   });
 
-  // Smoothing
-  dom.smoothSlider.addEventListener("input", () => {
+  // Smoothing (debounced)
+  dom.smoothSlider.addEventListener("input", debounce(() => {
     state.smoothing = parseFloat(dom.smoothSlider.value);
     dom.smoothValue.textContent = state.smoothing.toFixed(2);
     updateChart();
-  });
+  }, 80));
 
   // Log scale
   dom.logScaleBtn.addEventListener("click", () => {
@@ -823,12 +1017,30 @@ function setupControls() {
   // Config editor
   setupConfigEditor();
 
-  // Logs
+  // Logs — with auto-scroll and auto-refresh (#7)
   dom.loadLogsBtn.addEventListener("click", async () => {
     const stage = dom.logStageSelect.value;
     const res = await api.get(`/api/training/logs/${stage}`);
     dom.logOutput.textContent = res.ok ? res.lines.join("\n") : "Failed to load logs";
+    dom.logOutput.scrollTop = dom.logOutput.scrollHeight;
   });
+
+  const autoRefreshCb = $("#logAutoRefresh");
+  if (autoRefreshCb) {
+    autoRefreshCb.addEventListener("change", () => {
+      if (state.logAutoRefreshTimer) { clearInterval(state.logAutoRefreshTimer); state.logAutoRefreshTimer = null; }
+      if (autoRefreshCb.checked) {
+        state.logAutoRefreshTimer = setInterval(async () => {
+          const stage = dom.logStageSelect.value;
+          const res = await api.get(`/api/training/logs/${stage}`);
+          if (res.ok) {
+            dom.logOutput.textContent = res.lines.join("\n");
+            dom.logOutput.scrollTop = dom.logOutput.scrollHeight;
+          }
+        }, 3000);
+      }
+    });
+  }
 
   // Inference — mode changes checkpoint list
   async function updateInferCkptList() {
@@ -874,7 +1086,7 @@ function setupControls() {
     </tr>`).join("");
 
     // Render bar chart of metrics
-    if (!testChart) testChart = echarts.init($("#testChart"));
+    if (!testChart) testChart = registerChart(echarts.init($("#testChart")));
     const metrics = {};
     for (const r of rows) {
       if (r.metric_name && r.metric_value != null) metrics[r.metric_name] = r.metric_value;
@@ -904,8 +1116,9 @@ function setupControls() {
     const allScripts = ["test_thinker", "test_audio_enc", "test_vision", "test_talker", "test_vocoder", "test_ocr", "test_sft"];
     const allResults = {};
 
-    for (const script of allScripts) {
-      const res = await api.get(`/api/testing/results/${script}`);
+    const responses = await Promise.all(allScripts.map(s => api.get(`/api/testing/results/${s}`)));
+    responses.forEach((res, i) => {
+      const script = allScripts[i];
       if (res.ok && res.results && res.results.length) {
         const metrics = {};
         for (const r of res.results) {
@@ -915,7 +1128,7 @@ function setupControls() {
         }
         if (Object.keys(metrics).length) allResults[script] = metrics;
       }
-    }
+    });
 
     if (Object.keys(allResults).length === 0) return;
 
@@ -935,7 +1148,7 @@ function setupControls() {
       itemStyle: { color: palette[i % palette.length] },
     }));
 
-    if (!testCompareChartInstance) testCompareChartInstance = echarts.init($("#testCompareChart"));
+    if (!testCompareChartInstance) testCompareChartInstance = registerChart(echarts.init($("#testCompareChart")));
     testCompareChartInstance.setOption({
       animation: false,
       backgroundColor: "transparent",
@@ -1048,6 +1261,14 @@ function setupControls() {
       ? `Export running (PID ${res.pid})`
       : `Error: ${res.error || "Failed"}`;
   }));
+
+  // Keyboard shortcuts (#6)
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+    if (e.code === "Space") { e.preventDefault(); dom.liveToggle.click(); }
+    if (e.key === "r" || e.key === "R") { e.preventDefault(); poll(); }
+    if (e.key === "l" || e.key === "L") { dom.logScaleBtn.click(); }
+  });
 }
 
 // ── HP Tuning ───────────────────────────────────────────────
@@ -1158,7 +1379,7 @@ async function setupTuning() {
       }).join("");
 
       // Render optimization history chart (val_loss vs trial)
-      if (!tuneChart) tuneChart = echarts.init($("#tuneChart"));
+      if (!tuneChart) tuneChart = registerChart(echarts.init($("#tuneChart")));
       const chartTrials = (r.trials || []).filter(t => t.state === "COMPLETE" && t.value != null)
         .sort((a, b) => a.number - b.number);
       if (chartTrials.length > 0) {
@@ -1235,7 +1456,7 @@ async function setupTuning() {
           if (!el) continue;
 
           if (!tuneSliceInstances[paramName]) {
-            tuneSliceInstances[paramName] = echarts.init(el);
+            tuneSliceInstances[paramName] = registerChart(echarts.init(el));
           }
           const chart = tuneSliceInstances[paramName];
 
@@ -1393,7 +1614,7 @@ async function setupTuning() {
 
     if (!series.length) return;
 
-    if (!tuneTrainChart) tuneTrainChart = echarts.init($("#tuneTrainChart"));
+    if (!tuneTrainChart) tuneTrainChart = registerChart(echarts.init($("#tuneTrainChart")));
     tuneTrainChart.setOption({
       animation: false,
       backgroundColor: "transparent",
@@ -1508,6 +1729,36 @@ async function setupTuning() {
   });
 }
 
+// ── Config Diff (#16) ───────────────────────────────────────
+function highlightConfigDiff(editorEl, ckptEl, baseConfig, ckptConfig) {
+  const diffEl = $("#configDiffOutput");
+  if (!diffEl || !baseConfig || !ckptConfig) { clearConfigDiff(); return; }
+
+  const allKeys = new Set([...Object.keys(baseConfig), ...Object.keys(ckptConfig)]);
+  const lines = [];
+  for (const key of [...allKeys].sort()) {
+    const bv = baseConfig[key];
+    const cv = ckptConfig[key];
+    const bs = JSON.stringify(bv);
+    const cs = JSON.stringify(cv);
+    if (bs === cs) {
+      lines.push(`<span style="color:var(--success)">${key}: ${bs}</span>`);
+    } else if (bv === undefined) {
+      lines.push(`<span style="color:var(--info)">+ ${key}: ${cs} (checkpoint only)</span>`);
+    } else if (cv === undefined) {
+      lines.push(`<span style="color:var(--warning)">- ${key}: ${bs} (base only)</span>`);
+    } else {
+      lines.push(`<span style="color:var(--danger)">${key}: ${bs} -> ${cs}</span>`);
+    }
+  }
+  diffEl.innerHTML = lines.join("\n");
+}
+
+function clearConfigDiff() {
+  const diffEl = $("#configDiffOutput");
+  if (diffEl) diffEl.innerHTML = "";
+}
+
 // ── Config Editor ───────────────────────────────────────────
 async function setupConfigEditor() {
   const configSel = $("#configSelect");
@@ -1550,11 +1801,14 @@ async function setupConfigEditor() {
       const cr = await api.get(`/api/system/checkpoint-config/${ckptName}`);
       if (cr.ok) {
         ckptView.value = JSON.stringify(cr.config, null, 2);
+        // Config diff highlighting (#16)
+        highlightConfigDiff(editor, ckptView, r.ok ? r.config : null, cr.config);
       } else {
         ckptView.value = "(not found)";
       }
     } else {
       ckptView.value = "";
+      clearConfigDiff();
     }
   });
 

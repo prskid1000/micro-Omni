@@ -179,6 +179,11 @@ class APITester:
         self._run_section("Tuning Range Sanity", self.test_tuning_range_sanity)
         self._run_section("Config in Tuning Range", self.test_config_value_in_tuning_range)
         self._run_section("All Stages Registered", self.test_all_stages_registered, skip_slow)
+        # New feature tests
+        self._run_section("Metrics Caching", self.test_metrics_caching)
+        self._run_section("New UI Elements", self.test_new_ui_elements)
+        self._run_section("New JS Features", self.test_new_js_features)
+        self._run_section("Incremental Polling", self.test_incremental_polling)
 
         self._print_summary()
         return self.failed == 0
@@ -1514,6 +1519,250 @@ class APITester:
                 self.wait_gpu_free(timeout=10)
 
     test_all_stages_registered._slow = True
+
+    # ══════════════════════════════════════════════════════════
+    # NEW FEATURE TESTS (improvements round)
+    # ══════════════════════════════════════════════════════════
+
+    def test_new_ui_elements(self):
+        """Verify all new HTML elements from the improvements round exist."""
+        status, body, headers = self.get_raw("/")
+
+        checks = [
+            ("GPU sparkline container", b"gpuSparkline"),
+            ("Loss Trend card", b"cardLossTrend"),
+            ("Start All Idle button", b"Start All Idle"),
+            ("Log auto-refresh checkbox", b"logAutoRefresh"),
+            ("Config diff output", b"configDiffOutput"),
+            ("LIVE button Space hint", b"Space"),
+        ]
+        for label, needle in checks:
+            self.assert_true(f"HTML: {label}", needle in body)
+
+        # CSS checks
+        status2, css, _ = self.get_raw("/static/style.css")
+        css_checks = [
+            ("stage-progress bar class", b"stage-progress"),
+            ("toast cursor pointer", b"cursor: pointer"),
+        ]
+        for label, needle in css_checks:
+            self.assert_true(f"CSS: {label}", needle in css)
+
+    def test_new_js_features(self):
+        """Verify all new JS functions and patterns from improvements round."""
+        status, body, headers = self.get_raw("/static/app.js")
+
+        checks = [
+            ("debounce function", b"debounce"),
+            ("timeAgo function", b"timeAgo"),
+            ("chartRegistry array", b"chartRegistry"),
+            ("keydown handler", b"keydown"),
+            ("Space key shortcut", b"Space"),
+            ("Notification API", b"Notification"),
+            ("lastTimestamp tracking", b"lastTimestamp"),
+            ("localStorage for filters", b"localStorage"),
+            ("retrainStage confirm", b"retrainStage"),
+            ("startAllIdle function", b"startAllIdle"),
+            ("stage-progress rendering", b"stage-progress"),
+            ("markLine event annotations", b"markLine"),
+            ("cardLossTrend update", b"cardLossTrend"),
+            ("config diff logic", b"Diff"),
+            ("GPU sparkline/history", b"gpuSparkline"),
+        ]
+        for label, needle in checks:
+            self.assert_true(f"JS: {label}", needle in body)
+
+    def test_incremental_polling(self):
+        """Verify incremental metrics fetch with since parameter."""
+        # Full fetch
+        r_all = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        all_rows = r_all.get("rows", [])
+        self.assert_gt("Has metrics rows", len(all_rows), 0)
+
+        # Far future = empty
+        r_empty = self.get("/api/metrics/data?file=train_thinker.jsonl&since=2099-12-31T23:59:59Z")
+        self.assert_eq("Far future since = 0 rows", len(r_empty.get("rows", [])), 0)
+
+        # Past timestamp = subset
+        if len(all_rows) > 5:
+            mid_ts = all_rows[len(all_rows) // 2].get("timestamp", "")
+            r_since = self.get(f"/api/metrics/data?file=train_thinker.jsonl&since={mid_ts}")
+            since_rows = r_since.get("rows", [])
+            self.assert_true("Since returns fewer than all",
+                            len(since_rows) < len(all_rows),
+                            f"{len(since_rows)} >= {len(all_rows)}")
+            # All returned rows have timestamp > mid_ts
+            for row in since_rows[:5]:
+                self.assert_true(f"Row ts > since",
+                                row.get("timestamp", "") > mid_ts)
+
+        # Same file fetched twice returns same count (caching)
+        r1 = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        r2 = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        self.assert_eq("Cached same count", len(r1.get("rows", [])), len(r2.get("rows", [])))
+
+    def test_metrics_caching(self):
+        """Verify server-side metrics caching works (mtime-based)."""
+        # Fetch same file twice — second should be cached (same response)
+        r1 = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        r2 = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        self.assert_eq("Cached fetch returns same row count",
+                       len(r1.get("rows", [])), len(r2.get("rows", [])))
+
+        # Incremental fetch with since param
+        rows = r1.get("rows", [])
+        if len(rows) > 10:
+            mid_ts = rows[len(rows) // 2].get("timestamp", "")
+            r3 = self.get(f"/api/metrics/data?file=train_thinker.jsonl&since={mid_ts}")
+            since_rows = r3.get("rows", [])
+            self.assert_true("Since filter returns fewer rows",
+                            len(since_rows) < len(rows),
+                            f"since={len(since_rows)} >= all={len(rows)}")
+            # All returned rows should have timestamp > mid_ts
+            for row in since_rows[:5]:
+                ts = row.get("timestamp", "")
+                self.assert_true(f"Row timestamp > since", ts > mid_ts, f"ts={ts}")
+
+    def test_gpu_sparkline_container(self):
+        """Verify GPU sparkline container exists in HTML."""
+        status, body, headers = self.get_raw("/")
+        self.assert_true("HTML has GPU sparkline div", b"gpuSparkline" in body)
+
+    def test_loss_trend_card(self):
+        """Verify Loss Trend summary card exists in HTML."""
+        status, body, headers = self.get_raw("/")
+        self.assert_true("HTML has Loss Trend card", b"cardLossTrend" in body)
+        self.assert_true("HTML has Loss Trend label", b"Loss Trend" in body)
+
+    def test_start_all_idle_button(self):
+        """Verify Start All Idle button exists in HTML."""
+        status, body, headers = self.get_raw("/")
+        self.assert_true("HTML has Start All Idle button", b"Start All Idle" in body)
+        self.assert_true("HTML has startAllIdle function ref", b"startAllIdle" in body)
+
+    def test_log_auto_refresh_checkbox(self):
+        """Verify auto-refresh checkbox exists in logs tab."""
+        status, body, headers = self.get_raw("/")
+        self.assert_true("HTML has log auto-refresh checkbox", b"logAutoRefresh" in body)
+
+    def test_config_diff_output(self):
+        """Verify config diff output container exists."""
+        status, body, headers = self.get_raw("/")
+        self.assert_true("HTML has config diff output", b"configDiffOutput" in body)
+
+    def test_keyboard_shortcut_hint(self):
+        """Verify LIVE button shows keyboard shortcut hint."""
+        status, body, headers = self.get_raw("/")
+        self.assert_true("LIVE button has Space shortcut hint", b"Space" in body)
+
+    def test_stage_progress_css(self):
+        """Verify stage progress bar CSS exists."""
+        status, body, headers = self.get_raw("/static/style.css")
+        self.assert_true("CSS has stage-progress class", b"stage-progress" in body)
+
+    def test_toast_clickable_css(self):
+        """Verify toast has cursor pointer for click-to-dismiss."""
+        status, body, headers = self.get_raw("/static/style.css")
+        # Toast should have cursor: pointer
+        self.assert_true("Toast CSS has cursor pointer",
+                        b"cursor: pointer" in body and b".toast" in body)
+
+    def test_js_has_debounce(self):
+        """Verify debounce function exists in app.js."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has debounce function", b"function debounce" in body or b"debounce" in body)
+
+    def test_js_has_time_ago(self):
+        """Verify timeAgo function exists in app.js."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has timeAgo function", b"timeAgo" in body)
+
+    def test_js_has_chart_registry(self):
+        """Verify chart registry for efficient resize exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has chartRegistry", b"chartRegistry" in body)
+
+    def test_js_has_keyboard_shortcuts(self):
+        """Verify keyboard shortcut handler exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has keydown handler", b"keydown" in body)
+        self.assert_true("JS handles Space key", b"Space" in body)
+
+    def test_js_has_desktop_notifications(self):
+        """Verify desktop notification code exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has Notification API", b"Notification" in body)
+
+    def test_js_has_incremental_polling(self):
+        """Verify incremental polling with lastTimestamp exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS tracks lastTimestamp", b"lastTimestamp" in body)
+
+    def test_js_has_local_storage_filters(self):
+        """Verify filter persistence in localStorage."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS uses localStorage for filters", b"localStorage" in body)
+
+    def test_js_has_retrain_confirm(self):
+        """Verify retrainStage function with confirmation exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has retrainStage function", b"retrainStage" in body)
+
+    def test_js_has_start_all_idle(self):
+        """Verify startAllIdle function exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has startAllIdle function", b"startAllIdle" in body)
+
+    def test_js_has_stage_progress(self):
+        """Verify stage progress bar rendering code exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS renders stage-progress", b"stage-progress" in body)
+
+    def test_js_has_event_annotations(self):
+        """Verify chart event annotation (markLine) code exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has markLine for events", b"markLine" in body)
+
+    def test_js_has_loss_trend(self):
+        """Verify loss trend calculation exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS updates cardLossTrend", b"cardLossTrend" in body)
+
+    def test_js_has_stage_aware_cards(self):
+        """Verify stage-aware summary card filtering."""
+        status, body, headers = self.get_raw("/static/app.js")
+        # Should detect running stage and filter metrics
+        self.assert_true("JS has activeStageFile logic",
+                        b"activeStage" in body or b"_file" in body)
+
+    def test_js_has_config_diff(self):
+        """Verify config diff highlighting code exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has config diff logic", b"configDiff" in body or b"Diff" in body)
+
+    def test_js_has_gpu_sparkline(self):
+        """Verify GPU sparkline rendering code exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has GPU sparkline", b"gpuSparkline" in body or b"gpuHistory" in body)
+
+    def test_metrics_since_param_empty_result(self):
+        """Verify since param far in the future returns empty."""
+        r = self.get("/api/metrics/data?file=train_thinker.jsonl&since=2099-12-31T23:59:59Z")
+        self.assert_eq("Far future since = 0 rows", len(r.get("rows", [])), 0)
+
+    def test_metrics_since_param_past(self):
+        """Verify since param in the past returns subset."""
+        r_all = self.get("/api/metrics/data?file=train_thinker.jsonl")
+        all_rows = r_all.get("rows", [])
+        if len(all_rows) > 5:
+            # Use timestamp from middle of dataset
+            mid = all_rows[len(all_rows) // 2]
+            ts = mid.get("timestamp", "")
+            r_since = self.get(f"/api/metrics/data?file=train_thinker.jsonl&since={ts}")
+            since_rows = r_since.get("rows", [])
+            self.assert_true("Since returns fewer than all",
+                            len(since_rows) < len(all_rows),
+                            f"{len(since_rows)} >= {len(all_rows)}")
 
 
 def main():

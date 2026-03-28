@@ -9,6 +9,38 @@ from typing import Any
 
 METRICS_DIR = Path("logs/metrics")
 
+# ── Server-side cache for metrics data ──────────────────────────
+_cache: dict[str, dict[str, Any]] = {}  # fname -> {mtime, rows}
+
+
+def _get_cached_rows(file_name: str) -> list[dict[str, Any]]:
+    """Read JSONL with mtime-based caching to avoid re-reading unchanged files."""
+    path = METRICS_DIR / file_name
+    if not path.exists() or not path.is_file():
+        return []
+
+    mtime = path.stat().st_mtime
+    cached = _cache.get(file_name)
+    if cached and cached["mtime"] == mtime:
+        return cached["rows"]
+
+    # Re-read
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    rows.append(obj)
+            except Exception:
+                continue
+
+    _cache[file_name] = {"mtime": mtime, "rows": rows}
+    return rows
+
 
 def _list_files() -> list[str]:
     if not METRICS_DIR.exists():
@@ -17,25 +49,10 @@ def _list_files() -> list[str]:
 
 
 def _read_jsonl(file_name: str, since: str | None = None) -> list[dict[str, Any]]:
-    path = METRICS_DIR / file_name
-    rows: list[dict[str, Any]] = []
-    if not path.exists() or not path.is_file():
-        return rows
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                if not isinstance(obj, dict):
-                    continue
-                if since and obj.get("timestamp", "") <= since:
-                    continue
-                rows.append(obj)
-            except Exception:
-                continue
-    return rows
+    all_rows = _get_cached_rows(file_name)
+    if not since:
+        return list(all_rows)  # return copy
+    return [r for r in all_rows if r.get("timestamp", "") > since]
 
 
 def _build_summary() -> dict[str, Any]:

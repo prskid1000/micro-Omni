@@ -17,13 +17,14 @@
   </div>
   <div class="topbar-right">
     <span id="gpuBadge" class="gpu-badge" title="GPU Status">GPU: --</span>
-    <button id="liveToggle" class="btn btn-live active" title="Toggle live polling">LIVE</button>
+    <div id="gpuSparkline" style="width:100px;height:30px;display:inline-block;vertical-align:middle;"></div>
+    <button id="liveToggle" class="btn btn-live active" title="Toggle live polling (Space)">LIVE</button>
   </div>
 </header>
 
 <!-- ── Pipeline ───────────────────────────────────────────── -->
 <section class="glass section" id="pipelineSection">
-  <div class="section-title">Training Pipeline</div>
+  <div class="section-title" style="display:flex;align-items:center;gap:10px">Training Pipeline <button class="btn btn-sm" onclick="startAllIdle()" title="Start all idle (non-blocked) stages">Start All Idle</button></div>
   <div class="pipeline" id="pipeline"></div>
 </section>
 
@@ -35,6 +36,7 @@
   <div class="card" id="cardETA"><div class="card-label">ETA</div><div class="card-value">--</div></div>
   <div class="card" id="cardThroughput"><div class="card-label">Throughput</div><div class="card-value">--</div></div>
   <div class="card" id="cardGPUMem"><div class="card-label">GPU Memory</div><div class="card-value">--</div></div>
+  <div class="card" id="cardLossTrend"><div class="card-label">Loss Trend</div><div class="card-value">--</div></div>
 </section>
 
 <!-- ── Chart Controls ─────────────────────────────────────── -->
@@ -130,6 +132,7 @@
         <textarea id="configCheckpointView" rows="24" class="config-textarea" readonly></textarea>
       </div>
     </div>
+    <pre id="configDiffOutput" style="margin-top:8px;font-family:var(--mono);font-size:11px;line-height:1.6;max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:var(--radius-sm);padding:8px;display:block;white-space:pre-wrap;"></pre>
     <div id="configStatus" class="test-status"></div>
   </div>
 
@@ -148,6 +151,7 @@
         </select>
       </label>
       <button id="loadLogsBtn" class="btn btn-sm">Load Logs</button>
+      <label><input type="checkbox" id="logAutoRefresh" /> Auto-refresh</label>
     </div>
     <pre id="logOutput" class="log-output"></pre>
   </div>
