@@ -1206,25 +1206,28 @@ async function setupTuning() {
 
       // ── Slice plots: each param vs val_loss ──────────────
       const sliceContainer = $("#tuneSliceCharts");
-      if (chartTrials.length >= 3) {
-        // Collect all param names from completed trials
-        const paramNames = new Set();
-        for (const t of chartTrials) { for (const k of Object.keys(t.params || {})) paramNames.add(k); }
+      // Filter out penalty trials (val_loss >= 50 is almost certainly a penalty)
+      const realTrials = chartTrials.filter(t => t.value != null && t.value < 50);
 
-        // Create/update a mini chart for each param
+      if (realTrials.length >= 2) {
+        const paramNames = new Set();
+        for (const t of realTrials) { for (const k of Object.keys(t.params || {})) paramNames.add(k); }
         const sortedParams = [...paramNames].sort();
 
-        // Build container divs if needed
         if (sliceContainer.children.length !== sortedParams.length) {
           sliceContainer.innerHTML = sortedParams.map(p =>
             `<div class="tune-slice-chart" id="slice-${p.replace(/[^a-zA-Z0-9_]/g, '_')}"></div>`
           ).join("");
-          // Dispose old instances
           for (const k of Object.keys(tuneSliceInstances)) {
             try { tuneSliceInstances[k].dispose(); } catch {}
             delete tuneSliceInstances[k];
           }
         }
+
+        // Compute val_loss range for color mapping
+        const allVals = realTrials.map(t => t.value).filter(v => v != null);
+        const minVal = Math.min(...allVals);
+        const maxVal = Math.max(...allVals);
 
         for (const paramName of sortedParams) {
           const elId = `slice-${paramName.replace(/[^a-zA-Z0-9_]/g, '_')}`;
@@ -1236,17 +1239,36 @@ async function setupTuning() {
           }
           const chart = tuneSliceInstances[paramName];
 
-          const points = chartTrials
-            .filter(t => t.params && t.params[paramName] !== undefined)
-            .map(t => {
-              let x = t.params[paramName];
-              if (typeof x === "boolean") x = x ? 1 : 0;
-              if (typeof x === "string") x = x === "true" ? 1 : x === "false" ? 0 : 0;
-              return [x, t.value];
-            })
-            .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+          // Build points — handle booleans and None values
+          const points = [];
+          for (const t of realTrials) {
+            if (t.params == null || t.params[paramName] === undefined) continue;
+            let x = t.params[paramName];
+            if (x === true) x = 1;
+            else if (x === false) x = 0;
+            else if (x === null || x === "null" || x === "None") x = 0;
+            else if (typeof x === "string") {
+              const parsed = parseFloat(x);
+              x = isNaN(parsed) ? 0 : parsed;
+            }
+            if (Number.isFinite(x) && Number.isFinite(t.value)) {
+              points.push([x, t.value]);
+            }
+          }
 
-          const isCategorical = points.length > 0 && new Set(points.map(p => p[0])).size <= 6;
+          if (points.length === 0) continue;
+
+          // Pre-compute colors by rank
+          const sortedByVal = [...points].sort((a, b) => a[1] - b[1]);
+          const coloredData = points.map(p => {
+            const rank = sortedByVal.findIndex(s => s[0] === p[0] && s[1] === p[1]) / Math.max(sortedByVal.length - 1, 1);
+            const color = rank < 0.33 ? "#10b981" : rank < 0.66 ? "#f59e0b" : "#ef4444";
+            return { value: p, itemStyle: { color } };
+          });
+
+          // Detect if param is boolean-like (only 0 and 1)
+          const uniqueX = new Set(points.map(p => p[0]));
+          const isBoolLike = uniqueX.size <= 2 && [...uniqueX].every(v => v === 0 || v === 1);
 
           chart.setOption({
             animation: false,
@@ -1257,11 +1279,11 @@ async function setupTuning() {
               backgroundColor: "rgba(15,18,38,0.9)",
               borderColor: "rgba(255,255,255,0.15)",
               textStyle: { color: "#e8ecf4", fontSize: 10 },
-              formatter: p => `${paramName}: ${p.value[0]}<br>val_loss: ${p.value[1].toFixed(4)}`,
             },
             grid: { left: 50, right: 12, top: 30, bottom: 28 },
             xAxis: {
-              type: "value",
+              type: isBoolLike ? "category" : "value",
+              data: isBoolLike ? ["false", "true"] : undefined,
               axisLabel: { color: "#7a82a0", fontSize: 9 },
               axisLine: { lineStyle: { color: "rgba(255,255,255,0.1)" } },
               splitLine: { show: false },
@@ -1274,21 +1296,17 @@ async function setupTuning() {
             },
             series: [{
               type: "scatter",
-              symbolSize: 7,
-              data: points,
-              itemStyle: {
-                color: (p) => {
-                  // Color by rank: best = green, worst = red
-                  const vals = points.map(q => q[1]).sort((a, b) => a - b);
-                  const rank = vals.indexOf(p.value[1]) / Math.max(vals.length - 1, 1);
-                  return rank < 0.33 ? "#10b981" : rank < 0.66 ? "#f59e0b" : "#ef4444";
-                },
-              },
+              symbolSize: 10,
+              data: isBoolLike
+                ? coloredData.map(d => ({ value: [d.value[0] === 1 ? "true" : "false", d.value[1]], itemStyle: d.itemStyle }))
+                : coloredData,
             }],
           }, true);
         }
+      } else if (chartTrials.length >= 3 && realTrials.length < 2) {
+        sliceContainer.innerHTML = '<span style="color:var(--warning);font-size:11px">All trials have penalty val_loss (100.0). Clear data and re-run tuning — the val_loss reader has been fixed.</span>';
       } else {
-        sliceContainer.innerHTML = '<span style="color:var(--text-dim);font-size:11px">Need 3+ completed trials for slice plots</span>';
+        sliceContainer.innerHTML = '<span style="color:var(--text-dim);font-size:11px">Need 2+ completed trials with real val_loss for slice plots</span>';
       }
 
       // ── Training curves from tuning trial metrics ─────────

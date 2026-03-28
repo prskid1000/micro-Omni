@@ -433,6 +433,9 @@ input[type="text"]:focus { border-color: var(--accent); }
   margin-bottom: 12px;
   border-bottom: 1px solid var(--glass-border);
   padding-bottom: 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
 }
 
 .tab {
