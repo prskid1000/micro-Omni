@@ -605,7 +605,7 @@ window.startAllIdle = async function() {
 // ── Summary cards ───────────────────────────────────────────
 function updateSummaryCards() {
   const allNonEvent = state.allRows.filter(r => r.phase !== "event");
-  if (!allNonEvent.length) return;
+  if (!allNonEvent.length) { resetSummaryCards(); return; }
 
   // Stage-aware filtering (#14): detect running stage and filter to its metrics file
   const stageToFile = {
@@ -745,6 +745,14 @@ function setCard(id, value) {
   const el = $(`#${id} .card-value`);
   if (el) el.textContent = value ?? "--";
   return el;
+}
+
+function resetSummaryCards() {
+  for (const id of ["cardStep", "cardBestVal", "cardLR", "cardETA", "cardThroughput", "cardGPUMem", "cardLossTrend"]) {
+    setCard(id, "--");
+  }
+  const stepLabel = $("#cardStep .card-label");
+  if (stepLabel) stepLabel.textContent = "Current Step";
 }
 
 function formatDuration(sec) {
@@ -1142,10 +1150,14 @@ function setupControls() {
       showToast(`Deleted ${selRuns.size} run(s) from all files`, "success");
     }
 
-    // Clear localStorage filters and refresh
+    // Clear state and refresh
     try { localStorage.removeItem("filters_fileChips"); localStorage.removeItem("filters_runChips"); } catch {}
     state.allRows = [];
     state.lastTimestamp = null;
+    resetSummaryCards();
+    if (state.chart) state.chart.clear();
+    $("#latestTable tbody").innerHTML = "";
+    $("#eventsTable tbody").innerHTML = "";
     poll();
   });
 
@@ -1157,6 +1169,10 @@ function setupControls() {
       showToast(`Deleted ${res.count} metrics files`, "success");
       state.allRows = [];
       state.lastTimestamp = null;
+      resetSummaryCards();
+      if (state.chart) state.chart.clear();
+      $("#latestTable tbody").innerHTML = "";
+      $("#eventsTable tbody").innerHTML = "";
       try { localStorage.removeItem("filters_fileChips"); localStorage.removeItem("filters_runChips"); localStorage.removeItem("filters_metricChips"); } catch {}
       poll();
     } else {
