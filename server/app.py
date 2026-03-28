@@ -128,7 +128,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._serve_static(path)
 
     def _route_post(self, path: str, body: dict) -> None:
-        if path.startswith("/api/training/"):
+        if path.startswith("/api/metrics/"):
+            metrics_api.handle_post(self, path, body)
+        elif path.startswith("/api/training/"):
             training_api.handle_post(self, path, body)
         elif path.startswith("/api/testing/"):
             testing_api.handle_post(self, path, body)

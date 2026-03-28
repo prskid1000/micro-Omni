@@ -327,7 +327,7 @@ function buildChips(containerId, selectId, values) {
   const sel = $(`#${selectId}`);
   if (!container || !sel) return;
 
-  // Preserve current selection, or restore from localStorage (#17)
+  // Preserve current selection, or restore from localStorage
   let prevActive = new Set([...sel.selectedOptions].map(o => o.value));
   if (prevActive.size === 0) {
     try {
@@ -341,28 +341,91 @@ function buildChips(containerId, selectId, values) {
     `<option value="${v}"${prevActive.has(v) ? " selected" : ""}>${v}</option>`
   ).join("");
 
-  // Build chips
-  container.innerHTML = values.map(v => {
-    const active = prevActive.has(v) ? " active" : "";
+  // Build chips with "x" button on active ones
+  let html = "";
+  for (const v of values) {
+    const isActive = prevActive.has(v);
     const label = v.length > 24 ? v.slice(0, 22) + ".." : v;
-    return `<span class="chip${active}" data-value="${v}" title="${v}">${label}</span>`;
-  }).join("");
+    const xBtn = isActive ? '<span class="chip-x">&times;</span>' : "";
+    html += `<span class="chip${isActive ? " active" : ""}" data-value="${v}" title="${v}">${label}${xBtn}</span>`;
+  }
+  // Clear All button (only show if any active)
+  if (prevActive.size > 0) {
+    html += `<span class="chip chip-clear" data-action="clear-all">Clear All</span>`;
+  }
+  container.innerHTML = html;
 
-  // Click toggles
-  container.querySelectorAll(".chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      chip.classList.toggle("active");
-      // Sync hidden select
-      const activeValues = new Set(
-        [...container.querySelectorAll(".chip.active")].map(c => c.dataset.value)
-      );
-      [...sel.options].forEach(opt => { opt.selected = activeValues.has(opt.value); });
-      // Persist to localStorage (#17)
-      try { localStorage.setItem("filters_" + containerId, JSON.stringify([...activeValues])); } catch {}
+  function syncAndUpdate() {
+    const activeValues = new Set(
+      [...container.querySelectorAll(".chip.active:not(.chip-clear)")].map(c => c.dataset.value)
+    );
+    [...sel.options].forEach(opt => { opt.selected = activeValues.has(opt.value); });
+    try { localStorage.setItem("filters_" + containerId, JSON.stringify([...activeValues])); } catch {}
+    updateChart();
+    renderLatestValues();
+  }
+
+  // Click handlers
+  container.querySelectorAll(".chip:not(.chip-clear)").forEach(chip => {
+    chip.addEventListener("click", (e) => {
+      // If clicking the X button, deselect
+      if (e.target.classList.contains("chip-x")) {
+        chip.classList.remove("active");
+        // Remove x button
+        const x = chip.querySelector(".chip-x");
+        if (x) x.remove();
+      } else {
+        chip.classList.toggle("active");
+        // Add/remove x button
+        if (chip.classList.contains("active") && !chip.querySelector(".chip-x")) {
+          chip.insertAdjacentHTML("beforeend", '<span class="chip-x">&times;</span>');
+        } else {
+          const x = chip.querySelector(".chip-x");
+          if (x) x.remove();
+        }
+      }
+      syncAndUpdate();
+      // Rebuild to update Clear All button visibility
+      buildChips(containerId, selectId, values);
+    });
+  });
+
+  // Clear All button
+  const clearBtn = container.querySelector(".chip-clear");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      [...sel.options].forEach(opt => { opt.selected = false; });
+      try { localStorage.removeItem("filters_" + containerId); } catch {}
+      buildChips(containerId, selectId, values);
       updateChart();
       renderLatestValues();
     });
-  });
+  }
+}
+
+// Stage to metrics file mapping
+const STAGE_METRICS_FILE = {
+  A: "train_thinker.jsonl", B: "train_audio_enc.jsonl", C: "train_vision.jsonl",
+  D: "train_talker.jsonl", E: "sft_omni.jsonl", F: "train_vocoder.jsonl", G: "train_ocr.jsonl",
+};
+
+function getActiveStage() {
+  if (!state.pipelineData) return null;
+  for (const [id, s] of Object.entries(state.pipelineData)) {
+    if (s.status === "running") return id;
+  }
+  return null;
+}
+
+function getLatestRunId(file) {
+  // Find the run_id with the highest step in this file
+  let best = null, bestStep = -1;
+  for (const r of state.allRows) {
+    if (r._file !== file || r.phase === "event") continue;
+    const step = r.step || 0;
+    if (step > bestStep) { bestStep = step; best = r.run_id; }
+  }
+  return best;
 }
 
 function updateFilters() {
@@ -371,11 +434,33 @@ function updateFilters() {
   const runs = [...new Set(rows.map(r => String(r.run_id || "")))].sort();
   const metrics = [...new Set(rows.map(r => String(r.metric_name || "")))].sort();
 
+  // Auto-focus: if a stage is running and user hasn't manually selected filters,
+  // pre-select the active stage's file and latest run_id
+  const activeStage = getActiveStage();
+  const activeFile = activeStage ? STAGE_METRICS_FILE[activeStage] : null;
+  const userHasFilters = getSelected(dom.fileSelect).size > 0 || getSelected(dom.runSelect).size > 0;
+
   buildChips("fileChips", "fileSelect", files);
   buildChips("runChips", "runSelect", runs);
   buildChips("metricChips", "metricSelect", metrics);
 
-  // Also keep hidden selects in sync
+  // Auto-select active stage's file and run if user hasn't manually filtered
+  if (activeFile && !userHasFilters && files.includes(activeFile)) {
+    // Activate file chip
+    const fileChip = document.querySelector(`#fileChips .chip[data-value="${activeFile}"]`);
+    if (fileChip && !fileChip.classList.contains("active")) {
+      fileChip.click();
+    }
+    // Activate latest run_id chip
+    const latestRun = getLatestRunId(activeFile);
+    if (latestRun) {
+      const runChip = document.querySelector(`#runChips .chip[data-value="${latestRun}"]`);
+      if (runChip && !runChip.classList.contains("active")) {
+        runChip.click();
+      }
+    }
+  }
+
   fillSelect(dom.fileSelect, files);
   fillSelect(dom.runSelect, runs);
   fillSelect(dom.metricSelect, metrics);
@@ -391,6 +476,11 @@ function renderPipeline(stages) {
     const stepInfo = meta ? `Step ${meta.step || 0}` : "";
     const proc = s.process;
     const maxSteps = meta?.max_steps || null;
+
+    // Find current run_id for this stage
+    const stageFile = STAGE_METRICS_FILE[id];
+    const currentRunId = stageFile ? getLatestRunId(stageFile) : null;
+    const runIdShort = currentRunId ? currentRunId.slice(0, 8) : "";
 
     // Build status line
     let statusLine = s.status;
@@ -442,6 +532,7 @@ function renderPipeline(stages) {
           <span class="status-dot ${statusClass}"></span>
           ${statusLine}
         </div>
+        ${runIdShort ? `<div class="stage-run-id" title="Run ID: ${currentRunId}">run: ${runIdShort}</div>` : ""}
         <div class="stage-actions">${actions}</div>
         ${progressBar}
       </div>
@@ -535,10 +626,29 @@ function updateSummaryCards() {
     }
   }
 
-  const rows = activeFile
+  // Further filter to latest run_id within the active file
+  let activeRunId = null;
+  let filteredRows = activeFile
     ? allNonEvent.filter(r => r._file === activeFile)
     : allNonEvent;
+
+  if (activeFile && filteredRows.length) {
+    activeRunId = getLatestRunId(activeFile);
+    if (activeRunId) {
+      filteredRows = filteredRows.filter(r => r.run_id === activeRunId);
+    }
+  }
+
+  const rows = filteredRows;
   if (!rows.length) return;
+
+  // Show which stage/run the cards are tracking
+  const activeStage = getActiveStage();
+  const label = activeStage
+    ? `Stage ${activeStage}${activeRunId ? " / " + activeRunId.slice(0, 8) : ""}`
+    : activeRunId ? `run: ${activeRunId.slice(0, 8)}` : "";
+  const stepLabel = $("#cardStep .card-label");
+  if (stepLabel) stepLabel.textContent = label ? `Current Step (${label})` : "Current Step";
 
   // Find latest training metrics
   const trainRows = rows.filter(r => r.phase === "train" && r.metric_name === "loss");
@@ -999,6 +1109,61 @@ function setupControls() {
   // Refresh
   dom.refreshBtn.addEventListener("click", poll);
 
+  // Delete selected metrics data (files or run IDs)
+  $("#deleteMetricsBtn").addEventListener("click", async () => {
+    const selFiles = getSelected(dom.fileSelect);
+    const selRuns = getSelected(dom.runSelect);
+
+    if (selFiles.size === 0 && selRuns.size === 0) {
+      showToast("Select files or run IDs to delete", "warning");
+      return;
+    }
+
+    const parts = [];
+    if (selFiles.size) parts.push(`${selFiles.size} file(s)`);
+    if (selRuns.size) parts.push(`${selRuns.size} run(s)`);
+    if (!confirm(`Delete metrics data for ${parts.join(" and ")}? This cannot be undone.`)) return;
+
+    // Delete selected files
+    for (const f of selFiles) {
+      const res = await api.post("/api/metrics/delete", { file: f });
+      if (res.ok) showToast(`Deleted ${f}`, "success");
+      else showToast(`Failed: ${res.error}`, "error");
+    }
+
+    // Delete selected run IDs from all files
+    if (selRuns.size > 0) {
+      const allFiles = await api.get("/api/metrics/files");
+      for (const f of (allFiles.files || [])) {
+        for (const rid of selRuns) {
+          await api.post("/api/metrics/delete-run", { file: f, run_id: rid });
+        }
+      }
+      showToast(`Deleted ${selRuns.size} run(s) from all files`, "success");
+    }
+
+    // Clear localStorage filters and refresh
+    try { localStorage.removeItem("filters_fileChips"); localStorage.removeItem("filters_runChips"); } catch {}
+    state.allRows = [];
+    state.lastTimestamp = null;
+    poll();
+  });
+
+  // Delete ALL metrics data
+  $("#deleteAllMetricsBtn").addEventListener("click", async () => {
+    if (!confirm("Delete ALL metrics data? This removes every .jsonl file in logs/metrics/. Cannot be undone.")) return;
+    const res = await api.post("/api/metrics/delete", { file: "__all__" });
+    if (res.ok) {
+      showToast(`Deleted ${res.count} metrics files`, "success");
+      state.allRows = [];
+      state.lastTimestamp = null;
+      try { localStorage.removeItem("filters_fileChips"); localStorage.removeItem("filters_runChips"); localStorage.removeItem("filters_metricChips"); } catch {}
+      poll();
+    } else {
+      showToast(`Failed: ${res.error}`, "error");
+    }
+  });
+
   // X-axis toggle
   dom.xAxisToggle.addEventListener("click", () => {
     const cur = dom.xAxisSelect.value;
@@ -1042,12 +1207,17 @@ function setupControls() {
     });
   }
 
-  // Inference — mode changes checkpoint list
+  // ── Inference UI ───────────────────────────────────────
+  const chatMessages = $("#inferChatMessages");
+  const chatInput = $("#inferChatInput");
+  const chatSendBtn = $("#inferChatSendBtn");
+  let chatHistory = [];
+
+  // Mode changes checkpoint list
   async function updateInferCkptList() {
     const mode = dom.inferMode.value;
-    const label = $("#inferCkptLabel");
     if (mode === "normal") {
-      label.style.display = "";
+      dom.inferCkpt.style.display = "";
       const res = await api.get("/api/system/checkpoints");
       if (res.ok) {
         dom.inferCkpt.innerHTML = res.checkpoints
@@ -1056,14 +1226,146 @@ function setupControls() {
           .join("");
       }
     } else {
-      // Standalone / HuggingFace always use export/
-      label.style.display = "none";
+      dom.inferCkpt.style.display = "none";
       dom.inferCkpt.innerHTML = '<option value="export">export/</option>';
     }
   }
   window._updateInferCkptList = updateInferCkptList;
   dom.inferMode.addEventListener("change", updateInferCkptList);
   updateInferCkptList();
+
+  // Chat / Single mode toggle
+  $$(".infer-mode-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      $$(".infer-mode-tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      const mode = tab.dataset.mode;
+      $("#inferChatMode").style.display = mode === "chat" ? "flex" : "none";
+      $("#inferSingleMode").style.display = mode === "single" ? "block" : "none";
+    });
+  });
+
+  // Chat message rendering
+  function addChatMessage(role, text, meta = "") {
+    // Remove empty state
+    const empty = chatMessages.querySelector(".infer-chat-empty");
+    if (empty) empty.remove();
+
+    const div = document.createElement("div");
+    div.className = `infer-chat-msg ${role}`;
+
+    // Check for attachments
+    const imgPath = $("#inferChatImage").value;
+    const audioPath = $("#inferChatAudio").value;
+    let attachHtml = "";
+    if (role === "user") {
+      if (imgPath) attachHtml += `<div class="msg-attachment">&#128247; ${imgPath}</div>`;
+      if (audioPath) attachHtml += `<div class="msg-attachment">&#127908; ${audioPath}</div>`;
+    }
+
+    div.innerHTML = attachHtml + text + (meta ? `<div class="msg-meta">${meta}</div>` : "");
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return div;
+  }
+
+  // Send chat message
+  async function sendChatMessage() {
+    const text = chatInput.value.trim();
+    const imgPath = $("#inferChatImage").value.trim();
+    const audioPath = $("#inferChatAudio").value.trim();
+    const useOCR = $("#inferOCR").checked;
+
+    if (!text && !imgPath && !audioPath) return;
+
+    // Add user message
+    addChatMessage("user", text || (imgPath ? "[Image]" : "[Audio]"));
+    chatInput.value = "";
+    chatHistory.push({ role: "user", text, image: imgPath, audio: audioPath });
+
+    // Clear attachments
+    $("#inferChatImage").value = "";
+    $("#inferChatAudio").value = "";
+    $("#inferAttachments").style.display = "none";
+
+    // Show thinking indicator
+    const thinkDiv = addChatMessage("assistant thinking", "Thinking...");
+    chatSendBtn.disabled = true;
+
+    // Call API
+    const mode = dom.inferMode.value;
+    const source = dom.inferCkpt.value;
+    let res;
+
+    if (mode === "normal") {
+      res = await api.post("/api/inference/chat", {
+        text: text || undefined,
+        ckpt_dir: source,
+        image_path: imgPath || undefined,
+        audio_in: audioPath || undefined,
+        use_ocr: useOCR,
+      });
+    } else if (mode === "standalone") {
+      res = await api.post("/api/inference/standalone", { text, model_dir: source, max_tokens: 64 });
+    } else {
+      res = await api.post("/api/inference/huggingface", {
+        text, model_dir: source, image_path: imgPath || undefined,
+        audio_path: audioPath || undefined, multimodal: !!(imgPath || audioPath), max_tokens: 32,
+      });
+    }
+
+    // Replace thinking with response
+    thinkDiv.remove();
+    chatSendBtn.disabled = false;
+
+    if (res.ok) {
+      const parts = [];
+      if (res.response) parts.push(res.response);
+      if (res.image_response) parts.push(res.image_response);
+      if (res.audio_response) parts.push(res.audio_response);
+      const responseText = parts.join("\n") || "(empty response)";
+      const meta = `${res.mode || mode} | ${res.elapsed_ms}ms`;
+      addChatMessage("assistant", responseText, meta);
+      chatHistory.push({ role: "assistant", text: responseText });
+    } else {
+      addChatMessage("assistant", `Error: ${res.error || "Unknown error"}`);
+    }
+  }
+
+  chatSendBtn.addEventListener("click", sendChatMessage);
+  chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+  });
+
+  // Attach image/audio buttons
+  $("#inferAttachImgBtn").addEventListener("click", () => {
+    const path = prompt("Image path:", "data/images/test.jpg");
+    if (path) {
+      $("#inferChatImage").value = path;
+      $("#inferAttachments").style.display = "flex";
+      $("#inferAttachText").textContent = "&#128247; " + path;
+    }
+  });
+
+  $("#inferAttachAudioBtn").addEventListener("click", () => {
+    const path = prompt("Audio path:", "data/audio/test.wav");
+    if (path) {
+      $("#inferChatAudio").value = path;
+      $("#inferAttachments").style.display = "flex";
+      $("#inferAttachText").textContent = "&#127908; " + path;
+    }
+  });
+
+  // Clear chat
+  $("#inferClearChat").addEventListener("click", () => {
+    chatHistory = [];
+    chatMessages.innerHTML = `
+      <div class="infer-chat-empty">
+        <div class="infer-chat-empty-icon">&#956;</div>
+        <div>micro-Omni Inference</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:4px">Type a message below or attach an image/audio file</div>
+      </div>`;
+  });
 
   // ── Test results chart + table ─────────────────────────
   let testChart = null;
@@ -1179,63 +1481,66 @@ function setupControls() {
     finally { btn.disabled = false; btn.style.opacity = ""; }
   }
 
-  // Inference — 3 modes
-  dom.inferBtn.addEventListener("click", () => withDisable(dom.inferBtn, async () => {
-    const mode = dom.inferMode.value;
-    const text = dom.inferText.value.trim();
-    const source = dom.inferCkpt.value;
-    const imagePath = dom.inferImage?.value.trim() || null;
-    const audioIn = dom.inferAudioIn?.value.trim() || null;
-    const audioOut = dom.inferAudioOut?.value.trim() || null;
-    const useOCR = dom.inferOCR?.checked || false;
+  // Single-mode inference (side-by-side input/output)
+  const inferBtn = $("#inferBtn");
+  const inferResult = $("#inferResult");
+  if (inferBtn) {
+    inferBtn.addEventListener("click", () => withDisable(inferBtn, async () => {
+      const mode = dom.inferMode.value;
+      const text = $("#inferText")?.value.trim() || "";
+      const source = dom.inferCkpt.value;
+      const imagePath = $("#inferImage")?.value.trim() || null;
+      const audioIn = $("#inferAudioIn")?.value.trim() || null;
+      const audioOut = $("#inferAudioOut")?.value.trim() || null;
+      const useOCR = $("#inferOCR")?.checked || false;
 
-    if (!text && !imagePath && !audioIn) {
-      dom.inferResult.textContent = "Provide text, image, or audio input.";
-      return;
-    }
+      if (!text && !imagePath && !audioIn) {
+        inferResult.textContent = "Provide text, image, or audio input.";
+        return;
+      }
 
-    dom.inferResult.textContent = `Running ${mode} inference...`;
-    dom.inferResult.className = "infer-result loading";
-    dom.inferBtn.textContent = "Running...";
+      inferResult.textContent = `Running ${mode} inference...`;
+      inferResult.style.color = "var(--accent-2)";
+      inferBtn.textContent = "Running...";
 
-    let res;
-    if (mode === "normal") {
-      res = await api.post("/api/inference/chat", {
-        text, ckpt_dir: source, image_path: imagePath,
-        audio_in: audioIn, audio_out: audioOut, use_ocr: useOCR,
-      });
-    } else if (mode === "standalone") {
-      res = await api.post("/api/inference/standalone", {
-        text, model_dir: source, max_tokens: 64,
-      });
-    } else {
-      res = await api.post("/api/inference/huggingface", {
-        text, model_dir: source, image_path: imagePath, audio_path: audioIn,
-        multimodal: !!(imagePath || audioIn), max_tokens: 32,
-      });
-    }
+      let res;
+      if (mode === "normal") {
+        res = await api.post("/api/inference/chat", {
+          text, ckpt_dir: source, image_path: imagePath,
+          audio_in: audioIn, audio_out: audioOut, use_ocr: useOCR,
+        });
+      } else if (mode === "standalone") {
+        res = await api.post("/api/inference/standalone", { text, model_dir: source, max_tokens: 64 });
+      } else {
+        res = await api.post("/api/inference/huggingface", {
+          text, model_dir: source, image_path: imagePath, audio_path: audioIn,
+          multimodal: !!(imagePath || audioIn), max_tokens: 32,
+        });
+      }
 
-    dom.inferBtn.textContent = "Run Inference";
-    dom.inferResult.className = "infer-result";
-    if (res.ok) {
-      const parts = [];
-      if (res.response) parts.push(res.response);
-      if (res.image_response) parts.push(`[Image] ${res.image_response}`);
-      if (res.audio_response) parts.push(`[Audio] ${res.audio_response}`);
-      if (res.audio_out) parts.push(`Audio saved: ${res.audio_out}`);
-      parts.push(`\n[${res.mode || mode} | ${res.elapsed_ms}ms]`);
-      dom.inferResult.textContent = parts.join("\n");
-    } else {
-      dom.inferResult.textContent = `Error: ${res.error || "Unknown error"}`;
-    }
-  }));
+      inferBtn.textContent = "Run Inference";
+      inferResult.style.color = "";
+      if (res.ok) {
+        const parts = [];
+        if (res.response) parts.push(res.response);
+        if (res.image_response) parts.push(`[Image] ${res.image_response}`);
+        if (res.audio_response) parts.push(`[Audio] ${res.audio_response}`);
+        if (res.audio_out) parts.push(`Audio saved: ${res.audio_out}`);
+        parts.push(`\n[${res.mode || mode} | ${res.elapsed_ms}ms]`);
+        inferResult.textContent = parts.join("\n");
+      } else {
+        inferResult.textContent = `Error: ${res.error || "Unknown error"}`;
+      }
+    }));
+  }
 
   // Unload model
   dom.inferUnloadBtn.addEventListener("click", () => withDisable(dom.inferUnloadBtn, async () => {
-    dom.inferUnloadBtn.textContent = "Unloading...";
+    dom.inferUnloadBtn.textContent = "...";
     const res = await api.post("/api/inference/unload", {});
-    dom.inferResult.textContent = res.ok ? "Model unloaded. VRAM freed." : "Failed to unload.";
-    dom.inferUnloadBtn.textContent = "Unload Model";
+    if (res.ok) showToast("Model unloaded, VRAM freed", "success");
+    else showToast("Failed to unload", "error");
+    dom.inferUnloadBtn.textContent = "Unload";
   }));
 
   // Testing

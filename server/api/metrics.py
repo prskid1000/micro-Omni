@@ -148,3 +148,74 @@ def handle_get(handler: Any, path: str, query: dict[str, list[str]]) -> None:
         return
 
     handler.send_error_json(404, f"Unknown metrics endpoint: {path}")
+
+
+def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
+    if path == "/api/metrics/delete":
+        file_name = body.get("file", "")
+        if not file_name:
+            handler.send_error_json(400, "Missing 'file' field")
+            return
+
+        if file_name == "__all__":
+            # Delete all metrics files
+            removed = []
+            for fname in _list_files():
+                fpath = METRICS_DIR / fname
+                try:
+                    fpath.unlink()
+                    _cache.pop(fname, None)
+                    removed.append(fname)
+                except Exception as e:
+                    handler.send_error_json(500, f"Failed to delete {fname}: {e}")
+                    return
+            handler.send_json({"ok": True, "removed": removed, "count": len(removed)})
+            return
+
+        safe_name = os.path.basename(file_name)
+        if safe_name != file_name:
+            handler.send_error_json(400, "Invalid file name")
+            return
+
+        fpath = METRICS_DIR / safe_name
+        if not fpath.exists():
+            handler.send_error_json(404, f"File not found: {safe_name}")
+            return
+
+        try:
+            fpath.unlink()
+            _cache.pop(safe_name, None)
+            handler.send_json({"ok": True, "removed": [safe_name], "count": 1})
+        except Exception as e:
+            handler.send_error_json(500, f"Failed to delete {safe_name}: {e}")
+        return
+
+    if path == "/api/metrics/delete-run":
+        file_name = body.get("file", "")
+        run_id = body.get("run_id", "")
+        if not file_name or not run_id:
+            handler.send_error_json(400, "Missing 'file' or 'run_id'")
+            return
+
+        safe_name = os.path.basename(file_name)
+        fpath = METRICS_DIR / safe_name
+        if not fpath.exists():
+            handler.send_error_json(404, f"File not found: {safe_name}")
+            return
+
+        # Read, filter out the run, rewrite
+        rows = _get_cached_rows(safe_name)
+        kept = [r for r in rows if r.get("run_id") != run_id]
+        removed_count = len(rows) - len(kept)
+
+        try:
+            with fpath.open("w", encoding="utf-8") as f:
+                for r in kept:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            _cache.pop(safe_name, None)  # invalidate cache
+            handler.send_json({"ok": True, "run_id": run_id, "removed_rows": removed_count})
+        except Exception as e:
+            handler.send_error_json(500, f"Failed to rewrite {safe_name}: {e}")
+        return
+
+    handler.send_error_json(404, f"Unknown metrics endpoint: {path}")

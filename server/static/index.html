@@ -46,6 +46,8 @@
       <label>File <div class="chip-group" id="fileChips"></div></label>
       <label>Run ID <div class="chip-group" id="runChips"></div></label>
       <label>Metric <div class="chip-group" id="metricChips"></div></label>
+      <button id="deleteMetricsBtn" class="btn btn-sm btn-danger" title="Delete selected metrics data">Delete Selected</button>
+      <button id="deleteAllMetricsBtn" class="btn btn-sm btn-danger" title="Delete ALL metrics data">Delete All Data</button>
       <button id="xAxisToggle" class="btn btn-sm" title="Toggle X-axis between step and epoch">X: step</button>
     </div>
     <div class="control-group">
@@ -158,32 +160,72 @@
 
   <!-- Inference -->
   <div class="tab-content" id="tab-inference">
-    <div class="infer-controls">
-      <label>Mode
-        <select id="inferMode">
-          <option value="normal">Normal (Checkpoints)</option>
-          <option value="standalone">Standalone (Export)</option>
-          <option value="huggingface">HuggingFace (Export)</option>
+    <!-- Top controls bar -->
+    <div class="infer-toolbar">
+      <div class="infer-toolbar-left">
+        <select id="inferMode" class="infer-select">
+          <option value="normal">Normal</option>
+          <option value="standalone">Standalone</option>
+          <option value="huggingface">HuggingFace</option>
         </select>
-      </label>
-      <label id="inferCkptLabel">Checkpoint
-        <select id="inferCkpt"></select>
-      </label>
+        <select id="inferCkpt" class="infer-select" id="inferCkptLabel"></select>
+        <div class="infer-mode-tabs">
+          <button class="infer-mode-tab active" data-mode="chat">Chat</button>
+          <button class="infer-mode-tab" data-mode="single">Single</button>
+        </div>
+      </div>
+      <div class="infer-toolbar-right">
+        <button id="inferClearChat" class="btn btn-sm" title="Clear chat history">Clear</button>
+        <button id="inferUnloadBtn" class="btn btn-sm btn-danger" title="Free GPU VRAM">Unload</button>
+      </div>
     </div>
-    <div class="infer-controls">
-      <textarea id="inferText" rows="3" placeholder="Enter text prompt..."></textarea>
+
+    <!-- Chat mode -->
+    <div id="inferChatMode" class="infer-chat-container">
+      <div id="inferChatMessages" class="infer-chat-messages">
+        <div class="infer-chat-empty">
+          <div class="infer-chat-empty-icon">&#956;</div>
+          <div>micro-Omni Inference</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:4px">Type a message below or attach an image/audio file</div>
+        </div>
+      </div>
+      <div class="infer-chat-attachments" id="inferAttachments" style="display:none">
+        <span id="inferAttachText" class="chip active"></span>
+      </div>
+      <div class="infer-chat-input-row">
+        <div class="infer-chat-extras">
+          <button class="btn btn-sm" id="inferAttachImgBtn" title="Attach image">&#128247;</button>
+          <button class="btn btn-sm" id="inferAttachAudioBtn" title="Attach audio">&#127908;</button>
+          <label class="infer-ocr-toggle"><input type="checkbox" id="inferOCR" /> OCR</label>
+        </div>
+        <input type="text" id="inferChatInput" class="infer-chat-text" placeholder="Type a message..." autocomplete="off" />
+        <button id="inferChatSendBtn" class="infer-chat-send" title="Send (Enter)">&#10148;</button>
+      </div>
     </div>
-    <div class="infer-controls">
-      <label>Image path <input type="text" id="inferImage" placeholder="e.g. data/images/test.jpg" /></label>
-      <label>Audio in <input type="text" id="inferAudioIn" placeholder="e.g. data/audio/test.wav" /></label>
-      <label>Audio out <input type="text" id="inferAudioOut" placeholder="e.g. output.wav (TTS)" /></label>
-      <label><input type="checkbox" id="inferOCR" /> OCR</label>
+
+    <!-- Single message mode -->
+    <div id="inferSingleMode" class="infer-single-container" style="display:none">
+      <div class="infer-single-grid">
+        <div class="infer-single-col">
+          <div class="infer-single-label">Input</div>
+          <textarea id="inferText" rows="6" class="infer-single-textarea" placeholder="Enter text prompt..."></textarea>
+          <div class="infer-single-extras">
+            <label>Image <input type="text" id="inferImage" placeholder="path/to/image.jpg" /></label>
+            <label>Audio in <input type="text" id="inferAudioIn" placeholder="path/to/audio.wav" /></label>
+            <label>Audio out <input type="text" id="inferAudioOut" placeholder="output.wav" /></label>
+          </div>
+          <button id="inferBtn" class="btn btn-accent" style="margin-top:10px">Run Inference</button>
+        </div>
+        <div class="infer-single-col">
+          <div class="infer-single-label">Output</div>
+          <div id="inferResult" class="infer-single-output"></div>
+        </div>
+      </div>
     </div>
-    <div class="infer-controls">
-      <button id="inferBtn" class="btn btn-accent">Run Inference</button>
-      <button id="inferUnloadBtn" class="btn btn-sm btn-danger">Unload Model</button>
-    </div>
-    <div id="inferResult" class="infer-result"></div>
+
+    <!-- Hidden inputs for attachments -->
+    <input type="hidden" id="inferChatImage" />
+    <input type="hidden" id="inferChatAudio" />
   </div>
 
   <!-- Testing -->
