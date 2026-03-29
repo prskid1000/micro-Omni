@@ -288,7 +288,17 @@ def handle_get(handler: Any, path: str, query: dict[str, list[str]]) -> None:
         stage = path.split("/")[-1].upper()
         db_path = f"logs/hp_tuning_{stage}.db"
         results = _read_study_results(db_path)
-        handler.send_json({"ok": True, "stage": stage, "results": results})
+
+        # Load saved tuning config if exists
+        config_path = f"logs/hp_tuning_{stage}_config.json"
+        tune_config = None
+        if os.path.exists(config_path):
+            try:
+                tune_config = json.loads(open(config_path, "r", encoding="utf-8").read())
+            except Exception:
+                pass
+
+        handler.send_json({"ok": True, "stage": stage, "results": results, "tune_config": tune_config})
         return
 
     if path == "/api/tuning/status":
@@ -312,8 +322,24 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
             return
 
         n_trials = body.get("n_trials", 30)
-        max_steps = body.get("max_steps", 2000)
+        max_steps = body.get("max_steps", 500)
         params = body.get("params")  # optional: subset of params to tune
+
+        # Save tuning config for UI persistence across restarts
+        config_path = f"logs/hp_tuning_{stage}_config.json"
+        os.makedirs("logs", exist_ok=True)
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "stage": stage,
+                    "n_trials": n_trials,
+                    "max_steps": max_steps,
+                    "params": params,
+                    "config": STAGE_MAP[stage]["config"],
+                    "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+                }, f, indent=2)
+        except Exception:
+            pass
 
         extra_args = [
             "--stage", stage,
@@ -390,8 +416,17 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
             try:
                 os.remove(tuned_path)
                 removed.append(tuned_path)
-            except Exception as e:
-                pass  # non-critical
+            except Exception:
+                pass
+
+        # 4. Delete tuning config
+        config_path = f"logs/hp_tuning_{stage}_config.json"
+        if os.path.exists(config_path):
+            try:
+                os.remove(config_path)
+                removed.append(config_path)
+            except Exception:
+                pass
 
         handler.send_json({"ok": True, "stage": stage, "removed": removed, "count": len(removed)})
         return

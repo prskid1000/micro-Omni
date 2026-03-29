@@ -345,7 +345,9 @@ function buildChips(containerId, selectId, values) {
   let html = "";
   for (const v of values) {
     const isActive = prevActive.has(v);
-    const label = v.length > 24 ? v.slice(0, 22) + ".." : v;
+    // Use friendly label if available (e.g. "Train (b376af) s8400" for run IDs)
+    const friendlyLabel = (state._runLabels && state._runLabels[v]) || null;
+    const label = friendlyLabel || (v.length > 24 ? v.slice(0, 22) + ".." : v);
     const xBtn = isActive ? '<span class="chip-x">&times;</span>' : "";
     html += `<span class="chip${isActive ? " active" : ""}" data-value="${v}" title="${v}">${label}${xBtn}</span>`;
   }
@@ -417,6 +419,27 @@ function getActiveStage() {
   return null;
 }
 
+// Compute the run_id for a stage's real checkpoint (not tuning trials)
+function getTrainingRunId(file) {
+  // Find the run_id with the highest step in this file,
+  // preferring runs with many rows (real training has 100s of rows, tuning trials have <20)
+  const runCounts = {};
+  const runMaxStep = {};
+  for (const r of state.allRows) {
+    if (r._file !== file || r.phase === "event") continue;
+    const rid = r.run_id || "";
+    runCounts[rid] = (runCounts[rid] || 0) + 1;
+    const step = r.step || 0;
+    if (step > (runMaxStep[rid] || 0)) runMaxStep[rid] = step;
+  }
+  // Pick the run with most rows (real training >> tuning trial)
+  let best = null, bestCount = 0;
+  for (const [rid, count] of Object.entries(runCounts)) {
+    if (count > bestCount) { bestCount = count; best = rid; }
+  }
+  return best;
+}
+
 function getLatestRunId(file) {
   // Find the run_id with the highest step in this file
   let best = null, bestStep = -1;
@@ -452,7 +475,30 @@ function updateFilters() {
   const userHasFilters = getSelected(dom.fileSelect).size > 0 || getSelected(dom.runSelect).size > 0;
 
   buildChips("fileChips", "fileSelect", files);
-  buildChips("runChips", "runSelect", runs);
+  // Build labeled run chips: classify as Training vs Tuning and sort by row count
+  const runInfos = runs.map(rid => {
+    const runRows = rows.filter(r => String(r.run_id || "") === rid);
+    const count = runRows.length;
+    const maxStep = Math.max(0, ...runRows.map(r => r.step || 0));
+    // Tuning trials have few rows (<30) and low max_steps (<2000)
+    // Real training has many rows (50+) and higher max_steps
+    const isTune = count < 30 && maxStep < 2500;
+    const label = isTune
+      ? `Tune (${rid.slice(0, 6)}) ${count}r`
+      : `Train (${rid.slice(0, 6)}) s${maxStep}`;
+    return { rid, label, count, maxStep, isTune };
+  });
+  // Sort: real training first (by row count desc), then tuning
+  runInfos.sort((a, b) => {
+    if (a.isTune !== b.isTune) return a.isTune ? 1 : -1;
+    return b.count - a.count;
+  });
+  const labeledRuns = runInfos.map(r => r.rid);
+  // Store labels for chip display
+  state._runLabels = {};
+  for (const r of runInfos) state._runLabels[r.rid] = r.label;
+
+  buildChips("runChips", "runSelect", labeledRuns);
   buildChips("metricChips", "metricSelect", metrics);
 
   // Auto-select active stage's file and run if user hasn't manually filtered
@@ -639,27 +685,37 @@ function updateSummaryCards() {
     D: "train_talker.jsonl", E: "sft_omni.jsonl", F: "train_vocoder.jsonl", G: "train_ocr.jsonl",
   };
   let activeFile = null;
+  let isTuningActive = false;
+
+  // Check if tuning is running (writes to same metrics file as training)
+  try {
+    const tuneProcs = state._tuneStatus || {};
+    isTuningActive = Object.values(tuneProcs).some(p => p.status === "running");
+  } catch {}
+
   if (state.pipelineData) {
-    // Find running stage
+    // Find running training stage
     for (const [id, s] of Object.entries(state.pipelineData)) {
       if (s.status === "running") { activeFile = stageToFile[id]; break; }
     }
-    // If nothing running, find most recently active (done/stopped)
+    // If nothing running, find most recently active (done/paused/stopped)
     if (!activeFile) {
       for (const [id, s] of Object.entries(state.pipelineData)) {
-        if (s.status === "done" || s.status === "stopped") { activeFile = stageToFile[id]; break; }
+        if (["done", "paused", "stopped"].includes(s.status)) { activeFile = stageToFile[id]; break; }
       }
     }
   }
 
-  // Further filter to latest run_id within the active file
+  // Filter to active file
   let activeRunId = null;
   let filteredRows = activeFile
     ? allNonEvent.filter(r => r._file === activeFile)
     : allNonEvent;
 
   if (activeFile && filteredRows.length) {
-    activeRunId = getLatestRunId(activeFile);
+    // When tuning is active, show the latest run (tuning trial) — it's the current work
+    // When training is active or idle, prefer the training run (most rows)
+    activeRunId = isTuningActive ? getLatestRunId(activeFile) : getTrainingRunId(activeFile);
     if (activeRunId) {
       filteredRows = filteredRows.filter(r => r.run_id === activeRunId);
     }
@@ -670,18 +726,23 @@ function updateSummaryCards() {
 
   // Show which stage/run the cards are tracking
   const activeStage = getActiveStage();
-  const label = activeStage
-    ? `Stage ${activeStage}${activeRunId ? " / " + activeRunId.slice(0, 8) : ""}`
+  const prefix = isTuningActive ? "Tuning" : activeStage ? `Stage ${activeStage}` : "";
+  const label = prefix
+    ? `${prefix}${activeRunId ? " / " + activeRunId.slice(0, 8) : ""}`
     : activeRunId ? `run: ${activeRunId.slice(0, 8)}` : "";
   const stepLabel = $("#cardStep .card-label");
   if (stepLabel) stepLabel.textContent = label ? `Current Step (${label})` : "Current Step";
 
-  // Find latest training metrics
+  // Find latest training metrics — use all phases to find the latest step
   const trainRows = rows.filter(r => r.phase === "train" && r.metric_name === "loss");
   const valRows = rows.filter(r => (r.phase === "val" || r.metric_name === "val_loss"));
+  const allMetricRows = rows.filter(r => r.step != null);
 
-  // Current step
-  if (trainRows.length) {
+  // Current step — from any metric row with highest step
+  if (allMetricRows.length) {
+    const latest = allMetricRows.reduce((a, b) => (a.step || 0) > (b.step || 0) ? a : b);
+    setCard("cardStep", latest.step);
+  } else if (trainRows.length) {
     const latest = trainRows.reduce((a, b) => (a.step || 0) > (b.step || 0) ? a : b);
     setCard("cardStep", latest.step);
   }
@@ -692,20 +753,29 @@ function updateSummaryCards() {
     setCard("cardBestVal", best.metric_value?.toFixed(4));
   }
 
-  // LR
-  const withLR = trainRows.filter(r => r.lr != null);
+  // LR — check all rows with lr field, not just train loss rows
+  const withLR = rows.filter(r => r.lr != null);
   if (withLR.length) {
     const latest = withLR.reduce((a, b) => (a.step || 0) > (b.step || 0) ? a : b);
     setCard("cardLR", latest.lr?.toExponential(2));
   }
 
   // Throughput & ETA
-  if (trainRows.length >= 2) {
-    const sorted = [...trainRows].sort((a, b) => (a.step || 0) - (b.step || 0));
+  // For throughput, use all train loss rows from this file (across runs) for more data points
+  const allFileTrainRows = activeFile
+    ? allNonEvent.filter(r => r._file === activeFile && r.phase === "train" && r.metric_name === "loss")
+    : trainRows;
+  const throughputRows = allFileTrainRows.length >= 2 ? allFileTrainRows : trainRows;
+
+  if (throughputRows.length >= 2) {
+    const sorted = [...throughputRows].sort((a, b) => {
+      // Sort by timestamp (more reliable than step which can reset across runs)
+      return (a.timestamp || "").localeCompare(b.timestamp || "");
+    });
     const recent = sorted.slice(-20);
     if (recent.length >= 2) {
       const dt = (new Date(recent[recent.length - 1].timestamp) - new Date(recent[0].timestamp)) / 1000;
-      const dSteps = (recent[recent.length - 1].step || 0) - (recent[0].step || 0);
+      const dSteps = Math.abs((recent[recent.length - 1].step || 0) - (recent[0].step || 0));
       if (dt > 0 && dSteps > 0) {
         const stepsPerSec = dSteps / dt;
         setCard("cardThroughput", stepsPerSec.toFixed(1) + " s/s");
@@ -758,6 +828,17 @@ function updateSummaryCards() {
 }
 
 function findMaxSteps() {
+  // When tuning is active, each trial runs for a limited number of steps
+  // (default 500, set via --max_steps in tune.py)
+  const isTuning = state._tuneStatus &&
+    Object.values(state._tuneStatus).some(p => p.status === "running");
+  if (isTuning) {
+    // Read from the tuning HTML input if available
+    const tuneStepsEl = $("#tuneSteps");
+    if (tuneStepsEl) return parseInt(tuneStepsEl.value) || 500;
+    return 500;
+  }
+
   // Try to get from checkpoint configs
   if (state.checkpointData) {
     for (const ckpt of state.checkpointData) {
@@ -1051,8 +1132,9 @@ async function poll() {
       }
     }
 
-    // If tuning is running, keep its progress indicator alive
+    // Store tuning status for summary cards to detect active tuning
     if (tuneStatusRes.ok && tuneStatusRes.processes) {
+      state._tuneStatus = tuneStatusRes.processes;
       const tuneRunning = Object.values(tuneStatusRes.processes).some(p => p.status === "running");
       if (tuneRunning && typeof window._pollTuningProgress === "function") {
         window._pollTuningProgress();
@@ -1668,6 +1750,13 @@ async function setupTuning() {
 
     // Load results from DB (updates as trials complete)
     const resData = await api.get(`/api/tuning/results/${stage}`);
+
+    // Restore tuning config (stage/trials/steps) from saved file
+    if (resData.ok && resData.tune_config) {
+      const tc = resData.tune_config;
+      if (tc.n_trials) $("#tuneTrials").value = tc.n_trials;
+      if (tc.max_steps) $("#tuneSteps").value = tc.max_steps;
+    }
 
     if (resData.ok && resData.results && !resData.results.error) {
       const r = resData.results;
