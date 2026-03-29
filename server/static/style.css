@@ -441,16 +441,80 @@ input[type="range"] {
   font-weight: 600;
 }
 
-.chip[data-value="__tune_all__"] {
-  background: rgba(245, 158, 11, 0.15);
-  border-color: rgba(245, 158, 11, 0.3);
-  color: var(--warning);
-  font-style: italic;
+/* ── Run Popover ──────────────────────────────────────────── */
+
+.run-popover {
+  z-index: 9999;
+  background: rgba(15, 18, 38, 0.97);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  padding: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  min-width: 300px;
+  max-width: 420px;
+  animation: fadeIn 150ms ease;
 }
 
-.chip[data-value="__tune_all__"].active {
-  background: rgba(245, 158, 11, 0.3);
-  border-color: rgba(245, 158, 11, 0.5);
+.run-popover-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-soft);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.run-popover-list {
+  max-height: 250px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.run-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text);
+  cursor: pointer;
+  flex-direction: row !important;
+}
+
+.run-popover-item:hover { background: rgba(255, 255, 255, 0.05); }
+
+.run-popover-item input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.run-popover-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.chip[data-value="__more_runs__"] {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--info);
+  cursor: pointer;
+}
+
+.chip[data-value="__more_runs__"]:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.chip[data-value="__more_runs__"].active {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
 }
 
 /* ── Checkbox label inline ───────────────────────────────── */

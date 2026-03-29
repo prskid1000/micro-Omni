@@ -239,14 +239,7 @@ function updateChart() {
       textStyle: { color: "#e8ecf4", fontSize: 11, fontFamily: "Cascadia Code, monospace" },
       axisPointer: { type: "cross", lineStyle: { color: "rgba(255,255,255,0.2)" } },
     },
-    legend: {
-      data: legendData,
-      textStyle: { color: "#9ca3bf", fontSize: 10 },
-      top: 4,
-      right: 80,
-      type: "scroll",
-      pageTextStyle: { color: "#9ca3bf" },
-    },
+    legend: { show: false },
     grid: { left: 60, right: state.dualAxis ? 70 : 40, top: 40, bottom: 60 },
     toolbox: {
       feature: {
@@ -294,6 +287,79 @@ function updateChart() {
   };
 
   state.chart.setOption(option, true);
+
+  // Store legend data for the series popover
+  state._chartLegend = legendData;
+}
+
+// ── Series popover ──────────────────────────────────────────
+function openSeriesPopover(btnEl) {
+  const existing = document.querySelector(".series-popover");
+  if (existing) { existing.remove(); return; }
+
+  // Use the chart's actual current series (what's rendered, not all data)
+  const legendData = state._chartLegend || [];
+  if (!legendData.length || !state.chart) return;
+
+  const pop = document.createElement("div");
+  pop.className = "run-popover series-popover";
+
+  // Get current visibility from chart
+  const opt = state.chart.getOption();
+  const legendSelected = (opt.legend && opt.legend[0] && opt.legend[0].selected) || {};
+
+  let html = '<div class="run-popover-title">Chart Series</div>';
+  html += '<div class="run-popover-list">';
+  for (const name of legendData) {
+    if (name.includes("(raw)")) continue; // skip raw lines
+    const checked = legendSelected[name] !== false ? "checked" : "";
+    const shortName = name.length > 50 ? name.slice(0, 47) + "..." : name;
+    html += `<label class="run-popover-item"><input type="checkbox" value="${name}" ${checked} /> <span title="${name}">${shortName}</span></label>`;
+  }
+  html += '</div>';
+  html += '<div class="run-popover-actions">';
+  html += '<button class="btn btn-sm" data-action="all">All</button>';
+  html += '<button class="btn btn-sm" data-action="none">None</button>';
+  html += '<button class="btn btn-sm btn-accent" data-action="apply">Apply</button>';
+  html += '</div>';
+  pop.innerHTML = html;
+
+  const rect = btnEl.getBoundingClientRect();
+  pop.style.position = "fixed";
+  pop.style.top = (rect.bottom + 4) + "px";
+  pop.style.right = (window.innerWidth - rect.right) + "px";
+  pop.style.left = "auto";
+  document.body.appendChild(pop);
+
+  pop.querySelector('[data-action="all"]').addEventListener("click", () => {
+    pop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+  });
+  pop.querySelector('[data-action="none"]').addEventListener("click", () => {
+    pop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+  });
+
+  pop.querySelector('[data-action="apply"]').addEventListener("click", () => {
+    const selected = {};
+    for (const name of legendData) {
+      const cb = pop.querySelector(`input[value="${CSS.escape(name)}"]`);
+      selected[name] = cb ? cb.checked : true;
+      // Also handle raw line visibility
+      const rawName = name + " (raw)";
+      if (legendData.includes(rawName)) selected[rawName] = selected[name];
+    }
+    // Update chart legend selection (hidden legend still controls visibility)
+    state.chart.setOption({ legend: { show: false, selected } });
+    pop.remove();
+  });
+
+  setTimeout(() => {
+    document.addEventListener("click", function closer(e) {
+      if (!pop.contains(e.target) && e.target !== btnEl) {
+        pop.remove();
+        document.removeEventListener("click", closer);
+      }
+    });
+  }, 10);
 }
 
 // ── Filtering ───────────────────────────────────────────────
@@ -306,11 +372,11 @@ function getFilteredRows() {
   const runs = getSelected(dom.runSelect);
   const metrics = getSelected(dom.metricSelect);
 
-  // Expand __tune_all__ virtual group into actual tune run_ids
+  // Expand __more_runs__ virtual group into actual tune run_ids
   let expandedRuns = runs;
-  if (runs.has("__tune_all__") && state._tuneRunIds) {
+  if (runs.has("__more_runs__") && state._tuneRunIds) {
     expandedRuns = new Set(runs);
-    expandedRuns.delete("__tune_all__");
+    expandedRuns.delete("__more_runs__");
     for (const rid of state._tuneRunIds) expandedRuns.add(rid);
   }
 
@@ -379,15 +445,21 @@ function buildChips(containerId, selectId, values) {
   // Click handlers
   container.querySelectorAll(".chip:not(.chip-clear)").forEach(chip => {
     chip.addEventListener("click", (e) => {
+      const val = chip.dataset.value;
+
+      // "+N more" chip — open popover to select individual runs
+      if (val === "__more_runs__" && state._allRunInfos && !e.target.classList.contains("chip-x")) {
+        openRunPopover(chip, container, sel, containerId, selectId, values);
+        return;
+      }
+
       // If clicking the X button, deselect
       if (e.target.classList.contains("chip-x")) {
         chip.classList.remove("active");
-        // Remove x button
         const x = chip.querySelector(".chip-x");
         if (x) x.remove();
       } else {
         chip.classList.toggle("active");
-        // Add/remove x button
         if (chip.classList.contains("active") && !chip.querySelector(".chip-x")) {
           chip.insertAdjacentHTML("beforeend", '<span class="chip-x">&times;</span>');
         } else {
@@ -396,7 +468,6 @@ function buildChips(containerId, selectId, values) {
         }
       }
       syncAndUpdate();
-      // Rebuild to update Clear All button visibility
       buildChips(containerId, selectId, values);
     });
   });
@@ -412,6 +483,81 @@ function buildChips(containerId, selectId, values) {
       renderLatestValues();
     });
   }
+}
+
+// ── Run popover for "+N more" chip ──────────────────────────
+function openRunPopover(chipEl, container, sel, containerId, selectId, values) {
+  // Close existing popover
+  const existing = document.querySelector(".run-popover");
+  if (existing) { existing.remove(); return; }
+
+  const allRuns = state._allRunInfos || [];
+  const selectedRuns = getSelected(sel);
+
+  const pop = document.createElement("div");
+  pop.className = "run-popover";
+
+  let html = '<div class="run-popover-title">Select Runs</div>';
+  html += '<div class="run-popover-list">';
+  for (const r of allRuns) {
+    const checked = selectedRuns.has(r.rid) ? "checked" : "";
+    const label = `${r.rid.slice(0, 8)} (step ${r.maxStep}, ${r.count} rows)`;
+    html += `<label class="run-popover-item"><input type="checkbox" value="${r.rid}" ${checked} /> ${label}</label>`;
+  }
+  html += '</div>';
+  html += '<div class="run-popover-actions">';
+  html += '<button class="btn btn-sm" data-action="all">All</button>';
+  html += '<button class="btn btn-sm" data-action="none">None</button>';
+  html += '<button class="btn btn-sm btn-accent" data-action="apply">Apply</button>';
+  html += '</div>';
+  pop.innerHTML = html;
+
+  // Position below the chip
+  const rect = chipEl.getBoundingClientRect();
+  pop.style.position = "fixed";
+  pop.style.top = (rect.bottom + 4) + "px";
+  pop.style.left = rect.left + "px";
+  document.body.appendChild(pop);
+
+  // Select All / None
+  pop.querySelector('[data-action="all"]').addEventListener("click", () => {
+    pop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+  });
+  pop.querySelector('[data-action="none"]').addEventListener("click", () => {
+    pop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+  });
+
+  // Apply
+  pop.querySelector('[data-action="apply"]').addEventListener("click", () => {
+    const checked = new Set([...pop.querySelectorAll('input:checked')].map(cb => cb.value));
+    // Update hidden select
+    [...sel.options].forEach(opt => { opt.selected = checked.has(opt.value); });
+    // Also add checked runs that aren't in the select as options
+    for (const rid of checked) {
+      if (![...sel.options].some(o => o.value === rid)) {
+        const opt = document.createElement("option");
+        opt.value = rid;
+        opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+    try { localStorage.setItem("filters_" + containerId, JSON.stringify([...checked])); } catch {}
+    pop.remove();
+    updateChart();
+    renderLatestValues();
+    // Rebuild chips to reflect new selection
+    buildChips(containerId, selectId, values);
+  });
+
+  // Close on click outside
+  setTimeout(() => {
+    document.addEventListener("click", function closer(e) {
+      if (!pop.contains(e.target) && e.target !== chipEl) {
+        pop.remove();
+        document.removeEventListener("click", closer);
+      }
+    });
+  }, 10);
 }
 
 // Stage to metrics file mapping
@@ -496,28 +642,13 @@ function updateFilters() {
   state._tuneRunIds = null;
   const visibleRuns = [];
 
-  if (runInfos.length <= 8) {
-    // Few runs — show all individually
-    for (const r of runInfos) {
-      visibleRuns.push(r.rid);
-      state._runLabels[r.rid] = `${r.rid.slice(0, 6)} (s${r.maxStep}, ${r.count}r)`;
-    }
-  } else {
-    // Many runs — show top 5 individually, group the rest
-    const topRuns = runInfos.slice(0, 5);
-    const restRuns = runInfos.slice(5);
+  // Only show Browse button — all run selection happens in popover
+  state._allRunInfos = runInfos;
+  state._tuneRunIds = null;
 
-    for (const r of topRuns) {
-      visibleRuns.push(r.rid);
-      state._runLabels[r.rid] = `${r.rid.slice(0, 6)} (s${r.maxStep}, ${r.count}r)`;
-    }
-
-    if (restRuns.length > 0) {
-      const groupId = "__tune_all__";
-      visibleRuns.push(groupId);
-      state._runLabels[groupId] = `${restRuns.length} more runs`;
-      state._tuneRunIds = new Set(restRuns.map(r => r.rid));
-    }
+  if (runInfos.length > 0) {
+    visibleRuns.push("__more_runs__");
+    state._runLabels = { "__more_runs__": `Runs (${runInfos.length})` };
   }
 
   buildChips("runChips", "runSelect", visibleRuns);
@@ -1229,6 +1360,9 @@ function setupControls() {
     dom.smoothValue.textContent = state.smoothing.toFixed(2);
     updateChart();
   }, 80));
+
+  // Series popover
+  $("#seriesBtn").addEventListener("click", (e) => openSeriesPopover(e.currentTarget));
 
   // Log scale
   dom.logScaleBtn.addEventListener("click", () => {
