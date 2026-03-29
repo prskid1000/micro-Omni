@@ -1698,9 +1698,15 @@ async function setupTuning() {
           : "";
       }
 
-      // Update Start button label
+      // Update Start button label and disabled state based on running
       if (startBtn) {
-        startBtn.textContent = r.n_trials > 0 ? "Resume Tuning" : "Start Tuning";
+        if (isRunning) {
+          startBtn.textContent = "Running...";
+          startBtn.disabled = true;
+        } else {
+          startBtn.textContent = r.n_trials > 0 ? "Resume Tuning" : "Start Tuning";
+          startBtn.disabled = false;
+        }
       }
 
       // Best result
@@ -1896,7 +1902,7 @@ async function setupTuning() {
       $("#tuneTrialsTable tbody").innerHTML = "";
       $("#tuneSliceCharts").innerHTML = "";
       $("#tuneApplyResult").innerHTML = "";
-      if (startBtn) startBtn.textContent = "Start Tuning";
+      if (startBtn) { startBtn.textContent = "Start Tuning"; startBtn.disabled = false; }
 
       // Clear charts
       if (tuneChart) { tuneChart.clear(); }

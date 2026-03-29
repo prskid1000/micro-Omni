@@ -78,7 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description="Optuna HP tuning for micro-Omni")
     parser.add_argument("--stage", required=True, help="Stage letter: A-G")
     parser.add_argument("--n_trials", type=int, default=30, help="Number of trials")
-    parser.add_argument("--max_steps", type=int, default=2000, help="Max training steps per trial")
+    parser.add_argument("--max_steps", type=int, default=500, help="Max training steps per trial")
     parser.add_argument("--params", type=str, default=None, help="JSON list of param names to tune (subset)")
     parser.add_argument("--config", type=str, default=None, help="Override base config file")
     args = parser.parse_args()
