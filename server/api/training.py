@@ -79,14 +79,25 @@ def _get_pipeline_status(pm: Any) -> dict[str, Any]:
         # Determine process state
         proc_status = proc_info.get("status") if proc_info else None
 
+        # Determine if checkpoint represents complete or partial training
+        is_complete = False
+        if has_ckpt and metadata:
+            ckpt_step = metadata.get("step", 0)
+            ckpt_config = _read_config(ckpt_dir)
+            max_steps = ckpt_config.get("max_steps", 0) if ckpt_config else 0
+            if max_steps > 0 and ckpt_step >= max_steps:
+                is_complete = True
+
         if is_running:
             status = "running"
         elif proc_status == "stopped":
             status = "stopped"
         elif proc_status == "failed":
             status = "failed"
-        elif has_ckpt:
+        elif has_ckpt and is_complete:
             status = "done"
+        elif has_ckpt and not is_complete:
+            status = "paused"  # checkpoint exists but training didn't finish
         elif missing_deps:
             status = "blocked"
         else:

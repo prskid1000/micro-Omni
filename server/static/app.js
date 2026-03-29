@@ -428,6 +428,17 @@ function getLatestRunId(file) {
   return best;
 }
 
+function getLatestStepFromMetrics(file, runId) {
+  let maxStep = 0;
+  for (const r of state.allRows) {
+    if (r._file !== file || r.phase === "event") continue;
+    if (runId && r.run_id !== runId) continue;
+    const step = r.step || 0;
+    if (step > maxStep) maxStep = step;
+  }
+  return maxStep;
+}
+
 function updateFilters() {
   const rows = state.allRows.filter(r => r.phase !== "event");
   const files = [...new Set(rows.map(r => r._file))].sort();
@@ -473,14 +484,27 @@ function renderPipeline(stages) {
   dom.pipeline.innerHTML = Object.entries(stages).map(([id, s]) => {
     const statusClass = s.status;
     const meta = s.metadata;
-    const stepInfo = meta ? `Step ${meta.step || 0}` : "";
     const proc = s.process;
     const maxSteps = meta?.max_steps || null;
 
-    // Find current run_id for this stage
+    // Find current run_id and latest step from metrics (more accurate than metadata)
     const stageFile = STAGE_METRICS_FILE[id];
     const currentRunId = stageFile ? getLatestRunId(stageFile) : null;
     const runIdShort = currentRunId ? currentRunId.slice(0, 8) : "";
+    const metricsStep = stageFile ? getLatestStepFromMetrics(stageFile, currentRunId) : 0;
+    const metaStep = meta ? (meta.step || 0) : 0;
+    const liveStep = Math.max(metricsStep, metaStep);
+
+    // Show: live step / max_steps + checkpoint indicator
+    let stepInfo = "";
+    const maxLabel = maxSteps ? `/${maxSteps}` : "";
+    if (s.status === "running" && liveStep > 0 && metaStep > 0 && liveStep !== metaStep) {
+      stepInfo = `Step ${liveStep}${maxLabel} (ckpt: ${metaStep})`;
+    } else if (liveStep > 0) {
+      stepInfo = `Step ${liveStep}${maxLabel}`;
+    } else if (metaStep > 0) {
+      stepInfo = `Step ${metaStep}${maxLabel}`;
+    }
 
     // Build status line
     let statusLine = s.status;
@@ -501,6 +525,7 @@ function renderPipeline(stages) {
         actions = `<button class="btn btn-sm btn-danger" onclick="stopStage('${id}')">Stop</button>`;
         break;
       case "stopped":
+      case "paused":
         actions = `<button class="btn btn-sm" onclick="startStage('${id}')">Resume</button>`;
         actions += ` <button class="btn btn-sm btn-danger" onclick="clearStage('${id}')" title="Delete and restart">Clear</button>`;
         break;
@@ -517,11 +542,12 @@ function renderPipeline(stages) {
         break;
     }
 
-    // Progress bar for running stages
+    // Progress bar for running/paused stages
     let progressBar = "";
-    if (s.status === "running" && meta && maxSteps && meta.step) {
-      const pct = Math.min(100, Math.round((meta.step / maxSteps) * 100));
-      progressBar = `<div class="stage-progress" style="width:${pct}%" title="${meta.step}/${maxSteps} (${pct}%)"></div>`;
+    const progressStep = liveStep || metaStep;
+    if ((s.status === "running" || s.status === "paused") && maxSteps && progressStep > 0) {
+      const pct = Math.min(100, Math.round((progressStep / maxSteps) * 100));
+      progressBar = `<div class="stage-progress" style="width:${pct}%" title="${progressStep}/${maxSteps} (${pct}%)"></div>`;
     }
 
     return `
@@ -1637,6 +1663,9 @@ async function setupTuning() {
       p => p.status === "running" && p.stage === `tune_${stage}`
     );
 
+    // Update button label based on whether DB has existing trials
+    const startBtn = $("#tuneStartBtn");
+
     // Load results from DB (updates as trials complete)
     const resData = await api.get(`/api/tuning/results/${stage}`);
 
@@ -1665,8 +1694,13 @@ async function setupTuning() {
         `;
       } else {
         progressDiv.innerHTML = r.n_trials > 0
-          ? `<span style="color:var(--text-dim)">Completed: ${r.n_trials} trials</span>`
+          ? `<span style="color:var(--text-dim)">Paused: ${r.n_trials} trials completed</span>`
           : "";
+      }
+
+      // Update Start button label
+      if (startBtn) {
+        startBtn.textContent = r.n_trials > 0 ? "Resume Tuning" : "Start Tuning";
       }
 
       // Best result
@@ -1862,6 +1896,7 @@ async function setupTuning() {
       $("#tuneTrialsTable tbody").innerHTML = "";
       $("#tuneSliceCharts").innerHTML = "";
       $("#tuneApplyResult").innerHTML = "";
+      if (startBtn) startBtn.textContent = "Start Tuning";
 
       // Clear charts
       if (tuneChart) { tuneChart.clear(); }
@@ -2026,11 +2061,19 @@ async function setupTuning() {
     const stage = stageSel.value;
     const nTrials = parseInt($("#tuneTrials").value) || 30;
     const maxSteps = parseInt($("#tuneSteps").value) || 2000;
-    progressDiv.innerHTML = `<span class="status-dot running"></span> Starting tuning for Stage ${stage}...`;
+
+    // Check if DB exists (resume vs fresh)
+    const existing = await api.get(`/api/tuning/results/${stage}`);
+    const existingTrials = (existing.results && !existing.results.error) ? existing.results.n_trials : 0;
+    const isResume = existingTrials > 0;
+    const label = isResume
+      ? `Resuming from ${existingTrials} existing trials, adding ${nTrials} more...`
+      : `Starting fresh: ${nTrials} trials...`;
+
+    progressDiv.innerHTML = `<span class="status-dot running"></span> ${label}`;
     const res = await api.post("/api/tuning/start", { stage, n_trials: nTrials, max_steps: maxSteps });
     if (res.ok) {
-      progressDiv.innerHTML = `<span class="status-dot running"></span> Tuning started: Stage ${stage}, ${nTrials} trials (PID ${res.pid})`;
-      // Start polling
+      progressDiv.innerHTML = `<span class="status-dot running"></span> Tuning running: Stage ${stage}, ${nTrials} new trials (PID ${res.pid})${isResume ? " [resumed]" : ""}`;
       if (!tunePollTimer) tunePollTimer = setInterval(pollTuningProgress, 8000);
     } else {
       progressDiv.innerHTML = `<span style="color:var(--danger)">Error: ${res.error || "Failed to start"}</span>`;

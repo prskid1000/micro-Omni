@@ -291,6 +291,7 @@ body {
 .status-dot.failed { background: var(--danger); }
 .status-dot.blocked { background: var(--warning); }
 .status-dot.stopped { background: var(--warning); }
+.status-dot.paused { background: var(--accent-2); }
 
 @keyframes blink {
   0%, 100% { opacity: 1; }

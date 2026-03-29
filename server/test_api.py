@@ -184,6 +184,17 @@ class APITester:
         self._run_section("New UI Elements", self.test_new_ui_elements)
         self._run_section("New JS Features", self.test_new_js_features)
         self._run_section("Incremental Polling", self.test_incremental_polling)
+        # Latest features
+        self._run_section("Paused State Detection", self.test_paused_state_detection)
+        self._run_section("Clear Resets to Idle", self.test_clear_resets_to_idle, skip_slow)
+        self._run_section("Metrics Delete API", self.test_metrics_delete_api)
+        self._run_section("Chat UI Elements", self.test_chat_ui_elements)
+        self._run_section("Delete Buttons", self.test_delete_buttons_exist)
+        self._run_section("Step Display", self.test_step_display_in_pipeline)
+        self._run_section("Paused CSS", self.test_paused_status_in_css)
+        self._run_section("Tuning Resume UI", self.test_tuning_resume_ui)
+        self._run_section("PM Clear Record", self.test_process_manager_clear_record, skip_slow)
+        self._run_section("Chip Clear All", self.test_chip_clear_all_html)
 
         self._print_summary()
         return self.failed == 0
@@ -365,7 +376,7 @@ class APITester:
             s = stages[stage_id]
             for key in ["status", "name", "module", "config", "checkpoint_dir", "has_checkpoint", "blocked_by"]:
                 self.assert_in(f"Stage {stage_id} has '{key}'", key, s)
-            self.assert_in(f"Stage {stage_id} status valid", s["status"], ["idle", "running", "done", "stopped", "failed", "blocked"])
+            self.assert_in(f"Stage {stage_id} status valid", s["status"], ["idle", "running", "done", "stopped", "failed", "blocked", "paused"])
 
         # Dependency graph validation
         self.assert_eq("A has no deps", stages["A"]["blocked_by"], [])
@@ -1763,6 +1774,171 @@ class APITester:
             self.assert_true("Since returns fewer than all",
                             len(since_rows) < len(all_rows),
                             f"{len(since_rows)} >= {len(all_rows)}")
+
+    # ══════════════════════════════════════════════════════════
+    # LATEST FEATURES: Paused state, Clear reset, Metrics delete,
+    #   Chat UI, Step display, Tuning resume
+    # ══════════════════════════════════════════════════════════
+
+    def test_paused_state_detection(self):
+        """Verify partial checkpoint shows 'paused' not 'done' after server restart."""
+        r = self.get("/api/training/pipeline")
+        stages = r.get("stages", {})
+
+        for stage_id, s in stages.items():
+            if not s.get("has_checkpoint"):
+                continue
+            meta = s.get("metadata")
+            if not meta:
+                continue
+
+            # Read config to get max_steps
+            r2 = self.get(f"/api/system/checkpoint-config/{s.get('checkpoint_dir', '').split('/')[-1]}")
+            if not r2.get("ok"):
+                continue
+            max_steps = r2.get("config", {}).get("max_steps", 0)
+            step = meta.get("step", 0)
+
+            if max_steps > 0 and step < max_steps and s.get("status") not in ("running", "stopped", "failed"):
+                self.assert_eq(f"Stage {stage_id} partial ckpt -> paused", s["status"], "paused")
+            elif max_steps > 0 and step >= max_steps and s.get("status") not in ("running", "stopped", "failed"):
+                self.assert_eq(f"Stage {stage_id} complete ckpt -> done", s["status"], "done")
+
+    def test_clear_resets_to_idle(self):
+        """Verify Clear removes process record and stage becomes idle."""
+        self.wait_gpu_free()
+
+        # Start Stage A briefly
+        r = self.post("/api/training/start", {"stage": "A"})
+        if not r.get("ok"):
+            self.skip("Clear reset test", "couldn't start A")
+            return
+        time.sleep(3)
+
+        # Clear (should stop + delete + reset)
+        r = self.check("Clear while running", self.post("/api/training/clear", {"stage": "A"}))
+
+        time.sleep(2)
+        p = self.get("/api/training/pipeline")
+        stage_a = p["stages"]["A"]
+        self.assert_eq("A is idle after clear", stage_a["status"], "idle")
+        self.assert_eq("A has no checkpoint", stage_a["has_checkpoint"], False)
+        # Process record should be gone
+        r2 = self.get("/api/training/status")
+        self.assert_true("No training_A process after clear",
+                        "training_A" not in r2.get("processes", {}))
+
+    test_clear_resets_to_idle._slow = True
+
+    def test_metrics_delete_api(self):
+        """Verify metrics file and run deletion endpoints."""
+        # Ensure we have data
+        files = self.get("/api/metrics/files").get("files", [])
+        if not files:
+            self.skip("Metrics delete test", "no metrics files")
+            return
+
+        # Test delete-run (non-existent run = 0 removed, file unchanged)
+        r = self.check("Delete non-existent run",
+                       self.post("/api/metrics/delete-run", {"file": files[0], "run_id": "nonexistent_999"}))
+        self.assert_eq("Removed 0 rows", r.get("removed_rows"), 0)
+
+        # Test delete non-existent file
+        r = self.post("/api/metrics/delete", {"file": "nonexistent_file.jsonl"})
+        self.check("Delete non-existent file -> 404", r, expect_ok=False)
+
+        # Test delete missing params
+        self.check("Delete no file -> 400", self.post("/api/metrics/delete", {}), expect_ok=False)
+        self.check("Delete-run no params -> 400",
+                   self.post("/api/metrics/delete-run", {}), expect_ok=False)
+
+    def test_chat_ui_elements(self):
+        """Verify chat inference UI elements exist."""
+        status, body, headers = self.get_raw("/")
+        checks = [
+            ("Chat mode tab", b'data-mode="chat"'),
+            ("Single mode tab", b'data-mode="single"'),
+            ("Chat messages container", b"inferChatMessages"),
+            ("Chat input field", b"inferChatInput"),
+            ("Chat send button", b"inferChatSendBtn"),
+            ("Attach image button", b"inferAttachImgBtn"),
+            ("Attach audio button", b"inferAttachAudioBtn"),
+            ("Clear chat button", b"inferClearChat"),
+            ("Single mode textarea", b"inferText"),
+            ("Single mode output", b"inferResult"),
+            ("Chat empty state icon", b"infer-chat-empty-icon"),
+        ]
+        for label, needle in checks:
+            self.assert_true(f"Chat UI: {label}", needle in body)
+
+    def test_delete_buttons_exist(self):
+        """Verify metrics delete buttons exist in HTML."""
+        status, body, headers = self.get_raw("/")
+        self.assert_true("Delete Selected button", b"deleteMetricsBtn" in body)
+        self.assert_true("Delete All Data button", b"deleteAllMetricsBtn" in body)
+
+    def test_step_display_in_pipeline(self):
+        """Verify pipeline shows max_steps target alongside current step."""
+        status, body, headers = self.get_raw("/static/app.js")
+        # JS should compute both metricsStep and metaStep
+        self.assert_true("JS has metricsStep", b"metricsStep" in body)
+        self.assert_true("JS has metaStep", b"metaStep" in body)
+        self.assert_true("JS shows ckpt indicator", b"ckpt:" in body)
+        self.assert_true("JS shows maxLabel", b"maxLabel" in body)
+        self.assert_true("JS has getLatestStepFromMetrics", b"getLatestStepFromMetrics" in body)
+
+    def test_paused_status_in_css(self):
+        """Verify paused status has CSS styling."""
+        status, body, headers = self.get_raw("/static/style.css")
+        self.assert_true("CSS has .paused status dot", b"status-dot.paused" in body or b".paused" in body)
+
+    def test_tuning_resume_ui(self):
+        """Verify tuning UI shows resume label when DB exists."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has Resume Tuning label", b"Resume Tuning" in body)
+        self.assert_true("JS checks existing trials for resume", b"existingTrials" in body)
+        self.assert_true("JS shows resumed indicator", b"resumed" in body)
+        self.assert_true("JS shows Paused label", b"Paused:" in body)
+
+    def test_process_manager_clear_record(self):
+        """Verify ProcessManager.clear_record exists and works."""
+        # The clear API endpoint uses pm.clear_record()
+        # Test indirectly: start, stop, clear, verify no record
+        self.wait_gpu_free()
+
+        # Start and immediately stop
+        r = self.post("/api/training/start", {"stage": "F"})
+        if not r.get("ok"):
+            self.skip("PM clear_record test", "couldn't start F")
+            return
+        time.sleep(2)
+        self.post("/api/training/stop", {"stage": "F"})
+        time.sleep(1)
+
+        # Verify process exists
+        r = self.get("/api/training/status")
+        self.assert_in("training_F exists", "training_F", r.get("processes", {}))
+
+        # Clear stage F
+        self.post("/api/training/clear", {"stage": "F"})
+        time.sleep(1)
+
+        # Verify process record is gone
+        r = self.get("/api/training/status")
+        self.assert_true("training_F removed after clear",
+                        "training_F" not in r.get("processes", {}))
+
+    test_process_manager_clear_record._slow = True
+
+    def test_chip_clear_all_html(self):
+        """Verify chip filter system has clear-all support in JS."""
+        status, body, headers = self.get_raw("/static/app.js")
+        self.assert_true("JS has chip-clear class", b"chip-clear" in body)
+        self.assert_true("JS has clear-all action", b"clear-all" in body)
+
+        status2, css, _ = self.get_raw("/static/style.css")
+        self.assert_true("CSS has chip-clear styling", b"chip-clear" in css)
+        self.assert_true("CSS has chip-x styling", b"chip-x" in css)
 
 
 def main():
