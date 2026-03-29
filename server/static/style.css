@@ -394,7 +394,9 @@ input[type="range"] {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  max-width: 320px;
+  max-width: 400px;
+  max-height: 80px;
+  overflow-y: auto;
 }
 
 .chip {
@@ -437,6 +439,18 @@ input[type="range"] {
   color: var(--danger);
   font-size: 10px;
   font-weight: 600;
+}
+
+.chip[data-value="__tune_all__"] {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: var(--warning);
+  font-style: italic;
+}
+
+.chip[data-value="__tune_all__"].active {
+  background: rgba(245, 158, 11, 0.3);
+  border-color: rgba(245, 158, 11, 0.5);
 }
 
 /* ── Checkbox label inline ───────────────────────────────── */

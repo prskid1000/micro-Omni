@@ -241,12 +241,13 @@ function updateChart() {
     },
     legend: {
       data: legendData,
-      textStyle: { color: "#9ca3bf", fontSize: 11 },
+      textStyle: { color: "#9ca3bf", fontSize: 10 },
       top: 4,
+      right: 80,
       type: "scroll",
       pageTextStyle: { color: "#9ca3bf" },
     },
-    grid: { left: 60, right: state.dualAxis ? 60 : 30, top: 40, bottom: 60 },
+    grid: { left: 60, right: state.dualAxis ? 70 : 40, top: 40, bottom: 60 },
     toolbox: {
       feature: {
         saveAsImage: { title: "Save" },
@@ -254,8 +255,8 @@ function updateChart() {
         restore: { title: "Restore" },
       },
       iconStyle: { borderColor: "#9ca3bf" },
-      right: 10,
-      top: 4,
+      right: 4,
+      top: 0,
     },
     dataZoom: [
       { type: "inside", xAxisIndex: 0, filterMode: "none" },
@@ -305,10 +306,18 @@ function getFilteredRows() {
   const runs = getSelected(dom.runSelect);
   const metrics = getSelected(dom.metricSelect);
 
+  // Expand __tune_all__ virtual group into actual tune run_ids
+  let expandedRuns = runs;
+  if (runs.has("__tune_all__") && state._tuneRunIds) {
+    expandedRuns = new Set(runs);
+    expandedRuns.delete("__tune_all__");
+    for (const rid of state._tuneRunIds) expandedRuns.add(rid);
+  }
+
   return state.allRows.filter(r => {
     if (r.phase === "event") return false;
     if (files.size && !files.has(r._file)) return false;
-    if (runs.size && !runs.has(String(r.run_id || ""))) return false;
+    if (expandedRuns.size && !expandedRuns.has(String(r.run_id || ""))) return false;
     if (metrics.size && !metrics.has(String(r.metric_name || ""))) return false;
     return true;
   });
@@ -475,30 +484,43 @@ function updateFilters() {
   const userHasFilters = getSelected(dom.fileSelect).size > 0 || getSelected(dom.runSelect).size > 0;
 
   buildChips("fileChips", "fileSelect", files);
-  // Build labeled run chips: classify as Training vs Tuning and sort by row count
+  // Classify and group runs: show top runs individually, group small ones
   const runInfos = runs.map(rid => {
     const runRows = rows.filter(r => String(r.run_id || "") === rid);
     const count = runRows.length;
     const maxStep = Math.max(0, ...runRows.map(r => r.step || 0));
-    // Tuning trials have few rows (<30) and low max_steps (<2000)
-    // Real training has many rows (50+) and higher max_steps
-    const isTune = count < 30 && maxStep < 2500;
-    const label = isTune
-      ? `Tune (${rid.slice(0, 6)}) ${count}r`
-      : `Train (${rid.slice(0, 6)}) s${maxStep}`;
-    return { rid, label, count, maxStep, isTune };
-  });
-  // Sort: real training first (by row count desc), then tuning
-  runInfos.sort((a, b) => {
-    if (a.isTune !== b.isTune) return a.isTune ? 1 : -1;
-    return b.count - a.count;
-  });
-  const labeledRuns = runInfos.map(r => r.rid);
-  // Store labels for chip display
-  state._runLabels = {};
-  for (const r of runInfos) state._runLabels[r.rid] = r.label;
+    return { rid, count, maxStep };
+  }).sort((a, b) => b.count - a.count);
 
-  buildChips("runChips", "runSelect", labeledRuns);
+  state._runLabels = {};
+  state._tuneRunIds = null;
+  const visibleRuns = [];
+
+  if (runInfos.length <= 8) {
+    // Few runs — show all individually
+    for (const r of runInfos) {
+      visibleRuns.push(r.rid);
+      state._runLabels[r.rid] = `${r.rid.slice(0, 6)} (s${r.maxStep}, ${r.count}r)`;
+    }
+  } else {
+    // Many runs — show top 5 individually, group the rest
+    const topRuns = runInfos.slice(0, 5);
+    const restRuns = runInfos.slice(5);
+
+    for (const r of topRuns) {
+      visibleRuns.push(r.rid);
+      state._runLabels[r.rid] = `${r.rid.slice(0, 6)} (s${r.maxStep}, ${r.count}r)`;
+    }
+
+    if (restRuns.length > 0) {
+      const groupId = "__tune_all__";
+      visibleRuns.push(groupId);
+      state._runLabels[groupId] = `${restRuns.length} more runs`;
+      state._tuneRunIds = new Set(restRuns.map(r => r.rid));
+    }
+  }
+
+  buildChips("runChips", "runSelect", visibleRuns);
   buildChips("metricChips", "metricSelect", metrics);
 
   // Auto-select active stage's file and run if user hasn't manually filtered
@@ -519,7 +541,7 @@ function updateFilters() {
   }
 
   fillSelect(dom.fileSelect, files);
-  fillSelect(dom.runSelect, runs);
+  fillSelect(dom.runSelect, visibleRuns);
   fillSelect(dom.metricSelect, metrics);
 }
 
