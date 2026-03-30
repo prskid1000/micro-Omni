@@ -12,6 +12,19 @@ Text  ──→ Token Embeddings ───────────┤
 
 > **~13.9M parameters** (synthetic config) | **16GB VRAM** (RTX 5070 Ti) | Reference learning repo — compact and readable
 
+<p align="center">
+  <img src="images/msedge_lJUCwkWe0w.png" alt="Training Dashboard — live metrics and pipeline control" width="100%"/>
+</p>
+<p align="center"><em>Training Dashboard — live metrics, pipeline management, and GPU monitoring</em></p>
+
+<p align="center">
+  <img src="images/msedge_HgCjSkNGPi.png" alt="HP Tuning — Optuna search space and results" width="49%"/>
+  <img src="images/msedge_lXUefWkPrs.png" alt="Parameter Analysis — slice plots for hyperparameter exploration" width="49%"/>
+</p>
+<p align="center"><em>Hyperparameter Tuning — search space configuration (left) and parameter slice analysis (right)</em></p>
+
+---
+
 ## Benchmark Results (Synthetic Data, 2000 samples)
 
 | Component | Metric | Score | Rating |
