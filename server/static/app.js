@@ -606,11 +606,12 @@ function getLatestRunId(file) {
   return best;
 }
 
-function getLatestStepFromMetrics(file, runId) {
+function getLatestStepFromMetrics(file, runId, sinceTime) {
   let maxStep = 0;
   for (const r of state.allRows) {
     if (r._file !== file || r.phase === "event") continue;
     if (runId && r.run_id !== runId) continue;
+    if (sinceTime && r.timestamp && r.timestamp < sinceTime) continue;
     const step = r.step || 0;
     if (step > maxStep) maxStep = step;
   }
@@ -690,19 +691,18 @@ function renderPipeline(stages) {
     const stageFile = STAGE_METRICS_FILE[id];
     const currentRunId = stageFile ? getLatestRunId(stageFile) : null;
     const runIdShort = currentRunId ? currentRunId.slice(0, 8) : "";
-    const metricsStep = stageFile ? getLatestStepFromMetrics(stageFile, currentRunId) : 0;
+    // When running, only count metrics logged after process started (avoids stale pre-crash steps)
+    const procStartTime = (s.status === "running" && proc && proc.start_time) ? proc.start_time : null;
+    const metricsStep = stageFile ? getLatestStepFromMetrics(stageFile, currentRunId, procStartTime) : 0;
     const metaStep = meta ? (meta.step || 0) : 0;
-    const liveStep = Math.max(metricsStep, metaStep);
+    // When running: prefer metrics step (live progress), fall back to checkpoint step
+    const liveStep = s.status === "running" ? (metricsStep || metaStep) : Math.max(metricsStep, metaStep);
 
-    // Show: live step / max_steps + checkpoint indicator
+    // Show single step number — no confusing dual display
     let stepInfo = "";
     const maxLabel = maxSteps ? `/${maxSteps}` : "";
-    if (s.status === "running" && liveStep > 0 && metaStep > 0 && liveStep !== metaStep) {
-      stepInfo = `Step ${liveStep}${maxLabel} (ckpt: ${metaStep})`;
-    } else if (liveStep > 0) {
+    if (liveStep > 0) {
       stepInfo = `Step ${liveStep}${maxLabel}`;
-    } else if (metaStep > 0) {
-      stepInfo = `Step ${metaStep}${maxLabel}`;
     }
 
     // Build status line
