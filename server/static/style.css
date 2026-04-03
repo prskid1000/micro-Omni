@@ -1043,6 +1043,88 @@ textarea:focus { border-color: var(--accent); }
 
 /* ── Tuning Slice Charts Grid ────────────────────────────── */
 
+/* ── Tuning sub-tabs ───────────────────────────────────────── */
+.tune-subtabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--glass-border);
+  margin-bottom: 0;
+}
+
+.tune-subtab {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tune-subtab:hover {
+  color: var(--text-soft);
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.tune-subtab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tune-subtab-content {
+  padding-top: 8px;
+}
+
+/* ── Tuning metric chips ───────────────────────────────────── */
+.tune-metrics-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.tune-metric-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 11px;
+  color: var(--text-soft);
+  user-select: none;
+}
+
+.tune-metric-chip:hover {
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.tune-metric-chip.selected {
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--text);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.2);
+}
+
+.tune-metric-chip .direction {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tune-metric-chip .direction.minimize { color: #22d3ee; }
+.tune-metric-chip .direction.maximize { color: #10b981; }
+
+.tune-metric-chip .metric-name {
+  font-weight: 500;
+}
+
 .tune-slice-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

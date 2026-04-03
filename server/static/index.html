@@ -286,34 +286,65 @@
       <button id="tuneClearBtn" class="btn btn-sm btn-danger">Clear Data</button>
     </div>
     <div id="tuneProgress" style="margin-top:10px;margin-bottom:10px"></div>
-    <div class="section-title" style="margin-top:12px">Search Space</div>
-    <div id="tuneParams" class="hp-grid"></div>
-    <div class="section-title" style="margin-top:12px">Results</div>
-    <div id="tuneResults" class="test-status"></div>
-    <div class="test-controls" style="margin-top:8px">
-      <button id="tuneApplyNewBtn" class="btn btn-accent btn-sm">Save as tuned_*.json</button>
-      <button id="tuneApplyBaseBtn" class="btn btn-sm btn-danger">Overwrite base config</button>
+    <div class="section-title" style="margin-top:12px">Optimization Metrics <span style="font-size:10px;color:var(--text-dim);font-weight:400">(select which metrics to optimize — unselected uses val_loss only)</span></div>
+    <div id="tuneMetrics" class="tune-metrics-grid"></div>
+
+    <!-- Sub-tabs for tuning content -->
+    <div class="tune-subtabs" style="margin-top:14px">
+      <button class="tune-subtab active" data-subtab="overview">Overview</button>
+      <button class="tune-subtab" data-subtab="metrics">Metric Breakdown</button>
+      <button class="tune-subtab" data-subtab="params">Parameters</button>
+      <button class="tune-subtab" data-subtab="trials">Trials</button>
     </div>
-    <div id="tuneApplyResult" class="test-status" style="margin-top:6px"></div>
 
-    <!-- Optimization history: val_loss vs trial -->
-    <div class="section-title" style="margin-top:12px">Optimization History</div>
-    <div id="tuneChart" style="width:100%; height:280px;"></div>
+    <!-- Sub-tab: Overview -->
+    <div class="tune-subtab-content active" id="tuneSubOverview" data-subtab="overview">
+      <div class="section-title" style="margin-top:12px">Results</div>
+      <div id="tuneResults" class="test-status"></div>
+      <div class="test-controls" style="margin-top:8px">
+        <button id="tuneApplyNewBtn" class="btn btn-accent btn-sm">Save as tuned_*.json</button>
+        <button id="tuneApplyBaseBtn" class="btn btn-sm btn-danger">Overwrite base config</button>
+      </div>
+      <div id="tuneApplyResult" class="test-status" style="margin-top:6px"></div>
 
-    <!-- Param slice plots: each param vs val_loss -->
-    <div class="section-title" style="margin-top:16px">Parameter Slices <span style="font-size:10px;color:var(--text-dim);font-weight:400">(each param vs val_loss)</span></div>
-    <div id="tuneSliceCharts" class="tune-slice-grid"></div>
+      <!-- Optimization history: objective vs trial -->
+      <div class="section-title" style="margin-top:12px">Optimization History</div>
+      <div id="tuneChart" style="width:100%; height:280px;"></div>
 
-    <!-- Training curves from tuning trials -->
-    <div class="section-title" style="margin-top:16px">Trial Training Curves <span style="font-size:10px;color:var(--text-dim);font-weight:400">(all trials overlaid)</span></div>
-    <div id="tuneTrainChart" style="width:100%; height:300px;"></div>
+      <!-- Trial Training Curves -->
+      <div class="section-title" style="margin-top:16px">Trial Training Curves <span style="font-size:10px;color:var(--text-dim);font-weight:400">(all trials overlaid)</span></div>
+      <div id="tuneTrainChart" style="width:100%; height:300px;"></div>
+    </div>
 
-    <!-- Trials table -->
-    <div class="section-title" style="margin-top:16px">Trials</div>
-    <table id="tuneTrialsTable" style="margin-top:4px">
-      <thead><tr><th>#</th><th>Val Loss</th><th>State</th><th>Duration</th><th>Params</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <!-- Sub-tab: Metric Breakdown -->
+    <div class="tune-subtab-content" id="tuneSubMetrics" data-subtab="metrics" style="display:none">
+      <div class="section-title" style="margin-top:8px">Per-Metric Results Across Trials <span style="font-size:10px;color:var(--text-dim);font-weight:400">(individual metric trends from test evaluations)</span></div>
+      <div id="tuneMetricBreakdownChart" style="width:100%; height:350px;"></div>
+      <div class="section-title" style="margin-top:16px">Metric Values Table</div>
+      <table id="tuneMetricTable" style="margin-top:4px">
+        <thead><tr><th>#</th><th>Objective</th><th id="tuneMetricTableHeaders"><!-- dynamic columns --></th><th>State</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Sub-tab: Parameters -->
+    <div class="tune-subtab-content" id="tuneSubParams" data-subtab="params" style="display:none">
+      <div class="section-title" style="margin-top:8px">Search Space</div>
+      <div id="tuneParams" class="hp-grid"></div>
+
+      <!-- Param slice plots: each param vs objective -->
+      <div class="section-title" style="margin-top:16px">Parameter Slices <span style="font-size:10px;color:var(--text-dim);font-weight:400">(each param vs objective)</span></div>
+      <div id="tuneSliceCharts" class="tune-slice-grid"></div>
+    </div>
+
+    <!-- Sub-tab: Trials -->
+    <div class="tune-subtab-content" id="tuneSubTrials" data-subtab="trials" style="display:none">
+      <div class="section-title" style="margin-top:8px">All Trials</div>
+      <table id="tuneTrialsTable" style="margin-top:4px">
+        <thead><tr><th>#</th><th>Objective</th><th>State</th><th>Duration</th><th>Params</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 </section>
 

@@ -26,4 +26,5 @@ ffmpeg
 # Data generation (generate_synthetic_data.py)
 faker
 edge-tts
+pyttsx3
 pydub

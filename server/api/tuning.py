@@ -10,6 +10,95 @@ from typing import Any
 # Lock to prevent DB reads during clear
 _db_lock = threading.Lock()
 
+# ── Optimizable metrics per stage ────────────────────────────
+# Each metric: (key, display_name, direction, default_on)
+# direction: "minimize" or "maximize"
+# key: metric_name in test JSONL output
+# default_on: whether this metric is selected by default in the UI
+
+STAGE_METRICS: dict[str, list[tuple[str, str, str, bool]]] = {
+    "A": [
+        # Thinker LLM
+        ("val_loss",      "Val Loss",       "minimize", True),
+        ("perplexity",    "Perplexity",     "minimize", True),
+        ("top1_accuracy", "Top-1 Accuracy", "maximize", True),
+        ("top5_accuracy", "Top-5 Accuracy", "maximize", False),
+        ("top10_accuracy","Top-10 Accuracy","maximize", False),
+    ],
+    "B": [
+        # Audio Encoder (ASR)
+        ("val_loss",      "Val Loss",       "minimize", False),
+        ("cer",           "CER (Beam)",     "minimize", True),
+        ("wer",           "WER (Beam)",     "minimize", True),
+        ("cer_greedy",    "CER (Greedy)",   "minimize", False),
+        ("wer_greedy",    "WER (Greedy)",   "minimize", False),
+    ],
+    "C": [
+        # Vision Encoder (CLIP)
+        ("val_loss",         "Val Loss",          "minimize", False),
+        ("diversity_score",  "Embedding Diversity","maximize", True),
+        ("i2t_r1",           "I→T Recall@1",      "maximize", True),
+        ("i2t_r5",           "I→T Recall@5",      "maximize", False),
+        ("t2i_r1",           "T→I Recall@1",      "maximize", True),
+        ("t2i_r5",           "T→I Recall@5",      "maximize", False),
+        ("avg_pairwise_similarity", "Avg Pairwise Sim", "minimize", False),
+    ],
+    "D": [
+        # Talker TTS
+        ("val_loss",             "Val Loss",           "minimize", True),
+        ("base_accuracy",        "Base Top-1 Acc",     "maximize", True),
+        ("res_accuracy",         "Residual Top-1 Acc", "maximize", True),
+        ("base_top5_accuracy",   "Base Top-5 Acc",     "maximize", False),
+        ("res_top5_accuracy",    "Residual Top-5 Acc", "maximize", False),
+        ("reconstruction_mse",   "Reconstruction MSE", "minimize", False),
+        ("codebook_utilization", "Codebook Utilization","maximize", False),
+    ],
+    "E": [
+        # Multimodal SFT
+        ("val_loss",      "Val Loss",              "minimize", True),
+        ("perplexity",    "Perplexity (Text)",     "minimize", True),
+        ("top1_accuracy", "Top-1 Accuracy (Text)", "maximize", False),
+        ("top5_accuracy", "Top-5 Accuracy (Text)", "maximize", False),
+    ],
+    "F": [
+        # Vocoder (HiFi-GAN)
+        ("val_loss",             "Val Loss",            "minimize", True),
+        ("mel_mse",              "Mel MSE",             "minimize", True),
+        ("mel_mae",              "Mel MAE",             "minimize", False),
+        ("spectral_convergence", "Spectral Convergence","minimize", False),
+        ("mcd",                  "Mel-Cepstral Dist",   "minimize", False),
+    ],
+    "G": [
+        # OCR
+        ("val_loss",         "Val Loss",         "minimize", True),
+        ("cer",              "CER",              "minimize", True),
+        ("wer",              "WER",              "minimize", False),
+        ("exact_match_rate", "Exact Match Rate", "maximize", True),
+        ("char_accuracy",    "Char Accuracy",    "maximize", False),
+    ],
+}
+
+# Stage → test script module and JSONL output file
+STAGE_TEST_INFO: dict[str, dict[str, str]] = {
+    "A": {"module": "test.test_thinker",    "jsonl": "test_thinker.jsonl",    "checkpoint": "thinker_tiny"},
+    "B": {"module": "test.test_audio_enc",  "jsonl": "test_audio_enc.jsonl",  "checkpoint": "audio_enc_tiny"},
+    "C": {"module": "test.test_vision",     "jsonl": "test_vision.jsonl",     "checkpoint": "vision_tiny"},
+    "D": {"module": "test.test_talker",     "jsonl": "test_talker.jsonl",     "checkpoint": "talker_tiny"},
+    "E": {"module": "test.test_sft",        "jsonl": "test_sft.jsonl",        "checkpoint": "omni_sft_tiny"},
+    "F": {"module": "test.test_vocoder",    "jsonl": "test_vocoder.jsonl",    "checkpoint": "vocoder_tiny"},
+    "G": {"module": "test.test_ocr",        "jsonl": "test_ocr.jsonl",        "checkpoint": "ocr_tiny"},
+}
+
+
+def get_stage_metrics(stage: str) -> list[dict[str, Any]]:
+    """Return metric definitions for a stage as list of dicts for API/UI."""
+    raw = STAGE_METRICS.get(stage, [])
+    return [
+        {"key": key, "name": display, "direction": direction, "default": default_on}
+        for key, display, direction, default_on in raw
+    ]
+
+
 # ── Search space definitions per stage ────────────────────────
 # Each entry: (param_name, type, args)
 # Types: "float_log", "float", "int", "categorical"
@@ -280,6 +369,7 @@ def handle_get(handler: Any, path: str, query: dict[str, list[str]]) -> None:
             spaces[stage_id] = {
                 "name": STAGE_MAP[stage_id]["name"],
                 "params": _get_search_space(stage_id),
+                "metrics": get_stage_metrics(stage_id),
             }
         handler.send_json({"ok": True, "spaces": spaces})
         return
@@ -324,6 +414,7 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
         n_trials = body.get("n_trials", 30)
         max_steps = body.get("max_steps", 500)
         params = body.get("params")  # optional: subset of params to tune
+        metrics = body.get("metrics")  # optional: list of metric keys to optimize
 
         # Save tuning config for UI persistence across restarts
         config_path = f"logs/hp_tuning_{stage}_config.json"
@@ -335,6 +426,7 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
                     "n_trials": n_trials,
                     "max_steps": max_steps,
                     "params": params,
+                    "metrics": metrics,
                     "config": STAGE_MAP[stage]["config"],
                     "started_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
                 }, f, indent=2)
@@ -348,6 +440,8 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
         ]
         if params:
             extra_args += ["--params", json.dumps(params)]
+        if metrics:
+            extra_args += ["--metrics", json.dumps(metrics)]
 
         try:
             mp = pm.start(
@@ -362,6 +456,7 @@ def handle_post(handler: Any, path: str, body: dict[str, Any]) -> None:
                 "stage": stage,
                 "n_trials": n_trials,
                 "max_steps": max_steps,
+                "metrics": metrics,
             })
         except RuntimeError as e:
             handler.send_error_json(409, str(e))

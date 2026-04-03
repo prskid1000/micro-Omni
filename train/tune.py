@@ -1,8 +1,12 @@
 """Generic Optuna HP tuning wrapper for all training stages.
 
+Supports optimizing real test metrics (CER, perplexity, R@1, etc.)
+instead of just val_loss, by running test scripts after each trial.
+
 Usage:
     python -m train.tune --stage A --n_trials 30 --max_steps 2000
-    python -m train.tune --stage E --n_trials 20 --max_steps 1000 --params '["lr","wd","proj_lr_mult"]'
+    python -m train.tune --stage E --n_trials 20 --params '["lr","wd","proj_lr_mult"]'
+    python -m train.tune --stage B --n_trials 20 --max_steps 3000 --metrics '["cer","wer"]'
 """
 
 from __future__ import annotations
@@ -74,12 +78,138 @@ def _get_best_val_loss_from_jsonl(metrics_file: str, run_id: str) -> float:
     return best
 
 
+def _get_test_metrics_from_jsonl(metrics_file: str, metric_keys: list[str]) -> dict[str, float]:
+    """Read test metrics from a test script's JSONL output.
+
+    Returns dict of metric_key -> value. Only reads the last occurrence
+    of each metric (test scripts write once at the end).
+    """
+    results: dict[str, float] = {}
+    full_path = os.path.join("logs", "metrics", metrics_file)
+    if not os.path.exists(full_path):
+        return results
+    with open(full_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            name = rec.get("metric_name", "")
+            if name in metric_keys and rec.get("phase") == "test":
+                val = rec.get("metric_value")
+                if val is not None:
+                    results[name] = float(val)
+    return results
+
+
+def _run_test_for_trial(stage: str, checkpoint_dir: str, num_samples: int = 50) -> dict[str, float]:
+    """Run the test script for a stage and return extracted metrics.
+
+    Uses subprocess to avoid polluting the tuning process's GPU memory.
+    """
+    from server.api.tuning import STAGE_TEST_INFO, STAGE_METRICS
+    test_info = STAGE_TEST_INFO.get(stage)
+    if not test_info:
+        return {}
+
+    test_module = test_info["module"]
+    test_jsonl = test_info["jsonl"]
+    metric_keys = [m[0] for m in STAGE_METRICS.get(stage, []) if m[0] != "val_loss"]
+
+    if not metric_keys:
+        return {}
+
+    import subprocess
+    cmd = [
+        sys.executable, "-m", test_module,
+        "--checkpoint", checkpoint_dir,
+        "--num_samples", str(num_samples),
+    ]
+    # Vision encoder needs --retrieval flag for R@1/R@5/R@10 metrics
+    if stage == "C":
+        cmd.append("--retrieval")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 min max per test
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        if result.returncode != 0:
+            print(f"  Test script failed (exit {result.returncode}): {result.stderr[:200]}")
+    except subprocess.TimeoutExpired:
+        print(f"  Test script timed out after 300s")
+        return {}
+    except Exception as e:
+        print(f"  Test script error: {e}")
+        return {}
+
+    # Read metrics from JSONL
+    return _get_test_metrics_from_jsonl(test_jsonl, metric_keys)
+
+
+def _compute_objective(
+    val_loss: float,
+    test_metrics: dict[str, float],
+    selected_metrics: list[str],
+    stage: str,
+) -> float:
+    """Compute a single objective value from multiple metrics.
+
+    Strategy: normalize each metric to [0, 1] range using known thresholds,
+    then average. All metrics are converted to "lower is better" before averaging.
+    """
+    from server.api.tuning import STAGE_METRICS
+
+    metric_defs = {m[0]: m for m in STAGE_METRICS.get(stage, [])}
+    scores: list[float] = []
+
+    for metric_key in selected_metrics:
+        if metric_key == "val_loss":
+            # val_loss is always available from training
+            scores.append(val_loss if val_loss < 100 else 10.0)
+            continue
+
+        if metric_key not in test_metrics:
+            continue
+
+        value = test_metrics[metric_key]
+        meta = metric_defs.get(metric_key)
+        if not meta:
+            continue
+
+        direction = meta[2]  # "minimize" or "maximize"
+
+        if direction == "maximize":
+            # Convert to "lower is better": use (1 - value) for 0-1 metrics
+            # For accuracy/recall metrics (0 to 1 range)
+            value = 1.0 - value
+
+        scores.append(value)
+
+    if not scores:
+        return val_loss if val_loss < 100 else 100.0
+
+    # Return average of all scores
+    return sum(scores) / len(scores)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Optuna HP tuning for micro-Omni")
     parser.add_argument("--stage", required=True, help="Stage letter: A-G")
     parser.add_argument("--n_trials", type=int, default=30, help="Number of trials")
     parser.add_argument("--max_steps", type=int, default=500, help="Max training steps per trial")
     parser.add_argument("--params", type=str, default=None, help="JSON list of param names to tune (subset)")
+    parser.add_argument("--metrics", type=str, default=None,
+                       help="JSON list of metric keys to optimize (e.g. '[\"cer\",\"wer\"]'). "
+                            "If not specified, uses val_loss only (legacy behavior).")
+    parser.add_argument("--test_samples", type=int, default=50,
+                       help="Number of samples for test evaluation per trial (default: 50)")
     parser.add_argument("--config", type=str, default=None, help="Override base config file")
     args = parser.parse_args()
 
@@ -95,6 +225,20 @@ def main():
         sys.exit(1)
 
     module_name, default_config, metrics_file = STAGE_INFO[stage]
+
+    # Parse selected metrics
+    selected_metrics: list[str] = []
+    if args.metrics:
+        selected_metrics = json.loads(args.metrics)
+    use_test_metrics = bool(selected_metrics and any(m != "val_loss" for m in selected_metrics))
+
+    if use_test_metrics:
+        print(f"Optimizing metrics: {selected_metrics}")
+        print(f"  Test samples per trial: {args.test_samples}")
+    else:
+        if not selected_metrics:
+            selected_metrics = ["val_loss"]
+        print(f"Optimizing: val_loss only (legacy mode)")
 
     # Load search space from server API definitions
     from server.api.tuning import STAGE_SPECIFIC_SPACE, COMMON_TRAINING_SPACE
@@ -123,6 +267,7 @@ def main():
     print(f"  Config: {config_file}")
     print(f"  Trials: {args.n_trials}, Max steps/trial: {args.max_steps}")
     print(f"  Params: {[s[0] for s in search_space]}")
+    print(f"  Metrics: {selected_metrics}")
     print(f"  DB: {db_path}")
     print(f"{'='*60}\n")
 
@@ -153,8 +298,6 @@ def main():
 
         try:
             # Compute the run_id that training will use (same as build_run_id)
-            # Note: training scripts use cfg.get("config_path") which is None
-            # when called programmatically (not via CLI --config flag)
             from omni.training_utils import build_run_id
             script_name = module_name.split(".")[-1] + ".py"
             trial_run_id = build_run_id(script_name, None, cfg["save_dir"])
@@ -162,22 +305,36 @@ def main():
             # Run training
             result = train_main(cfg)
 
-            # If main() returns val_loss directly, use it
+            # Get val_loss (always needed as fallback)
             if isinstance(result, (int, float)) and result < 1e6:
                 val_loss = float(result)
             else:
-                # Fall back to reading JSONL with the exact run_id
                 val_loss = _get_best_val_loss_from_jsonl(
                     metrics_path,
                     run_id=trial_run_id,
                 )
-
             if val_loss == float("inf"):
-                # No val loss found — use a large penalty
                 val_loss = 100.0
 
-            print(f"  Result: val_loss={val_loss:.4f} (run_id={trial_run_id[:8]})")
-            return val_loss
+            # Run test script if optimizing real metrics
+            test_metrics: dict[str, float] = {}
+            if use_test_metrics:
+                print(f"  Running test evaluation ({args.test_samples} samples)...")
+                test_metrics = _run_test_for_trial(
+                    stage, cfg["save_dir"], num_samples=args.test_samples
+                )
+                if test_metrics:
+                    print(f"  Test metrics: {test_metrics}")
+                else:
+                    print(f"  Warning: no test metrics returned, falling back to val_loss")
+
+            # Compute combined objective
+            objective_value = _compute_objective(
+                val_loss, test_metrics, selected_metrics, stage
+            )
+
+            print(f"  Result: objective={objective_value:.4f} (val_loss={val_loss:.4f}, test={test_metrics})")
+            return objective_value
 
         except optuna.TrialPruned:
             raise
@@ -205,10 +362,11 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Tuning Complete — Stage {stage}")
     print(f"  Total trials: {len(study.trials)}")
-    print(f"  Best val loss: {study.best_value:.4f}")
+    print(f"  Best objective: {study.best_value:.4f}")
     print(f"  Best params:")
     for k, v in study.best_params.items():
         print(f"    {k}: {v}")
+    print(f"  Metrics optimized: {selected_metrics}")
     print(f"{'='*60}\n")
 
     # Save best config

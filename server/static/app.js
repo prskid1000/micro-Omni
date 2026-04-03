@@ -1860,6 +1860,7 @@ function setupControls() {
 async function setupTuning() {
   const stageSel = $("#tuneStage");
   const paramsDiv = $("#tuneParams");
+  const metricsDiv = $("#tuneMetrics");
   const resultsDiv = $("#tuneResults");
   const progressDiv = $("#tuneProgress");
 
@@ -1868,10 +1869,59 @@ async function setupTuning() {
   let tuneChart = null;
   let tuneTrainChart = null;
   const tuneSliceInstances = {};  // param name -> echarts instance
+  let selectedMetrics = {};  // stage -> Set of selected metric keys
 
-  // Load search spaces
+  // Load search spaces (includes metrics now)
   const spacesRes = await api.get("/api/tuning/spaces");
   tuneSpaces = spacesRes.ok ? spacesRes.spaces : {};
+
+  // Initialize default metric selections per stage
+  for (const [stageId, space] of Object.entries(tuneSpaces)) {
+    if (space.metrics) {
+      selectedMetrics[stageId] = new Set(
+        space.metrics.filter(m => m.default).map(m => m.key)
+      );
+    }
+  }
+
+  // Render optimization metric chips
+  function renderMetrics() {
+    const stage = stageSel.value;
+    const space = tuneSpaces[stage];
+    if (!space || !space.metrics) { metricsDiv.innerHTML = ""; return; }
+
+    // Restore from saved config if available
+    metricsDiv.innerHTML = space.metrics.map(m => {
+      const sel = selectedMetrics[stage]?.has(m.key) ? " selected" : "";
+      const arrow = m.direction === "minimize" ? "↓" : "↑";
+      return `<div class="tune-metric-chip${sel}" data-key="${m.key}" data-direction="${m.direction}">
+        <span class="direction ${m.direction}">${arrow}</span>
+        <span class="metric-name">${m.name}</span>
+      </div>`;
+    }).join("");
+
+    // Click handlers for chips
+    metricsDiv.querySelectorAll(".tune-metric-chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        const key = chip.dataset.key;
+        if (!selectedMetrics[stage]) selectedMetrics[stage] = new Set();
+        if (selectedMetrics[stage].has(key)) {
+          selectedMetrics[stage].delete(key);
+          chip.classList.remove("selected");
+        } else {
+          selectedMetrics[stage].add(key);
+          chip.classList.add("selected");
+        }
+      });
+    });
+  }
+
+  // Get selected metrics for current stage
+  function getSelectedMetricKeys() {
+    const stage = stageSel.value;
+    const sel = selectedMetrics[stage];
+    return sel ? [...sel] : [];
+  }
 
   // Render search space params
   function renderParams() {
@@ -1907,11 +1957,16 @@ async function setupTuning() {
     // Load results from DB (updates as trials complete)
     const resData = await api.get(`/api/tuning/results/${stage}`);
 
-    // Restore tuning config (stage/trials/steps) from saved file
+    // Restore tuning config (stage/trials/steps/metrics) from saved file
     if (resData.ok && resData.tune_config) {
       const tc = resData.tune_config;
       if (tc.n_trials) $("#tuneTrials").value = tc.n_trials;
       if (tc.max_steps) $("#tuneSteps").value = tc.max_steps;
+      // Restore metric selections from saved config
+      if (tc.metrics && Array.isArray(tc.metrics)) {
+        selectedMetrics[stage] = new Set(tc.metrics);
+        renderMetrics();
+      }
     }
 
     if (resData.ok && resData.results && !resData.results.error) {
@@ -1954,13 +2009,17 @@ async function setupTuning() {
         }
       }
 
-      // Best result
+      // Best result — show selected metrics info
       if (r.best_trial) {
+        const metricKeys = getSelectedMetricKeys();
+        const objectiveLabel = metricKeys.length > 0 && metricKeys.some(m => m !== "val_loss")
+          ? `objective (${metricKeys.join(" + ")})`
+          : "val_loss";
         const bestParams = Object.entries(r.best_trial.params || {})
           .map(([k, v]) => `<span class="hp-key">${k}</span>=<span class="hp-val">${typeof v === "number" ? v.toPrecision(4) : v}</span>`)
           .join(", ");
         resultsDiv.innerHTML = `
-          <div style="margin-bottom:6px"><strong style="color:var(--success)">Best: val_loss = ${r.best_trial.value?.toFixed(4)}</strong> (trial #${r.best_trial.number})</div>
+          <div style="margin-bottom:6px"><strong style="color:var(--success)">Best: ${objectiveLabel} = ${r.best_trial.value?.toFixed(4)}</strong> (trial #${r.best_trial.number})</div>
           <div style="font-size:11px">${bestParams}</div>
         `;
       } else {
@@ -2003,7 +2062,7 @@ async function setupTuning() {
             borderColor: "rgba(255,255,255,0.15)",
             textStyle: { color: "#e8ecf4", fontSize: 11 },
           },
-          legend: { data: ["Val Loss", "Best So Far"], textStyle: { color: "#9ca3bf", fontSize: 11 }, top: 4 },
+          legend: { data: ["Objective", "Best So Far"], textStyle: { color: "#9ca3bf", fontSize: 11 }, top: 4 },
           grid: { left: 60, right: 20, top: 35, bottom: 30 },
           xAxis: {
             type: "value", name: "Trial", nameTextStyle: { color: "#9ca3bf" },
@@ -2011,13 +2070,13 @@ async function setupTuning() {
             axisLine: { lineStyle: { color: "rgba(255,255,255,0.12)" } },
           },
           yAxis: {
-            type: "value", name: "Val Loss", nameTextStyle: { color: "#9ca3bf" },
+            type: "value", name: "Objective", nameTextStyle: { color: "#9ca3bf" },
             axisLabel: { color: "#9ca3bf", fontSize: 10 },
             splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
           },
           series: [
             {
-              name: "Val Loss", type: "scatter", symbolSize: 8,
+              name: "Objective", type: "scatter", symbolSize: 8,
               data: chartTrials.map(t => [t.number, t.value]),
               itemStyle: { color: "#8b5cf6" },
             },
@@ -2116,7 +2175,7 @@ async function setupTuning() {
               splitLine: { show: false },
             },
             yAxis: {
-              type: "value", name: "val_loss",
+              type: "value", name: "objective",
               nameTextStyle: { color: "#7a82a0", fontSize: 9 },
               axisLabel: { color: "#7a82a0", fontSize: 9 },
               splitLine: { lineStyle: { color: "rgba(255,255,255,0.05)" } },
@@ -2138,6 +2197,9 @@ async function setupTuning() {
 
       // ── Training curves from tuning trial metrics ─────────
       await renderTuneTrainCurves(stageSel.value);
+
+      // Render metric breakdown (sub-tab)
+      renderMetricBreakdown(r.trials, stage);
 
     } else {
       progressDiv.innerHTML = isRunning
@@ -2253,7 +2315,7 @@ async function setupTuning() {
       const diff = Object.entries(res.applied).map(([k, v]) =>
         `  ${k}: ${JSON.stringify(v.old)} → ${JSON.stringify(v.new)}`
       ).join("\n");
-      el.innerHTML = `<span style="color:var(--success)">Saved to ${res.saved_to}</span> (best val_loss: ${res.best_val_loss?.toFixed(4)})\n<pre style="font-size:10px;margin-top:4px;color:var(--text-soft)">${diff}</pre>`;
+      el.innerHTML = `<span style="color:var(--success)">Saved to ${res.saved_to}</span> (best objective: ${res.best_val_loss?.toFixed(4)})\n<pre style="font-size:10px;margin-top:4px;color:var(--text-soft)">${diff}</pre>`;
       showToast(`Best config saved to ${res.saved_to}`, "success");
     } else {
       el.textContent = `Error: ${res.error}`;
@@ -2302,8 +2364,153 @@ async function setupTuning() {
     }
   });
 
+  // ── Sub-tab switching ────────────────────────────────────
+  document.querySelectorAll(".tune-subtab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tune-subtab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".tune-subtab-content").forEach(c => { c.classList.remove("active"); c.style.display = "none"; });
+      tab.classList.add("active");
+      const target = tab.dataset.subtab;
+      const content = document.querySelector(`.tune-subtab-content[data-subtab="${target}"]`);
+      if (content) { content.classList.add("active"); content.style.display = ""; }
+      // Resize charts when tab becomes visible
+      if (target === "overview") {
+        if (tuneChart) tuneChart.resize();
+        if (tuneTrainChart) tuneTrainChart.resize();
+      } else if (target === "params") {
+        for (const inst of Object.values(tuneSliceInstances)) { try { inst.resize(); } catch {} }
+      } else if (target === "metrics") {
+        if (tuneMetricBreakdownChart) tuneMetricBreakdownChart.resize();
+      }
+    });
+  });
+
+  // ── Metric Breakdown Chart ─────────────────────────────────
+  let tuneMetricBreakdownChart = null;
+
+  function renderMetricBreakdown(trials, stage) {
+    const space = tuneSpaces[stage];
+    if (!space || !space.metrics) return;
+    const metricDefs = space.metrics;
+
+    // For now we use the trial objective values — when test metrics are stored
+    // in trial user_attrs (future), we'll read those. For now, show objective trend.
+    const completedTrials = (trials || [])
+      .filter(t => t.state === "COMPLETE" && t.value != null)
+      .sort((a, b) => a.number - b.number);
+
+    if (completedTrials.length < 2) {
+      $("#tuneMetricBreakdownChart").innerHTML = '<span style="color:var(--text-dim);font-size:11px;padding:20px;display:block">Need 2+ completed trials for metric breakdown</span>';
+      return;
+    }
+
+    // Build chart with objective trend + running best
+    if (!tuneMetricBreakdownChart) {
+      tuneMetricBreakdownChart = registerChart(echarts.init($("#tuneMetricBreakdownChart")));
+    }
+
+    let runningBest = [];
+    let best = Infinity;
+    for (const t of completedTrials) { best = Math.min(best, t.value); runningBest.push(best); }
+
+    // Also compute improvement percentage from first to best
+    const firstVal = completedTrials[0].value;
+    const bestVal = Math.min(...completedTrials.map(t => t.value));
+    const improvement = firstVal > 0 ? ((firstVal - bestVal) / firstVal * 100).toFixed(1) : "N/A";
+
+    tuneMetricBreakdownChart.setOption({
+      animation: false,
+      backgroundColor: "transparent",
+      title: {
+        text: `Objective Trend (${improvement}% improvement)`,
+        textStyle: { color: "#9ca3bf", fontSize: 12 },
+        left: 8, top: 4,
+      },
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: "rgba(15,18,38,0.9)",
+        borderColor: "rgba(255,255,255,0.15)",
+        textStyle: { color: "#e8ecf4", fontSize: 11 },
+        formatter: params => {
+          const lines = params.map(p => `${p.marker} ${p.seriesName}: ${p.value[1]?.toFixed(4)}`);
+          return `Trial #${params[0].value[0]}<br/>` + lines.join("<br/>");
+        },
+      },
+      legend: { data: ["Objective", "Running Best", "Median"], textStyle: { color: "#9ca3bf", fontSize: 10 }, top: 4, right: 10 },
+      grid: { left: 60, right: 20, top: 40, bottom: 30 },
+      xAxis: {
+        type: "value", name: "Trial", nameTextStyle: { color: "#9ca3bf" },
+        axisLabel: { color: "#9ca3bf", fontSize: 10 },
+        axisLine: { lineStyle: { color: "rgba(255,255,255,0.12)" } },
+      },
+      yAxis: {
+        type: "value", name: "Value", nameTextStyle: { color: "#9ca3bf" },
+        axisLabel: { color: "#9ca3bf", fontSize: 10 },
+        splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+      },
+      series: [
+        {
+          name: "Objective", type: "scatter", symbolSize: 6,
+          data: completedTrials.map(t => [t.number, t.value]),
+          itemStyle: { color: "#8b5cf6" },
+        },
+        {
+          name: "Running Best", type: "line", smooth: true, symbol: "none",
+          data: completedTrials.map((t, i) => [t.number, runningBest[i]]),
+          lineStyle: { color: "#10b981", width: 2 },
+          areaStyle: { color: "rgba(16, 185, 129, 0.06)" },
+        },
+        {
+          name: "Median", type: "line", symbol: "none",
+          data: (() => {
+            const vals = [];
+            return completedTrials.map((t, i) => {
+              vals.push(t.value);
+              const sorted = [...vals].sort((a, b) => a - b);
+              const mid = sorted[Math.floor(sorted.length / 2)];
+              return [t.number, mid];
+            });
+          })(),
+          lineStyle: { color: "#f59e0b", width: 1, type: "dashed" },
+        },
+      ],
+    }, true);
+
+    // Build metric values table with selected metrics info
+    const sel = selectedMetrics[stage] || new Set();
+    const selMetrics = metricDefs.filter(m => sel.has(m.key));
+    const headerCols = selMetrics.map(m => {
+      const arrow = m.direction === "minimize" ? "↓" : "↑";
+      return `<th style="font-size:10px">${m.name} ${arrow}</th>`;
+    }).join("");
+
+    // Update table headers dynamically
+    const thead = document.querySelector("#tuneMetricTable thead tr");
+    if (thead) {
+      thead.innerHTML = `<th>#</th><th>Objective</th>${headerCols}<th>State</th>`;
+    }
+
+    // Table body — show sorted by objective
+    const sortedTrials = [...completedTrials].sort((a, b) => a.value - b.value);
+    const tbody = document.querySelector("#tuneMetricTable tbody");
+    if (tbody) {
+      tbody.innerHTML = sortedTrials.slice(0, 50).map((t, i) => {
+        const isBest = i === 0;
+        // For now metric columns show "--" until we have per-trial test metric storage
+        const metricCols = selMetrics.map(() => `<td style="font-size:10px;color:var(--text-dim)">--</td>`).join("");
+        return `<tr${isBest ? ' style="background:rgba(16,185,129,0.08)"' : ""}>
+          <td>${isBest ? "★ " : ""}${t.number}</td>
+          <td>${t.value?.toFixed(4) ?? "--"}</td>
+          ${metricCols}
+          <td style="color:var(--success)">${t.state}</td>
+        </tr>`;
+      }).join("");
+    }
+  }
+
   window._pollTuningProgress = pollTuningProgress;
-  stageSel.addEventListener("change", () => { renderParams(); pollTuningProgress(); });
+  stageSel.addEventListener("change", () => { renderMetrics(); renderParams(); pollTuningProgress(); });
+  renderMetrics();
   renderParams();
   pollTuningProgress();
 
@@ -2322,7 +2529,8 @@ async function setupTuning() {
       : `Starting fresh: ${nTrials} trials...`;
 
     progressDiv.innerHTML = `<span class="status-dot running"></span> ${label}`;
-    const res = await api.post("/api/tuning/start", { stage, n_trials: nTrials, max_steps: maxSteps });
+    const metrics = getSelectedMetricKeys();
+    const res = await api.post("/api/tuning/start", { stage, n_trials: nTrials, max_steps: maxSteps, metrics: metrics.length > 0 ? metrics : undefined });
     if (res.ok) {
       progressDiv.innerHTML = `<span class="status-dot running"></span> Tuning running: Stage ${stage}, ${nTrials} new trials (PID ${res.pid})${isResume ? " [resumed]" : ""}`;
       if (!tunePollTimer) tunePollTimer = setInterval(pollTuningProgress, 8000);

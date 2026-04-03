@@ -114,3 +114,18 @@ server/
 | E - SFT | 17 | proj_lr_mult, val_batch_size |
 | F - Vocoder | 22 | lr_g, lr_d, lambda_mel/fm/adv, mpd_periods, msd_num_scales |
 | G - OCR | 19 | use_gqa, use_swiglu, use_spiking, use_ltc |
+
+### Metric-Based Optimization
+Tuning can optimize real test metrics (CER, perplexity, R@1, etc.) instead of just val_loss.
+The UI shows metric selection chips per stage. When metrics are selected, tune.py runs the
+test script after each trial and computes a combined objective from the selected metrics.
+
+| Stage | Available Metrics |
+|-------|------------------|
+| A | val_loss, perplexity, top1/5/10_accuracy |
+| B | val_loss, cer, wer, cer_greedy, wer_greedy |
+| C | val_loss, diversity_score, i2t_r1/r5, t2i_r1/r5, avg_pairwise_similarity |
+| D | val_loss, base_accuracy, res_accuracy, base/res_top5_accuracy, reconstruction_mse, codebook_utilization |
+| E | val_loss, perplexity, top1/5_accuracy |
+| F | val_loss, mel_mse, mel_mae, spectral_convergence, mcd |
+| G | val_loss, cer, wer, exact_match_rate, char_accuracy |
