@@ -4,7 +4,7 @@
   "vision_ckpt": "checkpoints/vision_tiny",
   "talker_ckpt": "checkpoints/talker_tiny",
   "ctx_len": 128,
-  "lr": 3e-05,
+  "lr": 1e-3,
   "wd": 0.01,
   "warmup_steps": 100,
   "max_steps": 9000,

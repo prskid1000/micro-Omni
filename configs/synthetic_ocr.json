@@ -20,7 +20,7 @@
   "use_spiking": false,
   "use_ltc": true,
   "lr": 0.00019902858937707426,
-  "wd": 5.771352549383016e-06,
+  "wd": 0.01,
   "warmup_steps": 103,
   "max_steps": 1700,
   "batch_size": 32,
@@ -48,5 +48,5 @@
   "lr_spike_multiplier": 8.541079109863434,
   "lr_spike_duration": 32,
   "lr_spike_consecutive_increases": 3,
-  "label_smoothing": 0.0014926545850443393
+  "label_smoothing": 0.1
 }

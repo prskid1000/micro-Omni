@@ -18,7 +18,7 @@
   "use_mtp": true,
   "window_size": 128,
   "rope_scaling_factor": 1.0,
-  "label_smoothing": 0.0009239041732207881,
+  "label_smoothing": 0.1,
   "use_ema": true,
   "ema_decay": 0.9947304748263852,
   "lr": 0.0017706536116163319,

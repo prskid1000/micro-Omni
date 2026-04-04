@@ -48,7 +48,7 @@
   "use_early_stopping": false,
   "early_stopping_patience": 11,
   "early_stopping_min_delta": 0.0009153431677757442,
-  "label_smoothing": 0.001633128535746826,
+  "label_smoothing": 0.1,
   "use_lr_spike": true,
   "lr_spike_multiplier": 8.66076386071313,
   "lr_spike_duration": 33,

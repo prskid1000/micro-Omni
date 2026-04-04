@@ -104,20 +104,30 @@ def get_stage_metrics(stage: str) -> list[dict[str, Any]]:
 # Types: "float_log", "float", "int", "categorical"
 
 COMMON_TRAINING_SPACE = [
-    # Optimization
-    ("lr", "float_log", (1e-4, 5e-3)),
-    ("wd", "float_log", (1e-6, 0.1)),
-    ("warmup_steps", "int", (10, 300)),
-    ("batch_size", "categorical", ([8, 16, 32, 64],)),
+    # ── Optimization ──
+    # Kaplan'20, Pythia 70M=1e-3, GPT-3 125M=6e-4, nanoGPT=6e-4 → 13M should use higher
+    ("lr", "float_log", (5e-4, 3e-3)),
+    # Loshchilov'19 AdamW: BERT/Pythia=0.01, GPT-3/LLaMA=0.1; Wang'24: higher WD for small data
+    ("wd", "float_log", (0.01, 0.1)),
+    # Goyal'17, Pythia=1%, BERT=1%, nanoGPT=0.33%; Pre-LN can skip warmup (Xiong'20)
+    ("warmup_steps", "int", (50, 200)),
+    # Smith&Le'18, Huang'21: small batch=regularization for small data; McCandlish'18 critical BS
+    ("batch_size", "categorical", ([8, 16, 32],)),
     ("gradient_accumulation_steps", "categorical", ([1, 2, 4],)),
-    ("max_grad_norm", "categorical", ([0.5, 1.0, 2.0, 5.0],)),
-    # Regularization
-    ("dropout", "float", (0.0, 0.2)),
-    ("label_smoothing", "float", (0.0, 0.15)),
-    ("ema_decay", "float", (0.99, 0.9999)),
-    # Convergence control
-    ("lr_spike_multiplier", "float", (2.0, 10.0)),
-    ("lr_spike_duration", "int", (20, 100)),
+    # GPT-3/LLaMA/Pythia/BERT/nanoGPT/OLMo all use 1.0; CTRL=0.25 (12 papers unanimous)
+    ("max_grad_norm", "categorical", ([0.5, 1.0],)),
+    # ── Regularization ──
+    # Vaswani'17 base=0.3, Xu'21 small-data=0.3-0.6, STLM'24, Srivastava'14=0.5
+    ("dropout", "float", (0.1, 0.4)),
+    # Vaswani'17=0.1, Muller'19=0.1, Pereyra'17=0.1, Tang'20=0.1 (12 papers: 0.1 universal)
+    ("label_smoothing", "float", (0.05, 0.15)),
+    # Busbridge NeurIPS'23, Ziegler TMLR'24=0.998, Tarvainen'17=0.99→0.999
+    ("ema_decay", "float", (0.99, 0.999)),
+    # ── Convergence ──
+    # SGDR Loshchilov'17=1x restart, Smith'18=3-10x, CLR Smith'17=1-3x
+    ("lr_spike_multiplier", "float", (2.0, 5.0)),
+    # Short spikes for short training; 100 steps > 1 epoch
+    ("lr_spike_duration", "int", (10, 50)),
     ("early_stopping_patience", "int", (3, 15)),
 ]
 
@@ -125,30 +135,38 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
     "A": [
         # Thinker LLM — core text model
         *COMMON_TRAINING_SPACE,
-        ("kv_groups", "categorical", ([1, 2, 4],)),
-        ("use_swiglu", "categorical", ([True, False],)),
+        # Ainslie'23: MHA best at small scale; GQA saves nothing at ctx=64
+        ("kv_groups", "categorical", ([2, 4],)),
+        # Shazeer'20, PaLM, LLaMA, Qwen: SwiGLU consistently best across all scales
+        ("use_swiglu", "categorical", ([True],)),
         ("use_gqa", "categorical", ([True, False],)),
-        ("rope_theta", "categorical", ([5000, 10000, 50000, 100000],)),
-        ("use_moe", "categorical", ([True, False],)),
+        # Su'21: 10K standard; Frontiers'25: 5K slightly better for short ctx
+        ("rope_theta", "categorical", ([5000, 10000],)),
+        # Switch'22, Mixtral, HF blog: MoE hurts <1B params, memorizes on small data
+        ("use_moe", "categorical", ([False],)),
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — SpikingNeuron size mismatch
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA
         ("use_ltc", "categorical", ([True, False],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
-        # Found in script cfg.get() but not in config — hidden tunable params
-        ("use_mtp", "categorical", ([True, False],)),
-        ("window_size", "categorical", ([0, 32, 64],)),
-        ("rope_scaling_factor", "categorical", ([1.0, 2.0, 4.0],)),
+        # Gloeckle'24: no benefit <1B params; BabyLM'25: mixed results on tiny models
+        ("use_mtp", "categorical", ([False],)),
+        # Mistral, Gemma, Longformer: pointless at ctx=64 (full attention is trivial)
+        ("window_size", "categorical", ([0],)),
+        # YaRN, PI: only for context extension beyond training length
+        ("rope_scaling_factor", "categorical", ([1.0],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
     ],
     "B": [
         # Audio Encoder — mel → embeddings
         *COMMON_TRAINING_SPACE,
         ("use_attention_pooling", "categorical", ([True, False],)),
-        ("use_augmentation", "categorical", ([True, False],)),
-        ("downsample_time", "categorical", ([4, 8, 16],)),
+        # Park'19 SpecAugment, Ko'15 speed perturbation: universal in ASR (11 papers)
+        ("use_augmentation", "categorical", ([True],)),
+        # NVIDIA Conformer=4x, Fast Conformer=8x, ESPnet=4x; 16x too coarse for CTC
+        ("downsample_time", "categorical", ([4, 8],)),
         ("target_hz", "categorical", ([6.25, 12.5, 25.0],)),
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA
         ("use_ltc", "categorical", ([True, False],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
@@ -156,16 +174,18 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
     "C": [
         # Vision Encoder — CLIP contrastive
         *COMMON_TRAINING_SPACE,
-        ("temperature", "float", (0.01, 0.2)),
-        ("use_augmentation", "categorical", ([True, False],)),
-        ("embed_dim", "categorical", ([64, 128, 256],)),
+        # CLIP'21=0.07, MoCo=0.07, SimCLR=0.1-0.5; 0.07 standard (12 papers)
+        ("temperature", "float", (0.03, 0.1)),
+        # Critical for small image datasets
+        ("use_augmentation", "categorical", ([True],)),
+        # SimCLR=128, CLIP=512; match d_model=128 (OpenReview: 64-256 viable for small)
+        ("embed_dim", "categorical", ([128, 256],)),
         ("use_thinker_for_text", "categorical", ([True, False],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
-        # Vision script reads thinker sub-params
         ("use_gqa", "categorical", ([True, False],)),
         ("use_swiglu", "categorical", ([True, False],)),
-        ("use_moe", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
+        ("use_moe", "categorical", ([False],)),  # Not useful at this scale
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA
         ("use_ltc", "categorical", ([True, False],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
     ],
@@ -173,16 +193,16 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         # Talker TTS — RVQ speech codes
         *COMMON_TRAINING_SPACE,
         ("use_gqa", "categorical", ([True, False],)),
-        ("use_swiglu", "categorical", ([True, False],)),
+        ("use_swiglu", "categorical", ([True],)),  # Shazeer'20: always better
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA
         ("use_ltc", "categorical", ([True, False],)),
         ("rvq_ema_decay", "float", (0.9, 0.999)),
         ("rvq_gumbel_temp", "float", (0.1, 2.0)),
         ("rvq_reset_threshold", "float", (0.5, 5.0)),
         ("codebooks", "categorical", ([1, 2, 4],)),
         ("codebook_size", "categorical", ([64, 128, 256],)),
-        ("rope_theta", "categorical", ([5000, 10000, 50000],)),
+        ("rope_theta", "categorical", ([5000, 10000],)),  # Su'21: 10K standard
         ("frame_rate", "categorical", ([6.25, 12.5, 25.0],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
@@ -200,15 +220,18 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         # Vocoder — HiFi-GAN (different LR structure, no common lr)
         ("lr_g", "float_log", (1e-5, 1e-3)),
         ("lr_d", "float_log", (1e-5, 1e-3)),
-        ("wd", "float_log", (1e-6, 0.1)),
-        ("warmup_steps", "int", (10, 200)),
+        ("wd", "float_log", (1e-3, 0.3)),
+        ("warmup_steps", "int", (5, 200)),
         ("batch_size", "categorical", ([1, 2, 4],)),
         ("gradient_accumulation_steps", "categorical", ([1, 2, 4, 8],)),
-        ("max_grad_norm", "categorical", ([0.5, 1.0, 2.0, 5.0],)),
-        ("ema_decay", "float", (0.99, 0.9999)),
-        ("lambda_mel", "float", (10.0, 100.0)),
-        ("lambda_fm", "float", (1.0, 20.0)),
-        ("lambda_adv", "float", (0.5, 5.0)),
+        ("max_grad_norm", "categorical", ([0.3, 0.5, 1.0, 2.0],)),
+        ("ema_decay", "float", (0.99, 0.999)),
+        # HiFi-GAN official=45, BigVGAN=45, kan-bayashi=45 (10 papers unanimous)
+        ("lambda_mel", "float", (25.0, 60.0)),
+        # HiFi-GAN=1.0, kan-bayashi=2.0 (10 papers: 1-2 range)
+        ("lambda_fm", "float", (1.0, 3.0)),
+        # Universal standard=1.0 (10 papers: all use 1.0 as base reference)
+        ("lambda_adv", "float", (0.5, 2.0)),
         ("discriminator_update_interval", "categorical", ([1, 2, 3, 5],)),
         ("discriminator_lr_warmup_steps", "int", (50, 500)),
         ("mel_weight_decay_start", "int", (500, 5000)),
@@ -216,8 +239,8 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("mpd_periods", "categorical", ([[2, 3, 5, 7, 11], [2, 3, 5, 7], [3, 5, 7, 11, 13]],)),
         ("msd_num_scales", "categorical", ([2, 3, 4],)),
         ("shuffle_buffer_size", "categorical", ([500, 1000, 2000],)),
-        ("lr_spike_multiplier", "float", (2.0, 10.0)),
-        ("lr_spike_duration", "int", (20, 100)),
+        ("lr_spike_multiplier", "float", (1.5, 5.0)),
+        ("lr_spike_duration", "int", (10, 50)),
         ("early_stopping_patience", "int", (3, 15)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
     ],
@@ -225,9 +248,9 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         # OCR — encoder-decoder with separate stacks
         *COMMON_TRAINING_SPACE,
         ("use_gqa", "categorical", ([True, False],)),
-        ("use_swiglu", "categorical", ([True, False],)),
+        ("use_swiglu", "categorical", ([True],)),  # Shazeer'20: always better
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA
         ("use_ltc", "categorical", ([True, False],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
