@@ -392,12 +392,37 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
                 })
 
             complete = [t for t in trials if t["state"] == "COMPLETE" and t["value"] is not None]
-            # Filter out penalty trials (value >= 100 means crash)
             non_penalty = [t for t in complete if t["value"] < 100]
             candidates = non_penalty if non_penalty else complete
+
             best = None
             if candidates:
-                best_t = min(candidates, key=lambda t: t["value"]) if direction == "MINIMIZE" else max(candidates, key=lambda t: t["value"])
+                # Pick best by average rank across all user_attrs metrics
+                has_attrs = [t for t in candidates if t.get("user_attrs")]
+                if len(has_attrs) >= 2:
+                    # Load metric directions from STAGE_METRICS
+                    stage_letter = study_name.replace("tune_", "").upper() if study_name else ""
+                    metric_dirs = {m[0]: m[2] for m in STAGE_METRICS.get(stage_letter, [])}
+
+                    for t in has_attrs:
+                        total_rank, counted = 0, 0
+                        for key, val in t["user_attrs"].items():
+                            if not isinstance(val, (int, float)):
+                                continue
+                            direction_m = metric_dirs.get(key, "minimize")
+                            all_vals = sorted(
+                                [ct["user_attrs"][key] for ct in has_attrs if key in ct.get("user_attrs", {}) and isinstance(ct["user_attrs"][key], (int, float))],
+                                reverse=(direction_m == "maximize")
+                            )
+                            rank = all_vals.index(val) if val in all_vals else len(all_vals)
+                            total_rank += rank
+                            counted += 1
+                        t["_avg_rank"] = total_rank / counted if counted > 0 else 9999
+
+                    best_t = min(has_attrs, key=lambda t: t.get("_avg_rank", 9999))
+                else:
+                    best_t = min(candidates, key=lambda t: t["value"])
+
                 best = {
                     "number": best_t["number"],
                     "value": best_t["value"],

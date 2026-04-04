@@ -2046,8 +2046,37 @@ async function setupTuning() {
 
       // Trials table (sorted by val_loss)
       const tbody = $("#tuneTrialsTable tbody");
-      const allTrials = (r.trials || []).sort((a, b) => (a.value ?? 999) - (b.value ?? 999));
       const spaceMetrics = tuneSpaces[stage]?.metrics || [];
+
+      // Sort by average rank across all metrics (Pareto-aware ranking)
+      const completedWithAttrs = (r.trials || []).filter(t => t.state === "COMPLETE" && t.user_attrs && Object.keys(t.user_attrs).length > 0);
+      let allTrials;
+      if (completedWithAttrs.length >= 2) {
+        // Compute rank per metric, then average ranks
+        const metricKeys = spaceMetrics.map(m => m.key);
+        const rankedTrials = (r.trials || []).map(t => {
+          if (t.state !== "COMPLETE" || !t.user_attrs || Object.keys(t.user_attrs).length === 0) {
+            return { ...t, _avgRank: 9999 };
+          }
+          let totalRank = 0, counted = 0;
+          for (const m of spaceMetrics) {
+            const val = t.user_attrs[m.key];
+            if (val == null) continue;
+            // Rank this trial among all completed trials for this metric
+            const allVals = completedWithAttrs
+              .map(ct => ct.user_attrs[m.key])
+              .filter(v => v != null)
+              .sort((a, b) => m.direction === "minimize" ? a - b : b - a);
+            const rank = allVals.indexOf(val);
+            totalRank += rank >= 0 ? rank : allVals.length;
+            counted++;
+          }
+          return { ...t, _avgRank: counted > 0 ? totalRank / counted : 9999 };
+        });
+        allTrials = rankedTrials.sort((a, b) => a._avgRank - b._avgRank);
+      } else {
+        allTrials = (r.trials || []).sort((a, b) => (a.value ?? 999) - (b.value ?? 999));
+      }
 
       // Check if any trial has user_attrs
       const hasAnyAttrs = allTrials.some(t => t.user_attrs && Object.keys(t.user_attrs).length > 0);
