@@ -17,6 +17,13 @@ import json
 import os
 import sys
 
+# Fix Windows encoding for subprocess pipes (tqdm progress bars use Unicode)
+os.environ["PYTHONIOENCODING"] = "utf-8"
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 # Stage → (training module function name, config file, metrics JSONL file)
 STAGE_INFO = {
     "A": ("train.train_thinker", "synthetic_thinker.json", "train_thinker.jsonl"),
@@ -290,7 +297,10 @@ def main():
             if isinstance(result, (int, float)) and result < 1e6:
                 val_loss = float(result)
             else:
+                # Try with run_id first, then without (JSONL may have timing issues)
                 val_loss = _get_best_val_loss_from_jsonl(metrics_path, run_id=trial_run_id)
+                if val_loss == float("inf"):
+                    val_loss = _get_best_val_loss_from_jsonl(metrics_path, run_id="")
             if val_loss == float("inf"):
                 val_loss = 100.0
 
