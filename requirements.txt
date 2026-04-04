@@ -17,6 +17,7 @@ requests
 av
 safetensors
 transformers
+optuna
 python-Levenshtein
 tqdm
 pesq

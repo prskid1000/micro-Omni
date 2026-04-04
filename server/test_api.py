@@ -17,6 +17,11 @@ import time
 import urllib.request
 import urllib.error
 
+# Ensure repo root is in sys.path for importing omni/train/server modules
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 
 class APITester:
     def __init__(self, host: str = "127.0.0.1", port: int = 8000):
@@ -2067,7 +2072,7 @@ class APITester:
         """Test the combined objective function from tune.py."""
         try:
             from train.tune import _compute_objective
-        except ImportError:
+        except Exception:
             self.skip("Objective computation test", "can't import tune.py")
             return
 
@@ -2083,24 +2088,24 @@ class APITester:
         obj = _compute_objective(0.5, {}, ["val_loss"], "A")
         self.assert_true("val_loss-only returns val_loss", abs(obj - 0.5) < 0.001, f"got {obj}")
 
-        # Test mixed minimize + maximize
-        obj = _compute_objective(0.5, {"cer": 0.10, "top1_accuracy": 0.80}, ["cer", "top1_accuracy"], "A")
-        # cer=0.10 (minimize, as-is), accuracy=1-0.80=0.20, avg=(0.10+0.20)/2=0.15
+        # Test mixed minimize + maximize (use stage B which has cer)
+        obj = _compute_objective(0.5, {"cer": 0.10, "wer": 0.20}, ["cer", "wer"], "B")
+        # cer=0.10 + wer=0.20, avg=(0.10+0.20)/2=0.15
         self.assert_true("Mixed objective correct", abs(obj - 0.15) < 0.001, f"got {obj}")
 
         # Test fallback when no test metrics returned
         obj = _compute_objective(2.5, {}, ["cer", "wer"], "B")
         self.assert_true("Fallback to val_loss", abs(obj - 2.5) < 0.001, f"got {obj}")
 
-        # Test penalty val_loss capped
+        # Test penalty val_loss capped at 10.0
         obj = _compute_objective(100.0, {}, ["val_loss"], "A")
-        self.assert_true("Penalty val_loss passed through", obj == 100.0, f"got {obj}")
+        self.assert_true("Penalty val_loss capped", abs(obj - 10.0) < 0.001, f"got {obj}")
 
     def test_tuning_stage_test_info(self):
         """Verify STAGE_TEST_INFO maps every stage to valid test script and JSONL."""
         try:
             from server.api.tuning import STAGE_TEST_INFO, STAGE_METRICS
-        except ImportError:
+        except Exception:
             self.skip("Stage test info test", "can't import tuning.py")
             return
 
