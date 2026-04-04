@@ -369,10 +369,19 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
                 })
 
             complete = [t for t in trials if t["state"] == "COMPLETE" and t["value"] is not None]
+            # Filter out penalty trials (value >= 100 means crash)
+            non_penalty = [t for t in complete if t["value"] < 100]
+            candidates = non_penalty if non_penalty else complete
             best = None
-            if complete:
-                best_t = min(complete, key=lambda t: t["value"]) if direction == "MINIMIZE" else max(complete, key=lambda t: t["value"])
-                best = {"number": best_t["number"], "value": best_t["value"], "params": best_t["params"]}
+            if candidates:
+                best_t = min(candidates, key=lambda t: t["value"]) if direction == "MINIMIZE" else max(candidates, key=lambda t: t["value"])
+                best = {
+                    "number": best_t["number"],
+                    "value": best_t["value"],
+                    "values": best_t.get("values", {}),
+                    "params": best_t["params"],
+                    "user_attrs": best_t.get("user_attrs", {}),
+                }
 
             return {
                 "study_name": study_name,

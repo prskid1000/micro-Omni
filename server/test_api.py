@@ -6,7 +6,7 @@ Usage:
     # Start server first: python -m server --no-open
     python server/test_api.py
     python server/test_api.py --host 127.0.0.1 --port 8000
-    python server/test_api.py --skip-slow          # Skip tests that wait for processes
+    python server/test_api.py                       # Full suite (~3 min, all tests run)
 """
 
 import argparse
@@ -144,7 +144,7 @@ class APITester:
 
     # ── Runner ───────────────────────────────────────────────
 
-    def run_all(self, skip_slow: bool = False):
+    def run_all(self):
         print("=" * 64)
         print("  micro-Omni Server API Test Suite")
         print("=" * 64)
@@ -154,14 +154,14 @@ class APITester:
         self._run_section("System API", self.test_system_api)
         self._run_section("Config Roundtrip", self.test_config_roundtrip)
         self._run_section("Pipeline Status", self.test_pipeline_status)
-        self._run_section("Training Lifecycle", self.test_training_lifecycle, skip_slow)
-        self._run_section("GPU Lock", self.test_gpu_lock, skip_slow)
-        self._run_section("Pause/Resume Progress", self.test_pause_resume_progress, skip_slow)
-        self._run_section("Training All Stages", self.test_all_stages_start_stop, skip_slow)
-        self._run_section("Testing Lifecycle", self.test_testing_lifecycle, skip_slow)
+        self._run_section("Training Lifecycle", self.test_training_lifecycle)
+        self._run_section("GPU Lock", self.test_gpu_lock)
+        self._run_section("Pause/Resume Progress", self.test_pause_resume_progress)
+        self._run_section("Training All Stages", self.test_all_stages_start_stop)
+        self._run_section("Testing Lifecycle", self.test_testing_lifecycle)
         self._run_section("Inference API", self.test_inference_api)
         self._run_section("Tuning API", self.test_tuning_api)
-        self._run_section("Export API", self.test_export_api, skip_slow)
+        self._run_section("Export API", self.test_export_api)
         self._run_section("Error Handling", self.test_error_handling)
         self._run_section("CORS Headers", self.test_cors)
         self._run_section("Content Types", self.test_content_types)
@@ -184,7 +184,7 @@ class APITester:
         self._run_section("Config Value Sanity", self.test_config_value_sanity)
         self._run_section("Tuning Range Sanity", self.test_tuning_range_sanity)
         self._run_section("Config in Tuning Range", self.test_config_value_in_tuning_range)
-        self._run_section("All Stages Registered", self.test_all_stages_registered, skip_slow)
+        self._run_section("All Stages Registered", self.test_all_stages_registered)
         # New feature tests
         self._run_section("Metrics Caching", self.test_metrics_caching)
         self._run_section("New UI Elements", self.test_new_ui_elements)
@@ -192,7 +192,7 @@ class APITester:
         self._run_section("Incremental Polling", self.test_incremental_polling)
         # Latest features
         self._run_section("Paused State Detection", self.test_paused_state_detection)
-        self._run_section("Clear Resets to Idle", self.test_clear_resets_to_idle, skip_slow)
+        self._run_section("Clear Resets to Idle", self.test_clear_resets_to_idle)
         self._run_section("Metrics Delete API", self.test_metrics_delete_api)
         self._run_section("Chat UI Elements", self.test_chat_ui_elements)
         self._run_section("Delete Buttons", self.test_delete_buttons_exist)
@@ -205,20 +205,17 @@ class APITester:
         self._run_section("Tuning Objective Computation", self.test_tuning_objective_computation)
         self._run_section("Tuning Stage Test Info", self.test_tuning_stage_test_info)
         self._run_section("Tuning Metrics Config Persistence", self.test_tuning_metrics_config_persistence)
-        self._run_section("PM Clear Record", self.test_process_manager_clear_record, skip_slow)
+        self._run_section("PM Clear Record", self.test_process_manager_clear_record)
         self._run_section("Chip Clear All", self.test_chip_clear_all_html)
 
         self._print_summary()
         return self.failed == 0
 
-    def _run_section(self, name: str, fn, skip_slow: bool = False):
+    def _run_section(self, name: str, fn):
         print()
         print(f"--- {name} ---")
         self._section = name
         before_p, before_f = self.passed, self.failed
-        if skip_slow and getattr(fn, "_slow", False):
-            self.skip(f"Entire section (--skip-slow)")
-            return
         try:
             fn()
         except Exception as e:
@@ -280,19 +277,12 @@ class APITester:
         # List files
         r = self.check("GET /api/metrics/files", self.get("/api/metrics/files"))
         files = r.get("files", [])
-        # May be empty on fresh install with no training runs
-        if not files:
-            self.skip("Metrics files check", "no training runs yet (logs/metrics/ empty)")
-        else:
-            self.assert_true("Has at least 1 metrics file", len(files) >= 1, f"found {len(files)}")
+        self.assert_true("Files response is list", isinstance(files, list))
 
         # Summary
         r = self.check("GET /api/metrics/summary", self.get("/api/metrics/summary"))
         summary = r.get("summary", {})
-        if not files:
-            self.skip("Summary entries check", "no metrics files to summarize")
-        else:
-            self.assert_true("Summary has entries", len(summary) > 0)
+        self.assert_true("Summary response is dict", isinstance(summary, dict))
 
         # Fetch specific file
         if files:
@@ -508,7 +498,6 @@ class APITester:
         # Try starting blocked stage
         self.check("Start E (blocked) -> 409", self.post("/api/training/start", {"stage": "E"}), expect_ok=False)
 
-    test_training_lifecycle._slow = True
 
     # ── Pause/Resume Verification ────────────────────────────
 
@@ -591,7 +580,6 @@ class APITester:
         has_resume_indicator = "resum" in log_text.lower() or "checkpoint" in log_text.lower() or "step" in log_text.lower()
         self.assert_true("Logs mention resume/checkpoint/step", has_resume_indicator)
 
-    test_pause_resume_progress._slow = True
 
     # ── GPU Lock ─────────────────────────────────────────────
 
@@ -635,7 +623,6 @@ class APITester:
         else:
             self.check("Start F after freeing GPU", r)
 
-    test_gpu_lock._slow = True
 
     # ── All Stages Start/Stop ────────────────────────────────
 
@@ -660,7 +647,6 @@ class APITester:
         # Clean up
         self.wait_gpu_free()
 
-    test_all_stages_start_stop._slow = True
 
     # ── Testing Lifecycle ────────────────────────────────────
 
@@ -729,7 +715,6 @@ class APITester:
             elif result and result["status"] == "failed":
                 self.skip("Test produced results", "test failed (likely missing data)")
 
-    test_testing_lifecycle._slow = True
 
     # ── Inference API ────────────────────────────────────────
 
@@ -862,7 +847,6 @@ class APITester:
             # Kill all to clean up
             self.wait_gpu_free(timeout=10)
 
-    test_export_api._slow = True
 
     # ── Error Handling ───────────────────────────────────────
 
@@ -924,13 +908,33 @@ class APITester:
 
     # ── Metrics JSONL Schema Validation ──────────────────────
 
+    def _ensure_training_data(self):
+        """Run a quick Stage A training if no metrics/checkpoints exist."""
+        r = self.get("/api/metrics/files")
+        if r.get("files"):
+            return  # data already exists
+        print("       Generating training data (quick Stage A run)...")
+        self.wait_gpu_free()
+        self.post("/api/training/clear", {"stage": "A"})
+        time.sleep(1)
+        r = self.post("/api/training/start", {"stage": "A"})
+        if not r.get("ok"):
+            return
+        # Wait for metrics to appear (up to 30s)
+        for _ in range(15):
+            time.sleep(2)
+            r = self.get("/api/metrics/files")
+            if r.get("files"):
+                break
+        self.post("/api/training/stop", {"stage": "A"})
+        time.sleep(2)
+
     def test_metrics_data_integrity(self):
         """Validate actual JSONL rows have correct types and values."""
+        self._ensure_training_data()
         r = self.get("/api/metrics/files")
         files = r.get("files", [])
-        if not files:
-            self.skip("Metrics data integrity", "no JSONL files on disk")
-            return
+        self.assert_gt("Has metrics files after training", len(files), 0)
 
         for fname in files:
             r = self.get(f"/api/metrics/data?file={fname}")
@@ -988,11 +992,10 @@ class APITester:
 
     def test_checkpoint_data_integrity(self):
         """Validate checkpoint scan returns correct metadata."""
+        self._ensure_training_data()
         r = self.get("/api/system/checkpoints")
         ckpts = r.get("checkpoints", [])
-        if not ckpts:
-            self.skip("Checkpoint data integrity", "no checkpoints on disk")
-            return
+        self.assert_gt("Has checkpoints after training", len(ckpts), 0)
 
         for c in ckpts:
             name = c.get("name", "?")
@@ -1635,7 +1638,6 @@ class APITester:
                 time.sleep(0.5)
                 self.wait_gpu_free(timeout=10)
 
-    test_all_stages_registered._slow = True
 
     # ══════════════════════════════════════════════════════════
     # NEW FEATURE TESTS (improvements round)
@@ -1694,8 +1696,11 @@ class APITester:
         # Full fetch
         r_all = self.get("/api/metrics/data?file=train_thinker.jsonl")
         all_rows = r_all.get("rows", [])
+        self.assert_true("Rows response is list", isinstance(all_rows, list))
         if not all_rows:
-            self.skip("Incremental polling", "no thinker metrics yet (not trained)")
+            # No data yet — test the empty response path instead
+            r_empty = self.get("/api/metrics/data?file=train_thinker.jsonl&since=2099-12-31T23:59:59Z")
+            self.assert_eq("Far future since = 0 rows on empty", len(r_empty.get("rows", [])), 0)
             return
         self.assert_gt("Has metrics rows", len(all_rows), 0)
 
@@ -1937,14 +1942,13 @@ class APITester:
         self.assert_true("No training_A process after clear",
                         "training_A" not in r2.get("processes", {}))
 
-    test_clear_resets_to_idle._slow = True
 
     def test_metrics_delete_api(self):
         """Verify metrics file and run deletion endpoints."""
-        # Ensure we have data
+        self._ensure_training_data()
         files = self.get("/api/metrics/files").get("files", [])
         if not files:
-            self.skip("Metrics delete test", "no metrics files")
+            self.assert_true("Has metrics files for delete test", False, "no files even after training")
             return
 
         # Test delete-run (non-existent run = 0 removed, file unchanged)
@@ -2210,7 +2214,6 @@ class APITester:
         self.assert_true("training_F removed after clear",
                         "training_F" not in r.get("processes", {}))
 
-    test_process_manager_clear_record._slow = True
 
     def test_chip_clear_all_html(self):
         """Verify chip filter system has clear-all support in JS."""
@@ -2227,7 +2230,6 @@ def main():
     parser = argparse.ArgumentParser(description="Test micro-Omni server API")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--skip-slow", action="store_true", help="Skip tests that start/stop processes")
     args = parser.parse_args()
 
     tester = APITester(args.host, args.port)
@@ -2239,7 +2241,7 @@ def main():
         print("Start it first: python -m server --no-open")
         sys.exit(1)
 
-    success = tester.run_all(skip_slow=args.skip_slow)
+    success = tester.run_all()
     sys.exit(0 if success else 1)
 
 

@@ -2009,18 +2009,36 @@ async function setupTuning() {
         }
       }
 
-      // Best result — show selected metrics info
+      // Best result — show per-metric values from user_attrs
       if (r.best_trial) {
         const metricKeys = getSelectedMetricKeys();
-        const objectiveLabel = metricKeys.length > 0 && metricKeys.some(m => m !== "val_loss")
-          ? `objective (${metricKeys.join(" + ")})`
-          : "val_loss";
+        const bestAttrs = r.best_trial.user_attrs || {};
+        const spaceMetrics = (tuneSpaces[stage]?.metrics || []);
+
+        // Build per-metric display from user_attrs (real values, not converted objectives)
+        let metricsDisplay = "";
+        if (Object.keys(bestAttrs).length > 0) {
+          const metricParts = metricKeys.map(key => {
+            const def = spaceMetrics.find(m => m.key === key);
+            const label = def?.name || key;
+            const arrow = def?.direction === "minimize" ? "↓" : "↑";
+            const val = bestAttrs[key];
+            if (val != null) {
+              const formatted = typeof val === "number" ? (val < 0.01 ? val.toExponential(2) : val.toFixed(4)) : val;
+              return `<span style="color:var(--accent-2)">${label}</span> ${arrow} <strong>${formatted}</strong>`;
+            }
+            return `<span style="color:var(--text-dim)">${label}: --</span>`;
+          });
+          metricsDisplay = `<div style="margin-top:4px;font-size:11px">${metricParts.join("  ·  ")}</div>`;
+        }
+
         const bestParams = Object.entries(r.best_trial.params || {})
           .map(([k, v]) => `<span class="hp-key">${k}</span>=<span class="hp-val">${typeof v === "number" ? v.toPrecision(4) : v}</span>`)
           .join(", ");
         resultsDiv.innerHTML = `
-          <div style="margin-bottom:6px"><strong style="color:var(--success)">Best: ${objectiveLabel} = ${r.best_trial.value?.toFixed(4)}</strong> (trial #${r.best_trial.number})</div>
-          <div style="font-size:11px">${bestParams}</div>
+          <div style="margin-bottom:4px"><strong style="color:var(--success)">Best trial #${r.best_trial.number}</strong></div>
+          ${metricsDisplay}
+          <div style="font-size:11px;margin-top:4px">${bestParams}</div>
         `;
       } else {
         resultsDiv.textContent = isRunning ? "Waiting for first trial to complete..." : "No results yet.";
@@ -2029,12 +2047,32 @@ async function setupTuning() {
       // Trials table (sorted by val_loss)
       const tbody = $("#tuneTrialsTable tbody");
       const allTrials = (r.trials || []).sort((a, b) => (a.value ?? 999) - (b.value ?? 999));
+      const spaceMetrics = tuneSpaces[stage]?.metrics || [];
       tbody.innerHTML = allTrials.slice(0, 30).map((t, i) => {
         const stateColor = t.state === "COMPLETE" ? "var(--success)" : t.state === "PRUNED" ? "var(--warning)" : "var(--danger)";
-        const isBest = i === 0 && t.state === "COMPLETE";
+        const isBest = i === 0 && t.state === "COMPLETE" && (t.value ?? 999) < 100;
+        const isPenalty = t.value != null && t.value >= 100;
+
+        // Show per-metric values from user_attrs instead of raw objective
+        let objectiveCell = t.value?.toFixed(4) ?? "--";
+        const attrs = t.user_attrs || {};
+        if (Object.keys(attrs).length > 0 && !isPenalty) {
+          const parts = [];
+          for (const m of spaceMetrics) {
+            if (attrs[m.key] != null) {
+              const v = attrs[m.key];
+              const formatted = typeof v === "number" ? (v < 0.01 ? v.toExponential(1) : v.toFixed(3)) : v;
+              parts.push(`${m.name}=${formatted}`);
+            }
+          }
+          if (parts.length > 0) objectiveCell = parts.join(", ");
+        } else if (isPenalty) {
+          objectiveCell = '<span style="color:var(--danger)">CRASHED</span>';
+        }
+
         return `<tr${isBest ? ' style="background:rgba(16,185,129,0.08)"' : ""}>
           <td>${isBest ? "★ " : ""}${t.number}</td>
-          <td style="color:${stateColor}">${t.value?.toFixed(4) ?? "--"}</td>
+          <td style="font-size:10px">${objectiveCell}</td>
           <td style="color:${stateColor}">${t.state}</td>
           <td>${t.duration_seconds ? t.duration_seconds.toFixed(0) + "s" : "--"}</td>
           <td style="font-size:9px;max-width:400px;overflow:hidden;text-overflow:ellipsis">${
@@ -2053,6 +2091,60 @@ async function setupTuning() {
         let best = Infinity;
         for (const t of chartTrials) { best = Math.min(best, t.value); runningBest.push(best); }
 
+        // Build per-metric series from user_attrs
+        const histPalette = ["#8b5cf6", "#22d3ee", "#10b981", "#f59e0b", "#ef4444"];
+        const histMetrics = (tuneSpaces[stage]?.metrics || []);
+        const histSeries = [];
+        const histLegend = [];
+
+        // Check if trials have user_attrs with real metric data
+        const hasUserAttrs = chartTrials.some(t => t.user_attrs && Object.keys(t.user_attrs).length > 0);
+
+        if (hasUserAttrs) {
+          // Per-metric scatter + running best lines
+          histMetrics.forEach((m, idx) => {
+            const points = chartTrials
+              .filter(t => t.user_attrs && t.user_attrs[m.key] != null)
+              .map(t => [t.number, t.user_attrs[m.key]]);
+            if (points.length === 0) return;
+
+            const color = histPalette[idx % histPalette.length];
+            const arrow = m.direction === "minimize" ? "↓" : "↑";
+            const name = `${m.name} ${arrow}`;
+            histLegend.push(name);
+
+            histSeries.push({
+              name, type: "scatter", symbolSize: 6,
+              data: points, itemStyle: { color },
+            });
+            // Running best line
+            let best = m.direction === "minimize" ? Infinity : -Infinity;
+            const bestLine = points.map(p => {
+              best = m.direction === "minimize" ? Math.min(best, p[1]) : Math.max(best, p[1]);
+              return [p[0], best];
+            });
+            histSeries.push({
+              name: name + " best", type: "line", smooth: true, symbol: "none",
+              data: bestLine, lineStyle: { color, width: 1.5, opacity: 0.6 },
+              showInLegend: false,
+            });
+          });
+        } else {
+          // Fallback: single objective line
+          histLegend.push("Objective", "Best So Far");
+          histSeries.push({
+            name: "Objective", type: "scatter", symbolSize: 8,
+            data: chartTrials.map(t => [t.number, t.value]),
+            itemStyle: { color: "#8b5cf6" },
+          });
+          histSeries.push({
+            name: "Best So Far", type: "line", smooth: true, symbol: "none",
+            data: chartTrials.map((t, i) => [t.number, runningBest[i]]),
+            lineStyle: { color: "#10b981", width: 2 },
+            areaStyle: { color: "rgba(16, 185, 129, 0.08)" },
+          });
+        }
+
         tuneChart.setOption({
           animation: false,
           backgroundColor: "transparent",
@@ -2062,7 +2154,7 @@ async function setupTuning() {
             borderColor: "rgba(255,255,255,0.15)",
             textStyle: { color: "#e8ecf4", fontSize: 11 },
           },
-          legend: { data: ["Objective", "Best So Far"], textStyle: { color: "#9ca3bf", fontSize: 11 }, top: 4 },
+          legend: { data: histLegend, textStyle: { color: "#9ca3bf", fontSize: 11 }, top: 4 },
           grid: { left: 60, right: 20, top: 35, bottom: 30 },
           xAxis: {
             type: "value", name: "Trial", nameTextStyle: { color: "#9ca3bf" },
@@ -2070,30 +2162,34 @@ async function setupTuning() {
             axisLine: { lineStyle: { color: "rgba(255,255,255,0.12)" } },
           },
           yAxis: {
-            type: "value", name: "Objective", nameTextStyle: { color: "#9ca3bf" },
+            type: "value", nameTextStyle: { color: "#9ca3bf" },
             axisLabel: { color: "#9ca3bf", fontSize: 10 },
             splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
           },
-          series: [
-            {
-              name: "Objective", type: "scatter", symbolSize: 8,
-              data: chartTrials.map(t => [t.number, t.value]),
-              itemStyle: { color: "#8b5cf6" },
-            },
-            {
-              name: "Best So Far", type: "line", smooth: true, symbol: "none",
-              data: chartTrials.map((t, i) => [t.number, runningBest[i]]),
-              lineStyle: { color: "#10b981", width: 2 },
-              areaStyle: { color: "rgba(16, 185, 129, 0.08)" },
-            },
-          ],
+          series: histSeries,
         }, true);
       }
 
-      // ── Slice plots: each param vs val_loss ──────────────
+      // ── Slice plots: each param vs primary metric ──────────────
       const sliceContainer = $("#tuneSliceCharts");
-      // Filter out penalty trials (val_loss >= 50 is almost certainly a penalty)
+      // Filter out penalty trials
       const realTrials = chartTrials.filter(t => t.value != null && t.value < 50);
+
+      // Determine primary metric for Y-axis from user_attrs
+      const sliceMetricDefs = tuneSpaces[stage]?.metrics || [];
+      const sliceHasAttrs = realTrials.some(t => t.user_attrs && Object.keys(t.user_attrs).length > 0);
+      // Use first metric that has data in user_attrs, or fall back to objective value
+      let sliceMetricKey = null;
+      let sliceMetricName = "objective";
+      if (sliceHasAttrs) {
+        for (const m of sliceMetricDefs) {
+          if (realTrials.some(t => t.user_attrs?.[m.key] != null)) {
+            sliceMetricKey = m.key;
+            sliceMetricName = m.name;
+            break;
+          }
+        }
+      }
 
       if (realTrials.length >= 2) {
         const paramNames = new Set();
@@ -2137,8 +2233,11 @@ async function setupTuning() {
               const parsed = parseFloat(x);
               x = isNaN(parsed) ? 0 : parsed;
             }
-            if (Number.isFinite(x) && Number.isFinite(t.value)) {
-              points.push([x, t.value]);
+            // Use primary metric from user_attrs if available, else objective value
+            const y = sliceMetricKey && t.user_attrs?.[sliceMetricKey] != null
+              ? t.user_attrs[sliceMetricKey] : t.value;
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+              points.push([x, y]);
             }
           }
 
@@ -2175,7 +2274,7 @@ async function setupTuning() {
               splitLine: { show: false },
             },
             yAxis: {
-              type: "value", name: "objective",
+              type: "value", name: sliceMetricName,
               nameTextStyle: { color: "#7a82a0", fontSize: 9 },
               axisLabel: { color: "#7a82a0", fontSize: 9 },
               splitLine: { lineStyle: { color: "rgba(255,255,255,0.05)" } },
@@ -2315,7 +2414,7 @@ async function setupTuning() {
       const diff = Object.entries(res.applied).map(([k, v]) =>
         `  ${k}: ${JSON.stringify(v.old)} → ${JSON.stringify(v.new)}`
       ).join("\n");
-      el.innerHTML = `<span style="color:var(--success)">Saved to ${res.saved_to}</span> (best objective: ${res.best_val_loss?.toFixed(4)})\n<pre style="font-size:10px;margin-top:4px;color:var(--text-soft)">${diff}</pre>`;
+      el.innerHTML = `<span style="color:var(--success)">Saved to ${res.saved_to}</span>\n<pre style="font-size:10px;margin-top:4px;color:var(--text-soft)">${diff}</pre>`;
       showToast(`Best config saved to ${res.saved_to}`, "success");
     } else {
       el.textContent = `Error: ${res.error}`;
