@@ -2193,26 +2193,36 @@ async function setupTuning() {
         }, true);
       }
 
-      // ── Slice plots: each param vs primary metric ──────────────
+      // ── Slice plots: each param vs selected metric ──────────────
       const sliceContainer = $("#tuneSliceCharts");
-      // Filter out penalty trials
       const realTrials = chartTrials.filter(t => t.value != null && t.value < 50);
-
-      // Determine primary metric for Y-axis from user_attrs
       const sliceMetricDefs = tuneSpaces[stage]?.metrics || [];
       const sliceHasAttrs = realTrials.some(t => t.user_attrs && Object.keys(t.user_attrs).length > 0);
-      // Use first metric that has data in user_attrs, or fall back to objective value
-      let sliceMetricKey = null;
-      let sliceMetricName = "objective";
-      if (sliceHasAttrs) {
-        for (const m of sliceMetricDefs) {
-          if (realTrials.some(t => t.user_attrs?.[m.key] != null)) {
-            sliceMetricKey = m.key;
-            sliceMetricName = m.name;
-            break;
-          }
+
+      // Populate metric selector dropdown
+      const sliceSelect = $("#tuneSliceMetricSelect");
+      if (sliceSelect && sliceHasAttrs) {
+        const currentVal = sliceSelect.value;
+        const metricsWithData = sliceMetricDefs.filter(m =>
+          realTrials.some(t => t.user_attrs?.[m.key] != null)
+        );
+        sliceSelect.innerHTML = '<option value="">Objective (combined)</option>' +
+          metricsWithData.map(m => {
+            const arrow = m.direction === "minimize" ? "↓" : "↑";
+            return `<option value="${m.key}">${m.name} ${arrow}</option>`;
+          }).join("");
+        // Restore previous selection or default to first metric
+        if (currentVal && metricsWithData.some(m => m.key === currentVal)) {
+          sliceSelect.value = currentVal;
+        } else if (metricsWithData.length > 0) {
+          sliceSelect.value = metricsWithData[0].key;
         }
       }
+
+      // Get selected metric for Y-axis
+      const sliceMetricKey = sliceSelect?.value || null;
+      const sliceMetricDef = sliceMetricDefs.find(m => m.key === sliceMetricKey);
+      const sliceMetricName = sliceMetricDef ? sliceMetricDef.name : "objective";
 
       if (realTrials.length >= 2) {
         const paramNames = new Set();
@@ -2363,10 +2373,9 @@ async function setupTuning() {
     const res = await api.get(`/api/metrics/data?file=${metricsFile}`);
     if (!res.ok || !res.rows || !res.rows.length) return;
 
-    // Filter rows from tuning runs (save_dir contains "tune_")
+    // Filter rows from tuning runs — include all training metrics (loss, val_loss, lr, etc.)
     const tuneRows = res.rows.filter(r =>
       r.phase !== "event" &&
-      (r.metric_name === "loss" || r.metric_name === "val_loss") &&
       String(r.run_id || "").length > 0
     );
     if (!tuneRows.length) return;
@@ -2382,15 +2391,19 @@ async function setupTuning() {
     }
 
     // Sort points and build series
+    // Color by metric type, style by run_id
+    const metricColors = { loss: "#8b5cf6", val_loss: "#22d3ee", lr: "#f59e0b", grad_norm: "#10b981" };
     const palette = ["#8b5cf6", "#22d3ee", "#f59e0b", "#10b981", "#ef4444", "#f97316", "#60a5fa", "#a3e635", "#e879f7", "#fb923c"];
     const series = [];
-    let idx = 0;
     const runs = [...new Set([...groups.values()].map(g => g.run))];
+    const metricNames = [...new Set([...groups.values()].map(g => g.metric))];
 
-    for (const [key, g] of groups) {
+    for (const [, g] of groups) {
       g.points.sort((a, b) => a[0] - b[0]);
       const runIdx = runs.indexOf(g.run);
-      const color = palette[runIdx % palette.length];
+      const metricIdx = metricNames.indexOf(g.metric);
+      // Color by metric type for readability
+      const color = metricColors[g.metric] || palette[(metricIdx + 3) % palette.length];
       const isDashed = g.metric === "val_loss";
       series.push({
         name: `${g.metric} (${g.run.slice(0, 6)})`,
@@ -2661,6 +2674,17 @@ async function setupTuning() {
 
   window._pollTuningProgress = pollTuningProgress;
   stageSel.addEventListener("change", () => { renderMetrics(); renderParams(); pollTuningProgress(); });
+  // Re-render slices when metric selector changes
+  const sliceMetricSel = $("#tuneSliceMetricSelect");
+  if (sliceMetricSel) sliceMetricSel.addEventListener("change", () => {
+    // Force slice chart rebuild by clearing instances
+    for (const k of Object.keys(tuneSliceInstances)) {
+      try { tuneSliceInstances[k].dispose(); } catch {}
+      delete tuneSliceInstances[k];
+    }
+    $("#tuneSliceCharts").innerHTML = "";
+    pollTuningProgress();
+  });
   renderMetrics();
   renderParams();
   pollTuningProgress();

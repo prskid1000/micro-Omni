@@ -131,12 +131,12 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("rope_theta", "categorical", ([5000, 10000, 50000, 100000],)),
         ("use_moe", "categorical", ([True, False],)),
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([True, False],)),
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — SpikingNeuron size mismatch
         ("use_ltc", "categorical", ([True, False],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
         # Found in script cfg.get() but not in config — hidden tunable params
         ("use_mtp", "categorical", ([True, False],)),
-        ("window_size", "categorical", ([0, 128],)),
+        ("window_size", "categorical", ([0, 32, 64],)),
         ("rope_scaling_factor", "categorical", ([1.0, 2.0, 4.0],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
     ],
@@ -148,7 +148,7 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("downsample_time", "categorical", ([4, 8, 16],)),
         ("target_hz", "categorical", ([6.25, 12.5, 25.0],)),
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([True, False],)),
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
         ("use_ltc", "categorical", ([True, False],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
@@ -165,7 +165,7 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("use_gqa", "categorical", ([True, False],)),
         ("use_swiglu", "categorical", ([True, False],)),
         ("use_moe", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([True, False],)),
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
         ("use_ltc", "categorical", ([True, False],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
     ],
@@ -175,7 +175,7 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("use_gqa", "categorical", ([True, False],)),
         ("use_swiglu", "categorical", ([True, False],)),
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([True, False],)),
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
         ("use_ltc", "categorical", ([True, False],)),
         ("rvq_ema_decay", "float", (0.9, 0.999)),
         ("rvq_gumbel_temp", "float", (0.1, 2.0)),
@@ -227,7 +227,7 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("use_gqa", "categorical", ([True, False],)),
         ("use_swiglu", "categorical", ([True, False],)),
         ("use_flash", "categorical", ([True, False],)),
-        ("use_spiking", "categorical", ([True, False],)),
+        ("use_spiking", "categorical", ([False],)),  # Broken with GQA — disabled
         ("use_ltc", "categorical", ([True, False],)),
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
