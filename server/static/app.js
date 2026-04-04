@@ -2048,31 +2048,54 @@ async function setupTuning() {
       const tbody = $("#tuneTrialsTable tbody");
       const allTrials = (r.trials || []).sort((a, b) => (a.value ?? 999) - (b.value ?? 999));
       const spaceMetrics = tuneSpaces[stage]?.metrics || [];
+
+      // Check if any trial has user_attrs
+      const hasAnyAttrs = allTrials.some(t => t.user_attrs && Object.keys(t.user_attrs).length > 0);
+
+      // Build dynamic table headers with per-metric columns
+      const trialsHead = document.querySelector("#tuneTrialsTable thead tr");
+      if (trialsHead) {
+        if (hasAnyAttrs) {
+          const metricHeaders = spaceMetrics.map(m => {
+            const arrow = m.direction === "minimize" ? "↓" : "↑";
+            return `<th style="font-size:10px">${m.name} ${arrow}</th>`;
+          }).join("");
+          trialsHead.innerHTML = `<th>#</th>${metricHeaders}<th>State</th><th>Duration</th><th>Params</th>`;
+        } else {
+          trialsHead.innerHTML = `<th>#</th><th>Objective</th><th>State</th><th>Duration</th><th>Params</th>`;
+        }
+      }
+
       tbody.innerHTML = allTrials.slice(0, 30).map((t, i) => {
         const stateColor = t.state === "COMPLETE" ? "var(--success)" : t.state === "PRUNED" ? "var(--warning)" : "var(--danger)";
         const isBest = i === 0 && t.state === "COMPLETE" && (t.value ?? 999) < 100;
         const isPenalty = t.value != null && t.value >= 100;
-
-        // Show per-metric values from user_attrs instead of raw objective
-        let objectiveCell = t.value?.toFixed(4) ?? "--";
         const attrs = t.user_attrs || {};
-        if (Object.keys(attrs).length > 0 && !isPenalty) {
-          const parts = [];
-          for (const m of spaceMetrics) {
-            if (attrs[m.key] != null) {
-              const v = attrs[m.key];
-              const formatted = typeof v === "number" ? (v < 0.01 ? v.toExponential(1) : v.toFixed(3)) : v;
-              parts.push(`${m.name}=${formatted}`);
+
+        let metricCells = "";
+        if (hasAnyAttrs) {
+          metricCells = spaceMetrics.map(m => {
+            if (isPenalty) return `<td style="font-size:10px;color:var(--danger)">--</td>`;
+            const val = attrs[m.key];
+            if (val != null) {
+              const formatted = typeof val === "number"
+                ? (val < 0.001 ? val.toExponential(2) : val >= 100 ? val.toFixed(1) : val.toFixed(4))
+                : val;
+              const color = m.direction === "minimize" ? "#22d3ee" : "#10b981";
+              return `<td style="font-size:10px;color:${color}">${formatted}</td>`;
             }
-          }
-          if (parts.length > 0) objectiveCell = parts.join(", ");
-        } else if (isPenalty) {
-          objectiveCell = '<span style="color:var(--danger)">CRASHED</span>';
+            return `<td style="font-size:10px;color:var(--text-dim)">--</td>`;
+          }).join("");
+        } else {
+          const objDisplay = isPenalty
+            ? '<span style="color:var(--danger)">CRASHED</span>'
+            : (t.value?.toFixed(4) ?? "--");
+          metricCells = `<td style="font-size:10px">${objDisplay}</td>`;
         }
 
         return `<tr${isBest ? ' style="background:rgba(16,185,129,0.08)"' : ""}>
           <td>${isBest ? "★ " : ""}${t.number}</td>
-          <td style="font-size:10px">${objectiveCell}</td>
+          ${metricCells}
           <td style="color:${stateColor}">${t.state}</td>
           <td>${t.duration_seconds ? t.duration_seconds.toFixed(0) + "s" : "--"}</td>
           <td style="font-size:9px;max-width:400px;overflow:hidden;text-overflow:ellipsis">${

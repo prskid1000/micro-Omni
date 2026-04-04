@@ -505,8 +505,12 @@ class APITester:
         """Verify training actually resumes from where it stopped — step counter advances."""
         self.wait_gpu_free()
 
-        # Start fresh Stage A training
+        # Start truly fresh — clear checkpoint AND metrics
+        self.post("/api/training/stop", {"stage": "A"})
+        time.sleep(1)
         self.post("/api/training/clear", {"stage": "A"})
+        # Delete old metrics so step counts start from 0
+        self.post("/api/metrics/delete", {"file": "train_thinker.jsonl"})
         time.sleep(1)
 
         # ── Phase 1: Train for a while, record step ──────────
