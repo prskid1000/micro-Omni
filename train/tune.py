@@ -1,7 +1,7 @@
 """Generic Optuna HP tuning wrapper for all training stages.
 
-Supports optimizing real test metrics (CER, perplexity, R@1, etc.)
-instead of just val_loss, by running test scripts after each trial.
+Supports multi-objective optimization on real test metrics (CER, perplexity, R@1, etc.)
+using Optuna's Pareto-front optimization. Each selected metric becomes a separate objective.
 
 Usage:
     python -m train.tune --stage A --n_trials 30 --max_steps 2000
@@ -39,7 +39,6 @@ def _suggest_param(trial, name: str, kind: str, args: tuple):
         return trial.suggest_int(name, args[0], args[1])
     elif kind == "categorical":
         choices = args[0]
-        # Optuna needs hashable choices — convert lists to tuples
         safe = []
         for c in choices:
             if isinstance(c, list):
@@ -47,7 +46,6 @@ def _suggest_param(trial, name: str, kind: str, args: tuple):
             else:
                 safe.append(c)
         val = trial.suggest_categorical(name, safe)
-        # Convert tuples back to lists for JSON config
         if isinstance(val, tuple):
             return list(val)
         return val
@@ -79,11 +77,7 @@ def _get_best_val_loss_from_jsonl(metrics_file: str, run_id: str) -> float:
 
 
 def _get_test_metrics_from_jsonl(metrics_file: str, metric_keys: list[str]) -> dict[str, float]:
-    """Read test metrics from a test script's JSONL output.
-
-    Returns dict of metric_key -> value. Only reads the last occurrence
-    of each metric (test scripts write once at the end).
-    """
+    """Read test metrics from a test script's JSONL output."""
     results: dict[str, float] = {}
     full_path = os.path.join("logs", "metrics", metrics_file)
     if not os.path.exists(full_path):
@@ -106,10 +100,7 @@ def _get_test_metrics_from_jsonl(metrics_file: str, metric_keys: list[str]) -> d
 
 
 def _run_test_for_trial(stage: str, checkpoint_dir: str, num_samples: int = 50) -> dict[str, float]:
-    """Run the test script for a stage and return extracted metrics.
-
-    Uses subprocess to avoid polluting the tuning process's GPU memory.
-    """
+    """Run the test script for a stage and return extracted metrics."""
     from server.api.tuning import STAGE_TEST_INFO, STAGE_METRICS
     test_info = STAGE_TEST_INFO.get(stage)
     if not test_info:
@@ -128,7 +119,6 @@ def _run_test_for_trial(stage: str, checkpoint_dir: str, num_samples: int = 50) 
         "--checkpoint", checkpoint_dir,
         "--num_samples", str(num_samples),
     ]
-    # Vision encoder needs --retrieval flag for R@1/R@5/R@10 metrics
     if stage == "C":
         cmd.append("--retrieval")
 
@@ -137,7 +127,7 @@ def _run_test_for_trial(stage: str, checkpoint_dir: str, num_samples: int = 50) 
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 min max per test
+            timeout=300,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         if result.returncode != 0:
@@ -149,7 +139,6 @@ def _run_test_for_trial(stage: str, checkpoint_dir: str, num_samples: int = 50) 
         print(f"  Test script error: {e}")
         return {}
 
-    # Read metrics from JSONL
     return _get_test_metrics_from_jsonl(test_jsonl, metric_keys)
 
 
@@ -158,45 +147,43 @@ def _compute_objective(
     test_metrics: dict[str, float],
     selected_metrics: list[str],
     stage: str,
-) -> float:
-    """Compute a single objective value from multiple metrics.
+) -> tuple[float, ...]:
+    """Compute multi-objective values — one per selected metric.
 
-    Strategy: normalize each metric to [0, 1] range using known thresholds,
-    then average. All metrics are converted to "lower is better" before averaging.
+    Returns a tuple of floats, all converted to "minimize" direction.
+    Optuna's multi-objective mode finds the Pareto front across these.
     """
     from server.api.tuning import STAGE_METRICS
 
     metric_defs = {m[0]: m for m in STAGE_METRICS.get(stage, [])}
-    scores: list[float] = []
+    values: list[float] = []
 
     for metric_key in selected_metrics:
         if metric_key == "val_loss":
-            # val_loss is always available from training
-            scores.append(val_loss if val_loss < 100 else 10.0)
+            values.append(val_loss if val_loss < 100 else 10.0)
             continue
 
         if metric_key not in test_metrics:
+            # Metric not available — use penalty
+            values.append(100.0)
             continue
 
         value = test_metrics[metric_key]
         meta = metric_defs.get(metric_key)
         if not meta:
+            values.append(value)
             continue
 
         direction = meta[2]  # "minimize" or "maximize"
-
         if direction == "maximize":
-            # Convert to "lower is better": use (1 - value) for 0-1 metrics
-            # For accuracy/recall metrics (0 to 1 range)
-            value = 1.0 - value
+            value = 1.0 - value  # Convert to minimize
 
-        scores.append(value)
+        values.append(value)
 
-    if not scores:
-        return val_loss if val_loss < 100 else 100.0
+    if not values:
+        return (val_loss if val_loss < 100 else 100.0,)
 
-    # Return average of all scores
-    return sum(scores) / len(scores)
+    return tuple(values)
 
 
 def main():
@@ -231,26 +218,26 @@ def main():
     if args.metrics:
         selected_metrics = json.loads(args.metrics)
     use_test_metrics = bool(selected_metrics and any(m != "val_loss" for m in selected_metrics))
+    is_multi_objective = len(selected_metrics) > 1
 
     if use_test_metrics:
         print(f"Optimizing metrics: {selected_metrics}")
+        print(f"  Multi-objective: {is_multi_objective} ({len(selected_metrics)} objectives)")
         print(f"  Test samples per trial: {args.test_samples}")
     else:
         if not selected_metrics:
             selected_metrics = ["val_loss"]
         print(f"Optimizing: val_loss only (legacy mode)")
 
-    # Load search space from server API definitions
+    # Load search space
     from server.api.tuning import STAGE_SPECIFIC_SPACE, COMMON_TRAINING_SPACE
     search_space = STAGE_SPECIFIC_SPACE.get(stage, COMMON_TRAINING_SPACE)
 
-    # Filter to requested params if specified
     if args.params:
         requested = set(json.loads(args.params))
         search_space = [s for s in search_space if s[0] in requested]
         print(f"Tuning subset: {[s[0] for s in search_space]}")
 
-    # Load base config
     config_file = args.config or default_config
     config_path = os.path.join("configs", config_file)
     if not os.path.exists(config_path):
@@ -271,21 +258,18 @@ def main():
     print(f"  DB: {db_path}")
     print(f"{'='*60}\n")
 
-    # Import the training module's main function
     import importlib
     train_mod = importlib.import_module(module_name)
     train_main = train_mod.main
 
-    def objective(trial: optuna.Trial) -> float:
+    def objective(trial: optuna.Trial) -> float | tuple[float, ...]:
         cfg = copy.deepcopy(base_cfg)
 
-        # Apply search space suggestions
         for name, kind, param_args in search_space:
             val = _suggest_param(trial, name, kind, param_args)
             if val is not None:
                 cfg[name] = val
 
-        # Override for tuning: fewer steps, unique save dir, skip checkpoints
         cfg["max_steps"] = args.max_steps
         cfg["checkpoint_freq"] = 999999
         cfg["save_dir"] = f"checkpoints/tune_{stage}/trial_{trial.number}"
@@ -297,22 +281,16 @@ def main():
         print(f"  Params: {trial.params}")
 
         try:
-            # Compute the run_id that training will use (same as build_run_id)
             from omni.training_utils import build_run_id
             script_name = module_name.split(".")[-1] + ".py"
             trial_run_id = build_run_id(script_name, None, cfg["save_dir"])
 
-            # Run training
             result = train_main(cfg)
 
-            # Get val_loss (always needed as fallback)
             if isinstance(result, (int, float)) and result < 1e6:
                 val_loss = float(result)
             else:
-                val_loss = _get_best_val_loss_from_jsonl(
-                    metrics_path,
-                    run_id=trial_run_id,
-                )
+                val_loss = _get_best_val_loss_from_jsonl(metrics_path, run_id=trial_run_id)
             if val_loss == float("inf"):
                 val_loss = 100.0
 
@@ -328,33 +306,53 @@ def main():
                 else:
                     print(f"  Warning: no test metrics returned, falling back to val_loss")
 
-            # Compute combined objective
-            objective_value = _compute_objective(
-                val_loss, test_metrics, selected_metrics, stage
-            )
+            # Store per-metric values as user attributes for DB readback
+            trial.set_user_attr("val_loss", val_loss)
+            for k, v in test_metrics.items():
+                trial.set_user_attr(k, v)
 
-            print(f"  Result: objective={objective_value:.4f} (val_loss={val_loss:.4f}, test={test_metrics})")
-            return objective_value
+            # Compute objectives
+            obj_values = _compute_objective(val_loss, test_metrics, selected_metrics, stage)
+
+            if is_multi_objective:
+                print(f"  Result: objectives={obj_values} (val_loss={val_loss:.4f}, test={test_metrics})")
+                return obj_values
+            else:
+                print(f"  Result: objective={obj_values[0]:.4f} (val_loss={val_loss:.4f}, test={test_metrics})")
+                return obj_values[0]
 
         except optuna.TrialPruned:
             raise
         except Exception as e:
             print(f"  Trial {trial.number} failed: {e}")
-            return 100.0  # penalty for failed trials
+            if is_multi_objective:
+                return tuple(100.0 for _ in selected_metrics)
+            return 100.0
 
     # Create or resume study
-    study = optuna.create_study(
-        study_name=f"tune_{stage}",
-        direction="minimize",
-        storage=f"sqlite:///{db_path}",
-        load_if_exists=True,
-        sampler=optuna.samplers.TPESampler(seed=42),
-        pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=5,
-            n_warmup_steps=300,
-            interval_steps=100,
-        ),
-    )
+    if is_multi_objective:
+        # Multi-objective: one direction per metric (all minimize after conversion)
+        directions = ["minimize"] * len(selected_metrics)
+        study = optuna.create_study(
+            study_name=f"tune_{stage}",
+            directions=directions,
+            storage=f"sqlite:///{db_path}",
+            load_if_exists=True,
+            sampler=optuna.samplers.TPESampler(seed=42),
+        )
+    else:
+        study = optuna.create_study(
+            study_name=f"tune_{stage}",
+            direction="minimize",
+            storage=f"sqlite:///{db_path}",
+            load_if_exists=True,
+            sampler=optuna.samplers.TPESampler(seed=42),
+            pruner=optuna.pruners.MedianPruner(
+                n_startup_trials=5,
+                n_warmup_steps=300,
+                interval_steps=100,
+            ),
+        )
 
     study.optimize(objective, n_trials=args.n_trials)
 
@@ -362,16 +360,23 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Tuning Complete — Stage {stage}")
     print(f"  Total trials: {len(study.trials)}")
-    print(f"  Best objective: {study.best_value:.4f}")
+    if is_multi_objective:
+        pareto = study.best_trials
+        print(f"  Pareto-optimal trials: {len(pareto)}")
+        for i, t in enumerate(pareto[:5]):
+            print(f"    #{t.number}: values={t.values}, user_attrs={t.user_attrs}")
+    else:
+        print(f"  Best objective: {study.best_value:.4f}")
     print(f"  Best params:")
-    for k, v in study.best_params.items():
+    best_params = study.best_trials[0].params if is_multi_objective else study.best_params
+    for k, v in best_params.items():
         print(f"    {k}: {v}")
     print(f"  Metrics optimized: {selected_metrics}")
     print(f"{'='*60}\n")
 
-    # Save best config
+    # Save best config (use first Pareto-optimal trial for multi-objective)
     best_cfg = copy.deepcopy(base_cfg)
-    for k, v in study.best_params.items():
+    for k, v in best_params.items():
         if isinstance(v, tuple):
             v = list(v)
         best_cfg[k] = v

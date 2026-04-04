@@ -136,7 +136,7 @@ STAGE_SPECIFIC_SPACE: dict[str, list[tuple]] = {
         ("shuffle_buffer_size", "categorical", ([5000, 10000, 20000],)),
         # Found in script cfg.get() but not in config — hidden tunable params
         ("use_mtp", "categorical", ([True, False],)),
-        ("window_size", "categorical", ([None, 32, 64, 128],)),
+        ("window_size", "categorical", ([0, 128],)),
         ("rope_scaling_factor", "categorical", ([1.0, 2.0, 4.0],)),
         ("early_stopping_min_delta", "float", (0.00001, 0.001)),
     ],
@@ -271,7 +271,10 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
 
-            cur.execute("SELECT study_id, study_name FROM studies LIMIT 1")
+            try:
+                cur.execute("SELECT study_id, study_name FROM studies LIMIT 1")
+            except Exception:
+                return None  # DB exists but no tables yet (empty/just created)
             study_row = cur.fetchone()
             if not study_row:
                 return None
@@ -325,6 +328,18 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
                     except Exception:
                         params[name] = raw_val
 
+                # Read user_attrs (per-trial test metrics stored by tune.py)
+                user_attrs = {}
+                try:
+                    cur.execute("SELECT key, value_json FROM trial_user_attributes WHERE trial_id = ?", (trial_id,))
+                    for ua in cur.fetchall():
+                        try:
+                            user_attrs[ua["key"]] = json.loads(ua["value_json"])
+                        except Exception:
+                            pass
+                except Exception:
+                    pass  # table may not exist in older DBs
+
                 duration = None
                 if tr["datetime_start"] and tr["datetime_complete"]:
                     try:
@@ -334,10 +349,21 @@ def _read_study_results(db_path: str) -> dict[str, Any] | None:
                     except Exception:
                         pass
 
+                # Read multi-objective values if present
+                multi_values = {}
+                try:
+                    cur.execute("SELECT objective, value FROM trial_values WHERE trial_id = ?", (trial_id,))
+                    for vr in cur.fetchall():
+                        multi_values[vr["objective"]] = vr["value"]
+                except Exception:
+                    pass
+
                 trials.append({
                     "number": tr["number"],
                     "value": value,
+                    "values": multi_values,  # {0: v0, 1: v1, ...} for multi-objective
                     "params": params,
+                    "user_attrs": user_attrs,  # per-trial test metrics
                     "state": _parse_state(tr["state"]),
                     "duration_seconds": duration,
                 })

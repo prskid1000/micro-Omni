@@ -2393,111 +2393,140 @@ async function setupTuning() {
     if (!space || !space.metrics) return;
     const metricDefs = space.metrics;
 
-    // For now we use the trial objective values — when test metrics are stored
-    // in trial user_attrs (future), we'll read those. For now, show objective trend.
     const completedTrials = (trials || [])
       .filter(t => t.state === "COMPLETE" && t.value != null)
       .sort((a, b) => a.number - b.number);
 
+    const chartEl = $("#tuneMetricBreakdownChart");
     if (completedTrials.length < 2) {
-      $("#tuneMetricBreakdownChart").innerHTML = '<span style="color:var(--text-dim);font-size:11px;padding:20px;display:block">Need 2+ completed trials for metric breakdown</span>';
+      chartEl.innerHTML = '<span style="color:var(--text-dim);font-size:11px;padding:20px;display:block">Need 2+ completed trials for metric breakdown</span>';
       return;
     }
 
-    // Build chart with objective trend + running best
     if (!tuneMetricBreakdownChart) {
-      tuneMetricBreakdownChart = registerChart(echarts.init($("#tuneMetricBreakdownChart")));
+      tuneMetricBreakdownChart = registerChart(echarts.init(chartEl));
     }
 
-    let runningBest = [];
-    let best = Infinity;
-    for (const t of completedTrials) { best = Math.min(best, t.value); runningBest.push(best); }
+    // Build per-metric series from user_attrs (real test metrics stored by tune.py)
+    const sel = selectedMetrics[stage] || new Set();
+    const selMetrics = metricDefs.filter(m => sel.has(m.key));
+    const palette = ["#8b5cf6", "#22d3ee", "#10b981", "#f59e0b", "#ef4444", "#f97316", "#60a5fa"];
 
-    // Also compute improvement percentage from first to best
-    const firstVal = completedTrials[0].value;
-    const bestVal = Math.min(...completedTrials.map(t => t.value));
-    const improvement = firstVal > 0 ? ((firstVal - bestVal) / firstVal * 100).toFixed(1) : "N/A";
+    const series = [];
+    const legendData = [];
+
+    // Check which metrics have data in user_attrs
+    const metricsWithData = selMetrics.filter(m =>
+      completedTrials.some(t => t.user_attrs && t.user_attrs[m.key] != null)
+    );
+
+    if (metricsWithData.length > 0) {
+      // Per-metric scatter + trend lines
+      metricsWithData.forEach((m, idx) => {
+        const color = palette[idx % palette.length];
+        const points = completedTrials
+          .filter(t => t.user_attrs && t.user_attrs[m.key] != null)
+          .map(t => [t.number, t.user_attrs[m.key]]);
+
+        if (points.length === 0) return;
+
+        const arrow = m.direction === "minimize" ? "↓" : "↑";
+        const seriesName = `${m.name} ${arrow}`;
+        legendData.push(seriesName);
+
+        // Scatter points
+        series.push({
+          name: seriesName, type: "scatter", symbolSize: 7,
+          data: points, itemStyle: { color },
+          yAxisIndex: idx > 0 && metricsWithData.length > 1 ? 1 : 0,
+        });
+        // Trend line
+        series.push({
+          name: seriesName + " (trend)", type: "line", smooth: true, symbol: "none",
+          data: points, lineStyle: { color, width: 1.5, opacity: 0.5 },
+          showInLegend: false,
+          yAxisIndex: idx > 0 && metricsWithData.length > 1 ? 1 : 0,
+        });
+      });
+    } else {
+      // Fallback: show objective trend
+      legendData.push("Objective");
+      series.push({
+        name: "Objective", type: "scatter", symbolSize: 6,
+        data: completedTrials.map(t => [t.number, t.value]),
+        itemStyle: { color: "#8b5cf6" },
+      });
+      let best = Infinity;
+      const runningBest = completedTrials.map(t => { best = Math.min(best, t.value); return best; });
+      legendData.push("Running Best");
+      series.push({
+        name: "Running Best", type: "line", smooth: true, symbol: "none",
+        data: completedTrials.map((t, i) => [t.number, runningBest[i]]),
+        lineStyle: { color: "#10b981", width: 2 },
+      });
+    }
+
+    // Build yAxis config (dual axis if 2+ metrics with different scales)
+    const yAxes = [{
+      type: "value", name: metricsWithData.length > 0 ? metricsWithData[0]?.name || "Value" : "Objective",
+      nameTextStyle: { color: "#9ca3bf", fontSize: 9 },
+      axisLabel: { color: "#9ca3bf", fontSize: 10 },
+      splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+    }];
+    if (metricsWithData.length > 1) {
+      yAxes.push({
+        type: "value", name: metricsWithData[1]?.name || "",
+        nameTextStyle: { color: "#9ca3bf", fontSize: 9 },
+        axisLabel: { color: "#9ca3bf", fontSize: 10 },
+        splitLine: { show: false },
+        position: "right",
+      });
+    }
 
     tuneMetricBreakdownChart.setOption({
       animation: false,
       backgroundColor: "transparent",
-      title: {
-        text: `Objective Trend (${improvement}% improvement)`,
-        textStyle: { color: "#9ca3bf", fontSize: 12 },
-        left: 8, top: 4,
-      },
       tooltip: {
         trigger: "axis",
         backgroundColor: "rgba(15,18,38,0.9)",
         borderColor: "rgba(255,255,255,0.15)",
         textStyle: { color: "#e8ecf4", fontSize: 11 },
-        formatter: params => {
-          const lines = params.map(p => `${p.marker} ${p.seriesName}: ${p.value[1]?.toFixed(4)}`);
-          return `Trial #${params[0].value[0]}<br/>` + lines.join("<br/>");
-        },
       },
-      legend: { data: ["Objective", "Running Best", "Median"], textStyle: { color: "#9ca3bf", fontSize: 10 }, top: 4, right: 10 },
-      grid: { left: 60, right: 20, top: 40, bottom: 30 },
+      legend: { data: legendData, textStyle: { color: "#9ca3bf", fontSize: 10 }, top: 4, right: 10 },
+      grid: { left: 60, right: metricsWithData.length > 1 ? 60 : 20, top: 35, bottom: 30 },
       xAxis: {
         type: "value", name: "Trial", nameTextStyle: { color: "#9ca3bf" },
         axisLabel: { color: "#9ca3bf", fontSize: 10 },
         axisLine: { lineStyle: { color: "rgba(255,255,255,0.12)" } },
       },
-      yAxis: {
-        type: "value", name: "Value", nameTextStyle: { color: "#9ca3bf" },
-        axisLabel: { color: "#9ca3bf", fontSize: 10 },
-        splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
-      },
-      series: [
-        {
-          name: "Objective", type: "scatter", symbolSize: 6,
-          data: completedTrials.map(t => [t.number, t.value]),
-          itemStyle: { color: "#8b5cf6" },
-        },
-        {
-          name: "Running Best", type: "line", smooth: true, symbol: "none",
-          data: completedTrials.map((t, i) => [t.number, runningBest[i]]),
-          lineStyle: { color: "#10b981", width: 2 },
-          areaStyle: { color: "rgba(16, 185, 129, 0.06)" },
-        },
-        {
-          name: "Median", type: "line", symbol: "none",
-          data: (() => {
-            const vals = [];
-            return completedTrials.map((t, i) => {
-              vals.push(t.value);
-              const sorted = [...vals].sort((a, b) => a - b);
-              const mid = sorted[Math.floor(sorted.length / 2)];
-              return [t.number, mid];
-            });
-          })(),
-          lineStyle: { color: "#f59e0b", width: 1, type: "dashed" },
-        },
-      ],
+      yAxis: yAxes,
+      series,
     }, true);
 
-    // Build metric values table with selected metrics info
-    const sel = selectedMetrics[stage] || new Set();
-    const selMetrics = metricDefs.filter(m => sel.has(m.key));
+    // Build metric values table with real data from user_attrs
     const headerCols = selMetrics.map(m => {
       const arrow = m.direction === "minimize" ? "↓" : "↑";
       return `<th style="font-size:10px">${m.name} ${arrow}</th>`;
     }).join("");
 
-    // Update table headers dynamically
     const thead = document.querySelector("#tuneMetricTable thead tr");
     if (thead) {
       thead.innerHTML = `<th>#</th><th>Objective</th>${headerCols}<th>State</th>`;
     }
 
-    // Table body — show sorted by objective
     const sortedTrials = [...completedTrials].sort((a, b) => a.value - b.value);
     const tbody = document.querySelector("#tuneMetricTable tbody");
     if (tbody) {
       tbody.innerHTML = sortedTrials.slice(0, 50).map((t, i) => {
         const isBest = i === 0;
-        // For now metric columns show "--" until we have per-trial test metric storage
-        const metricCols = selMetrics.map(() => `<td style="font-size:10px;color:var(--text-dim)">--</td>`).join("");
+        const metricCols = selMetrics.map(m => {
+          const val = t.user_attrs && t.user_attrs[m.key];
+          if (val != null) {
+            const color = m.direction === "minimize" ? "#22d3ee" : "#10b981";
+            return `<td style="font-size:10px;color:${color}">${typeof val === "number" ? val.toFixed(4) : val}</td>`;
+          }
+          return `<td style="font-size:10px;color:var(--text-dim)">--</td>`;
+        }).join("");
         return `<tr${isBest ? ' style="background:rgba(16,185,129,0.08)"' : ""}>
           <td>${isBest ? "★ " : ""}${t.number}</td>
           <td>${t.value?.toFixed(4) ?? "--"}</td>

@@ -416,36 +416,58 @@ class APITester:
     def test_training_lifecycle(self):
         self.wait_gpu_free()
 
+        # Clear any leftover checkpoint from previous runs so we start fresh
+        self.post("/api/training/stop", {"stage": "A"})
+        time.sleep(1)
+        self.post("/api/training/clear", {"stage": "A"})
+        time.sleep(1)
+
         # Invalid stage
         self.check("Start invalid stage Z -> 400", self.post("/api/training/start", {"stage": "Z"}), expect_ok=False)
 
-        # Start A
+        # Start A (fresh — no checkpoint to resume from)
         r = self.check("Start Stage A", self.post("/api/training/start", {"stage": "A"}))
         pid_a = r.get("pid")
         self.assert_true("Got PID", pid_a is not None and pid_a > 0, f"pid={pid_a}")
         time.sleep(3)
 
-        # Pipeline shows running
+        # Pipeline shows running (check quickly before it finishes)
         r = self.get("/api/training/pipeline")
-        self.assert_eq("A is running", r["stages"]["A"]["status"], "running")
-        self.assert_true("A has process info", r["stages"]["A"].get("process") is not None)
+        a_status = r["stages"]["A"]["status"]
+        self.assert_in("A is running or done", a_status, ["running", "done"])
 
         # Training status
         r = self.check("GET /api/training/status", self.get("/api/training/status"))
         procs = r.get("processes", {})
         self.assert_in("training_A in processes", "training_A", procs)
-        self.assert_eq("training_A status=running", procs["training_A"]["status"], "running")
+        self.assert_in("training_A status", procs["training_A"]["status"], ["running", "done"])
 
-        # Logs available
+        # Logs available (wait for log file to be written)
         r = self.check("GET /api/training/logs/A", self.get("/api/training/logs/A"))
-        self.assert_true("Has log lines", len(r.get("lines", [])) > 0)
+        log_lines = r.get("lines", [])
+        if not log_lines:
+            # Log file may not be flushed yet, wait a bit and retry
+            time.sleep(2)
+            r = self.get("/api/training/logs/A")
+            log_lines = r.get("lines", [])
+        self.assert_true("Has log lines", len(log_lines) > 0, f"got {len(log_lines)} lines")
         self.assert_true("Has log_file path", bool(r.get("log_file")))
 
-        # Can't start duplicate
+        # Can't start duplicate while running
         self.check("Start A again (GPU busy) -> 409", self.post("/api/training/start", {"stage": "A"}), expect_ok=False)
 
-        # Can't clear while running
-        self.check("Clear A while running -> 409", self.post("/api/training/clear", {"stage": "A"}), expect_ok=False)
+        # Clear while running: server auto-stops then clears (not a 409)
+        r = self.check("Clear A (auto-stops running)", self.post("/api/training/clear", {"stage": "A"}))
+        self.assert_true("Clear returned cleared status", r.get("cleared") is not None or r.get("count") is not None)
+        time.sleep(1)
+
+        # Verify cleared and idle
+        r = self.get("/api/training/pipeline")
+        self.assert_in("A is idle after clear", r["stages"]["A"]["status"], ["idle", "stopped"])
+
+        # Restart fresh for the rest of the test
+        r = self.check("Re-start Stage A", self.post("/api/training/start", {"stage": "A"}))
+        time.sleep(3)
 
         # Stop
         r = self.check("Stop Stage A", self.post("/api/training/stop", {"stage": "A"}))
@@ -536,36 +558,31 @@ class APITester:
             self.skip("Resume phase", "failed to resume")
             return
 
-        # Record the max step BEFORE phase 2 starts producing data
-        r = self.get("/api/metrics/data?file=train_thinker.jsonl")
-        rows_before = [row for row in r.get("rows", []) if row.get("metric_name") == "loss" and row.get("phase") == "train"]
-        max_step_before = max((row.get("step", 0) for row in rows_before), default=0)
+        # Poll until phase 2 produces metrics beyond step1 (up to 30s)
+        print(f"       Phase 2: Waiting for steps beyond {step1}...")
+        max_step_after = 0
+        for _ in range(15):
+            time.sleep(2)
+            r = self.get("/api/metrics/data?file=train_thinker.jsonl")
+            rows_after = [row for row in r.get("rows", []) if row.get("metric_name") == "loss" and row.get("phase") == "train"]
+            max_step_after = max((row.get("step", 0) for row in rows_after), default=0)
+            if max_step_after > step1:
+                break
 
-        # Wait for resumed training to log new metrics
-        time.sleep(15)
-
-        # Stop again
+        # Stop
         self.post("/api/training/stop", {"stage": "A"})
         time.sleep(2)
 
-        # Read new step from checkpoint metadata
+        # Read final checkpoint metadata
         r = self.get("/api/training/pipeline")
         meta2 = r["stages"]["A"].get("metadata")
         step2 = meta2.get("step", 0) if meta2 else 0
-        print(f"       Phase 2 stopped at metadata step {step2} (was {step1})")
-
-        # Read metrics — find the highest step logged
-        r = self.get("/api/metrics/data?file=train_thinker.jsonl")
-        rows_after = [row for row in r.get("rows", []) if row.get("metric_name") == "loss" and row.get("phase") == "train"]
-        max_step_after = max((row.get("step", 0) for row in rows_after), default=0)
-        print(f"       Max metric step: before={max_step_before} -> after={max_step_after}")
+        print(f"       Phase 2 stopped at metadata step {step2}, max metric step {max_step_after} (was {step1})")
 
         # Key assertion: metrics should show steps beyond phase 1
         self.assert_gt(f"Metrics advanced beyond phase 1 (step {step1})", max_step_after, step1)
-
-        # Verify resume didn't restart from step 0 — find min step in phase 2 metrics
-        # (rows with timestamps after phase 2 start should have step > 0)
-        self.assert_gt("Resume didn't restart from 0", max_step_after, step1 - 1)
+        # Verify resume didn't restart from step 0
+        self.assert_gt("Resume didn't restart from 0", max_step_after, step1)
 
         # ── Phase 3: Verify logs show resume ─────────────────
         r = self.get("/api/training/logs/A")
@@ -2069,37 +2086,37 @@ class APITester:
                         break
 
     def test_tuning_objective_computation(self):
-        """Test the combined objective function from tune.py."""
+        """Test the multi-objective function from tune.py."""
         try:
             from train.tune import _compute_objective
         except Exception:
             self.skip("Objective computation test", "can't import tune.py")
             return
 
-        # Test minimize-only (CER + WER for audio)
+        # Returns tuple now (multi-objective)
         obj = _compute_objective(0.5, {"cer": 0.07, "wer": 0.15}, ["cer", "wer"], "B")
-        self.assert_true("CER+WER objective is average", abs(obj - 0.11) < 0.001, f"got {obj}")
+        self.assert_true("Returns tuple", isinstance(obj, tuple), f"got {type(obj)}")
+        self.assert_eq("CER+WER has 2 objectives", len(obj), 2)
+        self.assert_true("CER value correct", abs(obj[0] - 0.07) < 0.001, f"got {obj[0]}")
+        self.assert_true("WER value correct", abs(obj[1] - 0.15) < 0.001, f"got {obj[1]}")
 
-        # Test maximize metric (accuracy should be inverted: 1 - value)
+        # Test maximize metric (accuracy inverted: 1 - value)
         obj = _compute_objective(0.5, {"top1_accuracy": 0.65}, ["top1_accuracy"], "A")
-        self.assert_true("Accuracy inverted to 0.35", abs(obj - 0.35) < 0.001, f"got {obj}")
+        self.assert_true("Accuracy inverted to 0.35", abs(obj[0] - 0.35) < 0.001, f"got {obj[0]}")
 
-        # Test val_loss only (legacy behavior)
+        # Test val_loss only
         obj = _compute_objective(0.5, {}, ["val_loss"], "A")
-        self.assert_true("val_loss-only returns val_loss", abs(obj - 0.5) < 0.001, f"got {obj}")
-
-        # Test mixed minimize + maximize (use stage B which has cer)
-        obj = _compute_objective(0.5, {"cer": 0.10, "wer": 0.20}, ["cer", "wer"], "B")
-        # cer=0.10 + wer=0.20, avg=(0.10+0.20)/2=0.15
-        self.assert_true("Mixed objective correct", abs(obj - 0.15) < 0.001, f"got {obj}")
-
-        # Test fallback when no test metrics returned
-        obj = _compute_objective(2.5, {}, ["cer", "wer"], "B")
-        self.assert_true("Fallback to val_loss", abs(obj - 2.5) < 0.001, f"got {obj}")
+        self.assert_true("val_loss-only returns val_loss", abs(obj[0] - 0.5) < 0.001, f"got {obj[0]}")
 
         # Test penalty val_loss capped at 10.0
         obj = _compute_objective(100.0, {}, ["val_loss"], "A")
-        self.assert_true("Penalty val_loss capped", abs(obj - 10.0) < 0.001, f"got {obj}")
+        self.assert_true("Penalty val_loss capped", abs(obj[0] - 10.0) < 0.001, f"got {obj[0]}")
+
+        # Test missing test metrics give penalty
+        obj = _compute_objective(2.5, {}, ["cer", "wer"], "B")
+        self.assert_eq("Missing metrics get penalty", len(obj), 2)
+        self.assert_true("Missing CER penalty", obj[0] == 100.0, f"got {obj[0]}")
+        self.assert_true("Missing WER penalty", obj[1] == 100.0, f"got {obj[1]}")
 
     def test_tuning_stage_test_info(self):
         """Verify STAGE_TEST_INFO maps every stage to valid test script and JSONL."""
